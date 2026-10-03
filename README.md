@@ -33,7 +33,7 @@ The recipe downloads **llvm-mingw 20260505**, verifies SHA256
 `050379de888f0c843787819dadf183df3693330a5724643919e9121f16355295`,
 and configures native arm64 with deployment target macOS 14.0, four PE
 architectures (`aarch64,arm64ec,x86_64,i386`), CoreAudio, no X11 and no tests.
-Homebrew provides Python, bison, flex, pkg-config, freetype, fontconfig, libpng,
+Homebrew provides Python, bison, flex, pkg-config, freetype, fontconfig, libpng, MoltenVK, Vulkan headers,
 gstreamer, glib, gettext, gnutls, libusb, SDL2, ffmpeg and ccache.
 The recipe stages the unchanged Wine tree as `_build/source-wine` beside
 `_build/hyperbridge`, preserving the original relative include layout.

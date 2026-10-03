@@ -9,6 +9,9 @@ build_jobs="${BUILD_JOBS:-2}"
 case "$build_jobs" in ''|*[!0-9]*|0) echo 'BUILD_JOBS must be a positive integer' >&2; exit 2;; esac
 bash "$recipe_root/configure.sh"
 build_dir="$(cd "$build_dir" && pwd -P)"
+# make runs bison/flex itself: use the Homebrew versions (macOS /usr/bin/bison 2.3 is too old for widl) and llvm-mingw
+toolchain_root="${LLVM_MINGW_ROOT:-$source_root/_toolchain/llvm-mingw-20260505-ucrt-macos-universal}"
+export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$toolchain_root/bin:$PATH"
 make -f "$source_root/third_party/hyperbridge/Makefile" \
     SRC_ROOT="$source_root/third_party/hyperbridge" BUILD_ROOT="$build_dir/hyperbridge" \
     -j"$build_jobs" 2>&1 | tee "$build_dir/hyperbridge.log"
