@@ -37,6 +37,16 @@ WINE_DEFAULT_DEBUG_CHANNEL(process);
 
 static DWORD shutdown_flags = 0;
 static DWORD shutdown_priority = 0x280;
+static WCHAR *restart_cmdline;
+static DWORD restart_flags;
+static CRITICAL_SECTION restart_section;
+static CRITICAL_SECTION_DEBUG restart_section_debug =
+{
+    0, 0, &restart_section,
+    { &restart_section_debug.ProcessLocksList, &restart_section_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": restart_section") }
+};
+static CRITICAL_SECTION restart_section = { &restart_section_debug, -1, 0, 0, 0, 0 };
 
 /***********************************************************************
  * Processes
@@ -727,8 +737,33 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreateProcessA( const char *app_name, char *cmd_li
                                               DWORD flags, void *env, const char *cur_dir,
                                               STARTUPINFOA *startup_info, PROCESS_INFORMATION *info )
 {
-    return CreateProcessInternalA( NULL, app_name, cmd_line, process_attr, thread_attr,
-                                   inherit, flags, env, cur_dir, startup_info, info, NULL );
+    /* ★★★★ 28.08.2026 — ЗАПУСКАЕТСЯ ЛИ ДОЧЕРНИЙ ПРОЦЕСС.
+     *
+     * Diablo.exe оказался ЛАУНЧЕРОМ: по коду 0x408f1a он зовёт CreateProcessA, ждёт готовности
+     * через WaitForInputIdle, крутит цикл по разделяемой памяти и делает ExitProcess(0).
+     * Результат CreateProcessA сама игра НЕ проверяет, поэтому неудача выглядит как штатный
+     * выход. В журнале прогона новых процессов wine после 48,9 с нет вовсе, а игра доходит до
+     * графики на 55-56 с — значит дочерний процесс, скорее всего, не рождается.
+     *
+     * Печатаем имя, командную строку и итог. Гейт `MACRUNNER_HB_CREATEPROC_PROBE`, умолчание ВЫКЛ. */
+    {
+        BOOL ok;
+
+        ok = CreateProcessInternalA( NULL, app_name, cmd_line, process_attr, thread_attr,
+                                     inherit, flags, env, cur_dir, startup_info, info, NULL );
+        {
+            /* pid РОДИТЕЛЯ печатаем рядом: в журнале wine виден только поток,
+             * и без этого нельзя сказать, чей поток что делает. */
+            ERR( "macrunner-createproc: имя=%s строка=%s флаги=%#lx итог=%d ошибка=%lu "
+                 "родитель_pid=%04lx дочерний_pid=%04lx дочерний_tid=%04lx\n",
+                 app_name ? app_name : "(нет)", cmd_line ? cmd_line : "(нет)",
+                 flags, (int)ok, ok ? 0 : GetLastError(),
+                 (unsigned long)GetCurrentProcessId(),
+                 (unsigned long)((ok && info) ? info->dwProcessId : 0),
+                 (unsigned long)((ok && info) ? info->dwThreadId : 0) );
+        }
+        return ok;
+    }
 }
 
 
@@ -784,8 +819,75 @@ BOOL WINAPI DECLSPEC_HOTPATCH DuplicateHandle( HANDLE source_process, HANDLE sou
 HRESULT WINAPI /* DECLSPEC_HOTPATCH */ GetApplicationRestartSettings( HANDLE process, WCHAR *cmdline,
                                                                       DWORD *size, DWORD *flags )
 {
-    FIXME( "%p, %p, %p, %p)\n", process, cmdline, size, flags );
-    return E_NOTIMPL;
+    DWORD needed;
+    HRESULT hr;
+
+    TRACE( "%p, %p, %p, %p)\n", process, cmdline, size, flags );
+
+    if (!size || (!cmdline && *size)) return E_INVALIDARG;
+
+    RtlEnterCriticalSection( &restart_section );
+
+    if (!restart_cmdline)
+    {
+        hr = HRESULT_FROM_WIN32( ERROR_NOT_FOUND );
+        goto done;
+    }
+
+    needed = lstrlenW( restart_cmdline ) + 1;
+    if (cmdline && *size < needed)
+    {
+        *size = needed;
+        hr = HRESULT_FROM_WIN32( ERROR_INSUFFICIENT_BUFFER );
+        goto done;
+    }
+
+    if (cmdline) lstrcpyW( cmdline, restart_cmdline );
+    *size = needed;
+    if (flags) *flags = restart_flags;
+    hr = S_OK;
+
+done:
+    RtlLeaveCriticalSection( &restart_section );
+    return hr;
+}
+
+
+/***********************************************************************
+ *           RegisterApplicationRestart   (kernelbase.@)
+ */
+HRESULT WINAPI /* DECLSPEC_HOTPATCH */ RegisterApplicationRestart( const WCHAR *cmdline, DWORD flags )
+{
+    WCHAR *new_cmdline = NULL;
+    DWORD len = 0;
+
+    TRACE( "%s, %#lx\n", debugstr_w(cmdline), flags );
+
+    if (cmdline && *cmdline)
+    {
+        len = lstrlenW( cmdline );
+        if (len > RESTART_MAX_CMD_LINE) return E_INVALIDARG;
+        if (!(new_cmdline = HeapAlloc( GetProcessHeap(), 0, (len + 1) * sizeof(WCHAR) ))) return E_FAIL;
+        lstrcpyW( new_cmdline, cmdline );
+    }
+
+    RtlEnterCriticalSection( &restart_section );
+    HeapFree( GetProcessHeap(), 0, restart_cmdline );
+    restart_cmdline = new_cmdline;
+    restart_flags = new_cmdline ? flags : 0;
+    RtlLeaveCriticalSection( &restart_section );
+
+    return S_OK;
+}
+
+
+/***********************************************************************
+ *           UnregisterApplicationRestart   (kernelbase.@)
+ */
+HRESULT WINAPI /* DECLSPEC_HOTPATCH */ UnregisterApplicationRestart(void)
+{
+    TRACE( "\n" );
+    return RegisterApplicationRestart( NULL, 0 );
 }
 
 
@@ -1360,8 +1462,28 @@ void init_startup_info( RTL_USER_PROCESS_PARAMETERS *params )
 {
     ANSI_STRING ansi;
 
+    /* MacRunner 2026-08-17, лейн ЛЕСТНИЦА, итерация 1344 — ПОЧЕМУ КОПИЯ КОМАНДНОЙ СТРОКИ ПУСТА.
+     *
+     * Измерено 1339-1343: у образа ARM64EC `GetCommandLineA()` и `GetCommandLineW()` возвращают
+     * `NULL`, при том что `PEB->ProcessParameters->CommandLine` к моменту `main` НЕПУСТ
+     * (`Length=0x2a`, текст верный), а наш перехват под EC не зовут вовсе — отвечает вот эта
+     * настоящая копия. Пусто она может быть по двум разным причинам, и лечатся они по-разному:
+     * либо сюда пришли с пустой строкой (порядок: `DllMain` раньше заполнения), либо мы читаем
+     * не тот PEB. Печать при ВХОДЕ различает их за один прогон.
+     *
+     * Через `MESSAGE`, а не `fprintf`: в этом файле именно так печатает соседний маркер
+     * `macrunner-kernelbase-dllmain`, и он в журналах прогонов есть — способ доказан. */
+    MESSAGE( "macrunner-kernelbase-startup: params=%p buf=%p len=%u peb=%p peb_params=%p\n",
+             params, params ? params->CommandLine.Buffer : NULL,
+             params ? (unsigned int)params->CommandLine.Length : 0u,
+             NtCurrentTeb()->Peb,
+             NtCurrentTeb()->Peb ? NtCurrentTeb()->Peb->ProcessParameters : NULL );
+
     command_lineW = params->CommandLine.Buffer;
     if (!RtlUnicodeStringToAnsiString( &ansi, &params->CommandLine, TRUE )) command_lineA = ansi.Buffer;
+
+    MESSAGE( "macrunner-kernelbase-startup: сохранено command_lineW=%p command_lineA=%p\n",
+             command_lineW, command_lineA );
 }
 
 

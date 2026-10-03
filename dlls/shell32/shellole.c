@@ -47,6 +47,12 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
 extern INT WINAPI SHStringFromGUIDW(REFGUID guid, LPWSTR lpszDest, INT cchMax);  /* shlwapi.24 */
 static HRESULT WINAPI ShellImageDataFactory_Constructor(IUnknown *outer, REFIID riid, void **obj);
+static HRESULT WINAPI AnimateWindowSize_Constructor(IUnknown *outer, REFIID riid, void **obj);
+
+static const GUID CLSID_AnimateWindowSize =
+    {0x713aacc8, 0x3b71, 0x435c, {0xa3, 0xa1, 0xbe, 0x4e, 0x53, 0x62, 0x1a, 0xb1}};
+static const GUID IID_IAnimateWindowSize =
+    {0x22e4c895, 0x8ab9, 0x40bb, {0xb8, 0x1a, 0x00, 0x1d, 0xd9, 0xb1, 0xf4, 0x49}};
 
 /**************************************************************************
  * Default ClassFactory types
@@ -88,8 +94,121 @@ static const struct {
 	{&CLSID_FileOperation, IFileOperation_Constructor},
 	{&CLSID_ActiveDesktop, ActiveDesktop_Constructor},
 	{&CLSID_EnumerableObjectCollection, EnumerableObjectCollection_Constructor},
+	{&CLSID_AnimateWindowSize, AnimateWindowSize_Constructor},
 	{NULL, NULL}
 };
+
+typedef struct IAnimateWindowSize IAnimateWindowSize;
+typedef struct IAnimateWindowSizeVtbl
+{
+    HRESULT (WINAPI *QueryInterface)(IAnimateWindowSize *iface, REFIID riid, void **obj);
+    ULONG (WINAPI *AddRef)(IAnimateWindowSize *iface);
+    ULONG (WINAPI *Release)(IAnimateWindowSize *iface);
+    HRESULT (WINAPI *Animate)(IAnimateWindowSize *iface, HWND hwnd, SIZE size, POINT pos,
+            int duration, int flags, int type);
+} IAnimateWindowSizeVtbl;
+
+struct IAnimateWindowSize
+{
+    const IAnimateWindowSizeVtbl *lpVtbl;
+};
+
+struct animate_window_size
+{
+    IAnimateWindowSize IAnimateWindowSize_iface;
+    LONG ref;
+};
+
+static inline struct animate_window_size *impl_from_IAnimateWindowSize(IAnimateWindowSize *iface)
+{
+    return CONTAINING_RECORD(iface, struct animate_window_size, IAnimateWindowSize_iface);
+}
+
+static HRESULT WINAPI animate_window_size_QueryInterface(IAnimateWindowSize *iface, REFIID riid, void **obj)
+{
+    struct animate_window_size *This = impl_from_IAnimateWindowSize(iface);
+
+    TRACE("(%p)->(%s %p)\n", This, shdebugstr_guid(riid), obj);
+
+    if (!obj) return E_POINTER;
+    *obj = NULL;
+
+    if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IAnimateWindowSize))
+    {
+        *obj = iface;
+        iface->lpVtbl->AddRef(iface);
+        return S_OK;
+    }
+
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI animate_window_size_AddRef(IAnimateWindowSize *iface)
+{
+    struct animate_window_size *This = impl_from_IAnimateWindowSize(iface);
+    return InterlockedIncrement(&This->ref);
+}
+
+static ULONG WINAPI animate_window_size_Release(IAnimateWindowSize *iface)
+{
+    struct animate_window_size *This = impl_from_IAnimateWindowSize(iface);
+    ULONG ref = InterlockedDecrement(&This->ref);
+
+    if (!ref) free(This);
+    return ref;
+}
+
+static HRESULT WINAPI animate_window_size_Animate(IAnimateWindowSize *iface, HWND hwnd, SIZE size,
+        POINT pos, int duration, int flags, int type)
+{
+    TRACE("(%p)->(%p, size %dx%d, pos %d,%d, duration %d, flags %#x, type %#x): no-op animation\n",
+            iface, hwnd, size.cx, size.cy, pos.x, pos.y, duration, flags, type);
+
+    if (hwnd && size.cx > 0 && size.cy > 0)
+    {
+        TRACE("applying no-op animation target window %p rect %d,%d %dx%d\n",
+                hwnd, pos.x, pos.y, size.cx, size.cy);
+        SetWindowPos(hwnd, NULL, pos.x, pos.y, size.cx, size.cy,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    if (type)
+    {
+        TRACE("posting no-op animation completion message %#x to thread %lu\n",
+                type, GetCurrentThreadId());
+        PostThreadMessageW(GetCurrentThreadId(), type, 0, 0);
+    }
+
+    return S_OK;
+}
+
+static const IAnimateWindowSizeVtbl animate_window_size_vtbl =
+{
+    animate_window_size_QueryInterface,
+    animate_window_size_AddRef,
+    animate_window_size_Release,
+    animate_window_size_Animate,
+};
+
+static HRESULT WINAPI AnimateWindowSize_Constructor(IUnknown *outer, REFIID riid, void **obj)
+{
+    struct animate_window_size *This;
+    HRESULT hr;
+
+    TRACE("(%p, %s, %p)\n", outer, shdebugstr_guid(riid), obj);
+
+    if (!obj) return E_POINTER;
+    *obj = NULL;
+    if (outer) return CLASS_E_NOAGGREGATION;
+
+    if (!(This = malloc(sizeof(*This)))) return E_OUTOFMEMORY;
+    This->IAnimateWindowSize_iface.lpVtbl = &animate_window_size_vtbl;
+    This->ref = 1;
+
+    hr = This->IAnimateWindowSize_iface.lpVtbl->QueryInterface(&This->IAnimateWindowSize_iface, riid, obj);
+    This->IAnimateWindowSize_iface.lpVtbl->Release(&This->IAnimateWindowSize_iface);
+    return hr;
+}
 
 /*************************************************************************
  * SHCoCreateInstance [SHELL32.102]

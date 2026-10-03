@@ -38,6 +38,32 @@ WINE_DEFAULT_DEBUG_CHANNEL(keyboard);
 WINE_DECLARE_DEBUG_CHANNEL(key);
 
 
+/* MacRunner ui-input trace: proof of the guest-side keyboard dispatch chain.
+ * Same env gates as the macrunner-ui-input stages in event.c/mouse.c, PLUS a
+ * keyboard-only gate.
+ *
+ * Why the extra gate: the shared MACRUNNER_TRACE_WINEMAC_INPUT also lights up
+ * ProcessEvents_enter/_exit in event.c, which print with an unconditional
+ * fflush on EVERY ProcessEvents call — i.e. at least twice per frame in a Unity
+ * message loop.  On a boot that is already throughput-starved for ~30 minutes
+ * that flood is both a multi-hundred-MB log and a real slowdown, and it chokes
+ * the auto-triage.  The two stages below fire only when a key actually moves,
+ * so gating them separately makes a full-length HK run affordable to trace.
+ * event.c/cocoa_app.m keep their own gate functions and do not know this var,
+ * so MACRUNNER_TRACE_WINEMAC_KEYS alone stays keyboard-only. */
+static BOOL macrunner_ui_input_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_KEYS") != NULL ||
+                  getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
+
+
 /* Indexed by Mac virtual keycode values defined above. */
 static const struct {
     WORD vkey;
@@ -914,6 +940,14 @@ static void macdrv_send_keyboard_input(HWND hwnd, WORD vkey, WORD scan, unsigned
     input.ki.dwExtraInfo    = 0;
 
     NtUserSendHardwareInput(hwnd, 0, &input, 0);
+
+    if (macrunner_ui_input_trace_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=macdrv_send_keyboard_input_sent hwnd=%p vkey=0x%x scan=0x%x flags=0x%x\n",
+                hwnd, vkey, scan, flags);
+        fflush(stderr);
+    }
 }
 
 
@@ -987,12 +1021,23 @@ void macdrv_key_event(HWND hwnd, const macdrv_event *event)
     TRACE_(key)("keycode %hu converted to vkey 0x%X scan 0x%02x\n",
                 event->key.keycode, vkey, scan);
 
+    if (macrunner_ui_input_trace_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=macdrv_key_event hwnd=%p window=%p keycode=%hu pressed=%d vkey=0x%x scan=0x%x\n",
+                hwnd, event->window, event->key.keycode, event->type == KEY_PRESS, vkey, scan);
+        fflush(stderr);
+    }
+
     if (!vkey) return;
 
     flags = 0;
     if (event->type == KEY_RELEASE) flags |= KEYEVENTF_KEYUP;
     if (scan & 0x100)               flags |= KEYEVENTF_EXTENDEDKEY;
 
+    macdrv_return_route_observe("macdrv-vkey-map", hwnd, event->window,
+                                event->key.keycode, vkey, event->type == KEY_PRESS,
+                                flags, event->key.time_ms);
     macdrv_send_keyboard_input(hwnd, vkey, scan & 0xff, flags, event->key.time_ms);
 }
 

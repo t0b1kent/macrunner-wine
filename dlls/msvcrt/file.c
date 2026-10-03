@@ -634,7 +634,7 @@ static FILE* msvcrt_alloc_fp(void)
           if (cs)
           {
               InitializeCriticalSectionEx(cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-              cs->DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": file_crit.crit");
+              SET_CS_DEBUG_NAME(cs, __FILE__ ": file_crit.crit");
           }
           MSVCRT_stream_idx++;
       }
@@ -825,7 +825,7 @@ void msvcrt_init_io(void)
     if (cs)
     {
       InitializeCriticalSectionEx(cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-      cs->DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": file_crit.crit");
+      SET_CS_DEBUG_NAME(cs, __FILE__ ": file_crit.crit");
     }
   }
   MSVCRT_stream_idx = 3;
@@ -1416,7 +1416,7 @@ void msvcrt_free_io(void)
 
         if(cs)
         {
-            cs->DebugInfo->Spare[0] = 0;
+            SET_CS_DEBUG_NAME(cs, 0);
             DeleteCriticalSection(cs);
         }
     }

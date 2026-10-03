@@ -217,7 +217,7 @@ static HRESULT SHELL32_CoCreateInitSF (LPCITEMIDLIST pidlRoot, LPCWSTR pathRoot,
                 int len = lstrlenW(ppfti.szTargetParsingName);
 
 		if (!_ILSimpleGetTextW(pidlChild, ppfti.szTargetParsingName + len, MAX_PATH - len))
-			hr = E_INVALIDARG;
+		    hr = E_INVALIDARG;
 	    }
 
 	    IPersistFolder3_InitializeEx (ppf, NULL, pidlAbsolute, &ppfti);

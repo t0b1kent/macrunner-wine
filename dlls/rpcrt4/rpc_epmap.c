@@ -80,6 +80,7 @@ static BOOL start_rpcss(void)
 {
     SC_HANDLE scm, service;
     SERVICE_STATUS_PROCESS status;
+    DWORD start_error = ERROR_SUCCESS;
     BOOL ret = FALSE;
 
     TRACE("\n");
@@ -95,7 +96,8 @@ static BOOL start_rpcss(void)
         CloseServiceHandle( scm );
         return FALSE;
     }
-    if (StartServiceW( service, 0, NULL ) || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING)
+    if (StartServiceW( service, 0, NULL ) || (start_error = GetLastError()) == ERROR_SERVICE_ALREADY_RUNNING ||
+        QueryServiceStatusEx( service, SC_STATUS_PROCESS_INFO, (BYTE *)&status, sizeof(status), &start_error ))
     {
         ULONGLONG start_time = GetTickCount64();
         do
@@ -118,7 +120,7 @@ static BOOL start_rpcss(void)
         if (status.dwCurrentState != SERVICE_RUNNING)
             WARN( "RpcSs failed to start %lu\n", status.dwCurrentState );
     }
-    else ERR( "failed to start RpcSs service\n" );
+    else ERR( "failed to start RpcSs service, error %lu\n", start_error );
 
     CloseServiceHandle( service );
     CloseServiceHandle( scm );

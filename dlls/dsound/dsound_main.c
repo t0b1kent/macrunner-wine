@@ -159,6 +159,23 @@ static HRESULT get_mmdevenum(IMMDeviceEnumerator **devenum)
 
     hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL,
             CLSCTX_INPROC_SERVER, &IID_IMMDeviceEnumerator, (void**)devenum);
+
+    /* MacRunner (2026-06-17, HK first-frame): under ARM64EC the x64-guest audio thread's
+     * STA CoInitialize() can be ineffective (apartment never established) so CoCreateInstance
+     * returns CO_E_NOTINITIALIZED (0x800401f0) -> FMOD finds no device -> unthrottled software
+     * mixer livelocks the boot at rank-7. Log the init result, and on NOTINITIALIZED drop any
+     * (ineffective) STA init and join the MTA explicitly, then retry once. If MTA also can't
+     * establish an apartment, the breakage is TEB-apartment-coherence (deep) and we bail. */
+    ERR("MacRunner get_mmdevenum: init_hr=%08lx CoCreateInstance hr=%08lx\n", init_hr, hr);
+    if(hr == CO_E_NOTINITIALIZED){
+        if(SUCCEEDED(init_hr))
+            CoUninitialize();
+        init_hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+        hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL,
+                CLSCTX_INPROC_SERVER, &IID_IMMDeviceEnumerator, (void**)devenum);
+        ERR("MacRunner get_mmdevenum MTA-retry: init_hr=%08lx CoCreateInstance hr=%08lx\n",
+            init_hr, hr);
+    }
     if(FAILED(hr)){
         if(SUCCEEDED(init_hr))
             CoUninitialize();

@@ -399,6 +399,25 @@ NTSTATUS WINAPI wow64_NtCreateSection( UINT *args )
 
     *handle_ptr = 0;
     status = NtCreateSection( &handle, access, objattr_32to64( &attr, attr32 ), size, protect, flags, file );
+    /* Итерация 453: имя объекта секции. Гипотеза 448 — игра ждёт счётчик в разделяемой памяти
+     * (проверка единственного экземпляра); имя даёт предмет проверки либо закрывает гипотезу.
+     * Обёртка живёт в sync.c, а не в virtual.c — на этом потеряна итерация 451. В wow64.dll нет
+     * строковых помощников, поэтому печатаем длину и первые символы шестнадцатерично. */
+    {
+        const UNICODE_STRING *nm = attr.attr.ObjectName;
+        /* Итерация 454: имя ЦЕЛИКОМ (190 байт = 95 символов). Печатаем посимвольно, потому что
+         * строковых помощников в wow64.dll нет: непечатаемое заменяем точкой. */
+        if (nm && nm->Buffer && nm->Length)
+        {
+            char buf[128]; unsigned q, n = nm->Length / sizeof(WCHAR);
+            if (n > 126) n = 126;
+            for (q = 0; q < n; q++)
+                buf[q] = (nm->Buffer[q] >= 32 && nm->Buffer[q] < 127) ? (char)nm->Buffer[q] : '.';
+            buf[n] = 0;
+            MESSAGE( "macrunner-mksect: статус=%08x файл=%p имя[%u]=%s\n",
+                     (unsigned)status, file, (unsigned)nm->Length, buf );
+        }
+    }
     put_handle( handle_ptr, handle );
     return status;
 }
@@ -493,6 +512,19 @@ NTSTATUS WINAPI wow64_NtDelayExecution( UINT *args )
     BOOLEAN alertable = get_ulong( &args );
     const LARGE_INTEGER *timeout = get_ptr( &args );
 
+    /* ★★★★ 28.08.2026 — ЧТО 32-БИТНЫЙ ГОСТЬ ПРОСИТ У СНА.
+     *
+     * Diablo ждёт дочерний процесс циклом `Sleep(1000)` (0x408f37), а замер даёт 5222 вызова
+     * за 0,401 с — 0,08 мс на вызов вместо 1000 мс. `Sleep(1000)` обязан прийти сюда как
+     * -10000000 (относительный срок в сотнях нс); печатаем то, что пришло на самом деле.
+     * Гейт `MACRUNNER_HB_SLEEP_PROBE`, умолчание ВЫКЛ. */
+    {
+        static unsigned n;
+        unsigned k = ++n;
+        if (k <= 8 || !(k % 500))
+            MESSAGE( "macrunner-sleep-wow64: n=%u alertable=%d указатель=%p срок=%I64d\n",
+                 k, (int)alertable, timeout, timeout ? timeout->QuadPart : 0 );
+    }
     return NtDelayExecution( alertable, timeout );
 }
 

@@ -288,7 +288,13 @@ static ULONG WINAPI d3d_viewport_Release(IDirect3DViewport3 *iface)
     TRACE("%p decreasing refcount to %lu.\n", viewport, ref);
 
     if (!ref)
+    {
+        /* Ссылку на поверхность фоновой глубины держали мы — отпускаем её
+         * вместе с областью просмотра, иначе поверхность никогда не умрёт. */
+        if (viewport->background_depth)
+            IDirectDrawSurface_Release(viewport->background_depth);
         free(viewport);
+    }
 
     return ref;
 }
@@ -689,7 +695,17 @@ static HRESULT WINAPI d3d_viewport_GetBackground(IDirect3DViewport3 *iface,
  *****************************************************************************/
 static HRESULT WINAPI d3d_viewport_SetBackgroundDepth(IDirect3DViewport3 *iface, IDirectDrawSurface *surface)
 {
-    FIXME("iface %p, surface %p stub!\n", iface, surface);
+    struct d3d_viewport *viewport = impl_from_IDirect3DViewport3(iface);
+
+    TRACE("iface %p, surface %p.\n", iface, surface);
+
+    wined3d_mutex_lock();
+    if (surface)
+        IDirectDrawSurface_AddRef(surface);
+    if (viewport->background_depth)
+        IDirectDrawSurface_Release(viewport->background_depth);
+    viewport->background_depth = surface;
+    wined3d_mutex_unlock();
 
     return D3D_OK;
 }
@@ -711,7 +727,19 @@ static HRESULT WINAPI d3d_viewport_SetBackgroundDepth(IDirect3DViewport3 *iface,
 static HRESULT WINAPI d3d_viewport_GetBackgroundDepth(IDirect3DViewport3 *iface,
         IDirectDrawSurface **surface, BOOL *valid)
 {
-    FIXME("iface %p, surface %p, valid %p stub!\n", iface, surface, valid);
+    struct d3d_viewport *viewport = impl_from_IDirect3DViewport3(iface);
+
+    TRACE("iface %p, surface %p, valid %p.\n", iface, surface, valid);
+
+    if (!surface || !valid)
+        return DDERR_INVALIDPARAMS;
+
+    wined3d_mutex_lock();
+    *valid = viewport->background_depth != NULL;
+    *surface = viewport->background_depth;
+    if (*surface)
+        IDirectDrawSurface_AddRef(*surface);   /* вызывающий обязан отпустить */
+    wined3d_mutex_unlock();
 
     return DD_OK;
 }
@@ -1087,7 +1115,23 @@ static HRESULT WINAPI d3d_viewport_SetViewport2(IDirect3DViewport3 *iface, D3DVI
 static HRESULT WINAPI d3d_viewport_SetBackgroundDepth2(IDirect3DViewport3 *iface,
         IDirectDrawSurface4 *surface)
 {
-    FIXME("iface %p, surface %p stub!\n", iface, surface);
+    struct d3d_viewport *viewport = impl_from_IDirect3DViewport3(iface);
+    IDirectDrawSurface *surface1 = NULL;
+
+    TRACE("iface %p, surface %p.\n", iface, surface);
+
+    /* Храним в том же поле, что и версия 1: это одна и та же поверхность,
+     * запрошенная через разные интерфейсы. Приводим к IDirectDrawSurface —
+     * QueryInterface сам возьмёт нужную ссылку. */
+    if (surface && FAILED(IDirectDrawSurface4_QueryInterface(surface,
+            &IID_IDirectDrawSurface, (void **)&surface1)))
+        return DDERR_INVALIDPARAMS;
+
+    wined3d_mutex_lock();
+    if (viewport->background_depth)
+        IDirectDrawSurface_Release(viewport->background_depth);
+    viewport->background_depth = surface1;
+    wined3d_mutex_unlock();
 
     return D3D_OK;
 }
@@ -1108,7 +1152,21 @@ static HRESULT WINAPI d3d_viewport_SetBackgroundDepth2(IDirect3DViewport3 *iface
 static HRESULT WINAPI d3d_viewport_GetBackgroundDepth2(IDirect3DViewport3 *iface,
         IDirectDrawSurface4 **surface, BOOL *valid)
 {
-    FIXME("iface %p, surface %p, valid %p stub!\n", iface, surface, valid);
+    struct d3d_viewport *viewport = impl_from_IDirect3DViewport3(iface);
+
+    TRACE("iface %p, surface %p, valid %p.\n", iface, surface, valid);
+
+    if (!surface || !valid)
+        return DDERR_INVALIDPARAMS;
+
+    wined3d_mutex_lock();
+    *valid = viewport->background_depth != NULL;
+    *surface = NULL;
+    if (viewport->background_depth
+            && FAILED(IDirectDrawSurface_QueryInterface(viewport->background_depth,
+                    &IID_IDirectDrawSurface4, (void **)surface)))
+        *valid = FALSE;
+    wined3d_mutex_unlock();
 
     return D3D_OK;
 }

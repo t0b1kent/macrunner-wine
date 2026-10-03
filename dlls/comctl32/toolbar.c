@@ -69,6 +69,7 @@
  */
 
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "windef.h"
@@ -82,6 +83,114 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(toolbar);
+
+struct mr_toolbar_pixel_counts
+{
+    unsigned int colorful;
+    unsigned int nonwhite;
+    unsigned int black;
+    BOOL ok;
+};
+
+static BOOL mr_toolbar_producer_trace_enabled(void)
+{
+    static int enabled = -1;
+    char value[8];
+    if (enabled == -1)
+        enabled = GetEnvironmentVariableA("MACRUNNER_TOOLBAR_PRODUCER_TRACE", value, sizeof(value)) > 0;
+    return enabled;
+}
+
+static int mr_toolbar_color_spread(DWORD px)
+{
+    int b = px & 0xff;
+    int g = (px >> 8) & 0xff;
+    int r = (px >> 16) & 0xff;
+    int max = max(r, max(g, b));
+    int min = min(r, min(g, b));
+    return max - min;
+}
+
+static void mr_toolbar_count_pixels(const DWORD *pixels, int width, int height,
+                                    struct mr_toolbar_pixel_counts *counts)
+{
+    int x, y;
+    memset(counts, 0, sizeof(*counts));
+    if (!pixels || width <= 0 || height <= 0) return;
+    counts->ok = TRUE;
+    for (y = 0; y < height; y++)
+    {
+        for (x = 0; x < width; x++)
+        {
+            DWORD px = pixels[y * width + x];
+            int b = px & 0xff;
+            int g = (px >> 8) & 0xff;
+            int r = (px >> 16) & 0xff;
+            if (mr_toolbar_color_spread(px) > 36) counts->colorful++;
+            if (!(r > 245 && g > 245 && b > 245)) counts->nonwhite++;
+            if (r < 16 && g < 16 && b < 16) counts->black++;
+        }
+    }
+}
+
+static void mr_toolbar_count_bitmap(HBITMAP bitmap, int width, int height,
+                                    struct mr_toolbar_pixel_counts *counts)
+{
+    BITMAPINFO info;
+    HDC src_dc, mem_dc;
+    HBITMAP dib;
+    HGDIOBJ old_src, old_mem;
+    DWORD *bits = NULL;
+
+    memset(counts, 0, sizeof(*counts));
+    if (!bitmap || width <= 0 || height <= 0 || width > 2048 || height > 2048) return;
+    memset(&info, 0, sizeof(info));
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    if (!(src_dc = CreateCompatibleDC(0))) return;
+    if (!(mem_dc = CreateCompatibleDC(0)))
+    {
+        DeleteDC(src_dc);
+        return;
+    }
+    if (!(dib = CreateDIBSection(src_dc, &info, DIB_RGB_COLORS, (void **)&bits, 0, 0)))
+    {
+        DeleteDC(mem_dc);
+        DeleteDC(src_dc);
+        return;
+    }
+    old_src = SelectObject(src_dc, bitmap);
+    old_mem = SelectObject(mem_dc, dib);
+    if (old_src && old_mem && BitBlt(mem_dc, 0, 0, width, height, src_dc, 0, 0, SRCCOPY))
+    {
+        GdiFlush();
+        mr_toolbar_count_pixels(bits, width, height, counts);
+    }
+    if (old_mem) SelectObject(mem_dc, old_mem);
+    if (old_src) SelectObject(src_dc, old_src);
+    DeleteObject(dib);
+    DeleteDC(mem_dc);
+    DeleteDC(src_dc);
+}
+
+static void mr_toolbar_log_bitmap(const char *stage, HIMAGELIST himl, HBITMAP bitmap,
+                                  HINSTANCE hinst, INT id, INT buttons, int width, int height)
+{
+    static LONG logged;
+    struct mr_toolbar_pixel_counts counts;
+
+    if (InterlockedIncrement(&logged) > 512) return;
+    mr_toolbar_count_bitmap(bitmap, width, height, &counts);
+    fprintf(stderr,
+            "MR_TOOLBAR_PRODUCER stage=%s himl=%p hbitmap=%p hInst=%p nID=%d nButtons=%d "
+            "width=%d height=%d ok=%d colorful=%u nonwhite=%u black=%u\n",
+            stage, himl, bitmap, hinst, id, buttons,
+            width, height, counts.ok, counts.colorful, counts.nonwhite, counts.black);
+}
 
 static HCURSOR hCursorDrag = NULL;
 
@@ -2801,11 +2910,25 @@ TOOLBAR_AddBitmapToImageList(TOOLBAR_INFO *infoPtr, HIMAGELIST himlDef, const TB
                               IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION );
     else
         hbmLoad = CreateMappedBitmap(bitmap->hInst, bitmap->nID, 0, NULL, 0);
+    if (mr_toolbar_producer_trace_enabled() && hbmLoad)
+    {
+        BITMAP trace_bmp;
+        if (GetObjectW(hbmLoad, sizeof(trace_bmp), &trace_bmp))
+            mr_toolbar_log_bitmap("toolbar_after_load", himlDef, hbmLoad, bitmap->hInst,
+                                  bitmap->nID, bitmap->nButtons, trace_bmp.bmWidth, trace_bmp.bmHeight);
+    }
 
     /* enlarge the bitmap if needed */
     ImageList_GetIconSize(himlDef, &cxIcon, &cyIcon);
     if (bitmap->hInst != COMCTL32_hModule)
         COMCTL32_EnsureBitmapSize(&hbmLoad, cxIcon*(INT)bitmap->nButtons, cyIcon, comctl32_color.clrBtnFace);
+    if (mr_toolbar_producer_trace_enabled() && hbmLoad)
+    {
+        BITMAP trace_bmp;
+        if (GetObjectW(hbmLoad, sizeof(trace_bmp), &trace_bmp))
+            mr_toolbar_log_bitmap("toolbar_after_ensure", himlDef, hbmLoad, bitmap->hInst,
+                                  bitmap->nID, bitmap->nButtons, trace_bmp.bmWidth, trace_bmp.bmHeight);
+    }
     
     nIndex = ImageList_AddMasked(himlDef, hbmLoad, comctl32_color.clrBtnFace);
     DeleteObject(hbmLoad);

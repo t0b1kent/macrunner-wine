@@ -23,6 +23,9 @@
 #pragma makedep unix
 #endif
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #define OEMRESOURCE
 #include "ntgdi_private.h"
 #include "ntuser_private.h"
@@ -32,6 +35,13 @@
 WINE_DEFAULT_DEBUG_CHANNEL(menu);
 WINE_DECLARE_DEBUG_CHANNEL(accel);
 
+static BOOL trace_secondary_window_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) enabled = getenv("MACRUNNER_TRACE_SECONDARY_WINDOW") != NULL;
+    return enabled;
+}
 
 /* menu item structure */
 struct menu_item
@@ -3117,10 +3127,18 @@ static BOOL show_popup( HWND owner, HMENU hmenu, UINT id, UINT flags,
         top_popup_hmenu = hmenu;
     }
 
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=menu_show_popup_before owner=%p hmenu=%p hwnd=%p "
+                 "flags=0x%x pos=%d,%d size=%ux%u top_popup=%p\n",
+                 owner, hmenu, menu->hWnd, flags, x, y, menu->Width, menu->Height, top_popup );
+
     /* Display the window */
     NtUserSetWindowPos( menu->hWnd, HWND_TOPMOST, x, y, menu->Width, menu->Height,
                         SWP_SHOWWINDOW | SWP_NOACTIVATE );
     NtUserRedrawWindow( menu->hWnd, NULL, 0, RDW_UPDATENOW | RDW_ALLCHILDREN );
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=menu_show_popup_after owner=%p hmenu=%p hwnd=%p\n",
+                 owner, hmenu, menu->hWnd );
     return TRUE;
 }
 
@@ -3343,11 +3361,20 @@ static BOOL init_popup( HWND owner, HMENU hmenu, UINT flags )
 
     if (flags & TPM_LAYOUTRTL) ex_style = WS_EX_LAYOUTRTL;
 
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=menu_init_popup_before owner=%p hmenu=%p "
+                 "flags=0x%x ex_style=0x%lx owner_style=0x%lx owner_ex_style=0x%lx\n",
+                 owner, hmenu, flags, ex_style, get_window_long( owner, GWL_STYLE ),
+                 get_window_long( owner, GWL_EXSTYLE ));
+
     /* NOTE: In Windows, top menu popup is not owned. */
     menu->hWnd = NtUserCreateWindowEx( ex_style, &class_name, NULL, NULL,
                                        WS_POPUP, 0, 0, 0, 0, owner, 0,
                                        (HINSTANCE)get_window_long_ptr( owner, GWLP_HINSTANCE, FALSE ),
                                        (void *)hmenu, 0, NULL, (WCHAR *)POPUPMENU_CLASS_ATOM, FALSE );
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=menu_init_popup_after owner=%p hmenu=%p hwnd=%p "
+                 "last_error=%lu\n", owner, hmenu, menu->hWnd, RtlGetLastWin32Error() );
     return !!menu->hWnd;
 }
 
@@ -4504,6 +4531,9 @@ BOOL WINAPI NtUserTrackPopupMenuEx( HMENU handle, UINT flags, INT x, INT y, HWND
     TRACE( "hmenu %p flags %04x (%d,%d) hwnd %p params %p rect %s\n",
            handle, flags, x, y, hwnd, params,
            params ? wine_dbgstr_rect( &params->rcExclude ) : "-" );
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=track_popup_enter hmenu=%p flags=0x%x "
+                 "pos=%d,%d hwnd=%p params=%p\n", handle, flags, x, y, hwnd, params );
 
     if (!(menu = unsafe_menu_ptr( handle )))
     {
@@ -4546,6 +4576,9 @@ BOOL WINAPI NtUserTrackPopupMenuEx( HMENU handle, UINT flags, INT x, INT y, HWND
         RtlSetLastWin32Error( 0 );
     }
 
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=track_popup_exit hmenu=%p hwnd=%p ret=%d "
+                 "menu_hwnd=%p\n", handle, hwnd, ret, menu->hWnd );
     return ret;
 }
 

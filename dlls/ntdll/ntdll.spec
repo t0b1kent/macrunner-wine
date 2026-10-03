@@ -1197,6 +1197,8 @@
 @ stdcall TpWaitForWait(ptr long)
 @ stdcall TpWaitForWork(ptr long)
 @ stdcall -ret64 VerSetConditionMask(int64 long long)
+@ stdcall WinSqmAddToStream(long long long ptr)
+@ stdcall WinSqmAddToStreamEx(long long long long ptr)
 @ stdcall WinSqmEndSession(long)
 @ stdcall WinSqmIncrementDWORD(long long long)
 @ stdcall WinSqmIsOptedIn()
@@ -1540,7 +1542,8 @@
 @ cdecl -private -arch=i386 _CIsqrt()
 @ stdcall -arch=!i386 __C_specific_handler(ptr long ptr ptr)
 @ cdecl -arch=!i386 -norelay __chkstk()
-@ cdecl -arch=arm64ec -norelay __chkstk_arm64ec()
+@ cdecl -arch=x86_64,arm64ec -norelay __chkstk_arm64ec()
+@ cdecl -arch=x86_64 -norelay ___chkstk_ms()
 @ cdecl __isascii(long)
 @ cdecl __iscsym(long)
 @ cdecl __iscsymf(long)
@@ -1752,7 +1755,16 @@
 @ extern -private __wine_syscall_dispatcher
 @ extern -private __wine_unix_call_dispatcher
 @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
+@ extern -private macrunner_hb_guest_image_lookup
+@ extern -private macrunner_hb_guest_ctx_lookup
+@ extern -private macrunner_hb_known_stack_lookup
 @ extern -private __wine_unixlib_handle
+@ cdecl -private __wine_macrunner_hb_pe_call12(ptr ptr)
+@ cdecl -private __wine_macrunner_hb_pe_callback12(ptr)
+# ПАКЕТ-2 08.09.2026: тот же селектор владельца CPU, что у пакетов 1 и 3, отдан
+# wow64.dll. Второй селектор заводить нельзя — берётся ЭТОТ, по имени, через
+# RtlFindExportedRoutineByName (так wow64 уже берёт LdrSystemDllInitBlock и BTCpu*).
+@ cdecl -private macrunner_cpu_backend_is_hb()
 
 # Debugging
 @ stdcall -norelay __wine_dbg_write(ptr long)

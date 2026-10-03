@@ -392,6 +392,29 @@ int send_thread_signal( struct thread *thread, int sig )
 }
 
 /* read data from a process memory space */
+
+/* ★ MacRunner, лейн ЛЕСТНИЦА, итерация 2639 — ГЕЙТ НА ОТЛАДОЧНЫЕ ЗОНДЫ СЕРВЕРА.
+ *
+ * Зонды 2634-2635 (область, описатель, порт задачи) свою работу сделали: ими разобрано,
+ * что c0000022 возникает из-за отсутствия порта задачи у УЖЕ МЁРТВОГО ребёнка. Оставлять
+ * их печатающими безусловно в общем `wineserver` нельзя — сервер один на все лейны.
+ *
+ * Но и удалять неправильно: разбор размещения PEB32 не закончен, зонды понадобятся снова.
+ * Поэтому гейт, а не удаление. Умолчание 0 — печати нет.
+ *   MACRUNNER_SRV_PROBES=1  включает все три.
+ */
+int macrunner_srv_probes(void)
+{
+    static int v = -1;
+
+    if (v < 0)
+    {
+        const char *e = getenv( "MACRUNNER_SRV_PROBES" );
+        v = e && e[0] && e[0] != '0';
+    }
+    return v;
+}
+
 int read_process_memory( struct process *process, client_ptr_t ptr, data_size_t size, char *dest )
 {
     kern_return_t ret;
@@ -400,6 +423,20 @@ int read_process_memory( struct process *process, client_ptr_t ptr, data_size_t 
 
     if (!process_port)
     {
+        /* ★ 2635: единственный оставшийся источник c0000022 до чтения. Проверка описателя
+         * исключена ЗАМЕРОМ (зонд в process.c не сработал ни разу), усечение адреса на
+         * 64 битах невозможно. Печатаем прямо, чтобы не выводить по исключению — за
+         * сессию я трижды объяснял этот отказ неверно именно рассуждением. */
+        static int said;
+
+        if (macrunner_srv_probes() && said++ < 24)
+        {
+            fprintf( stderr, "macrunner-srv-port: НЕТ порта задачи | addr=%llx size=%u "
+                     "потоков=%d код_выхода=%d\n",
+                     (unsigned long long)ptr, (unsigned)size,
+                     process->running_threads, process->exit_code );
+            fflush( stderr );
+        }
         set_error( STATUS_ACCESS_DENIED );
         return 0;
     }
@@ -410,6 +447,44 @@ int read_process_memory( struct process *process, client_ptr_t ptr, data_size_t 
     }
 
     ret = mach_vm_read_overwrite( process_port, (mach_vm_address_t)ptr, (mach_vm_size_t)size, (mach_vm_address_t)dest, &bytes_read );
+    /* ★ MacRunner, лейн ЛЕСТНИЦА, итерация 2634 — СПРОСИТЬ ОБЛАСТЬ, А НЕ ВЫВОДИТЬ ЕЁ ИЗ РИСУНКА.
+     *
+     * 2633 показал: чтение чужой памяти по 0x7ffd01f0000 (64-битный PEB) удаётся, а по
+     * 0x7ffd01f1000 (PEB32 = peb + 4096) отказывает c0000022, причём объяснение «процесс
+     * перестал быть читаемым» опровергнуто: успех приходил ПОСЛЕ отказа. Вывод «PEB32 лежит
+     * за краем читаемой области» был выведен из рисунка успехов и отказов, а не измерен.
+     *
+     * Здесь спрашиваем область прямо у ядра — тем же способом, каким это делает
+     * write_process_memory ниже. Печать ТОЛЬКО при отказе: событие редкое, потолок не нужен,
+     * а горячий путь не трогаем (при успехе не выполняется ничего). */
+    if (ret != KERN_SUCCESS)
+    {
+        static int said;
+
+        if (macrunner_srv_probes() && said++ < 24)
+        {
+            mach_vm_address_t region_address = (mach_vm_address_t)ptr;
+            mach_vm_size_t region_size = 0;
+            vm_region_basic_info_data_64_t info;
+            mach_msg_type_number_t info_count = VM_REGION_BASIC_INFO_COUNT_64;
+            mach_port_t object_name = MACH_PORT_NULL;
+            kern_return_t rr = mach_vm_region( process_port, &region_address, &region_size,
+                                               VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info,
+                                               &info_count, &object_name );
+
+            if (rr == KERN_SUCCESS)
+                fprintf( stderr, "macrunner-srv-region: addr=%llx size=%u ret=%d | область "
+                         "начало=%llx размер=%llx prot=%x max=%x\n",
+                         (unsigned long long)ptr, (unsigned)size, (int)ret,
+                         (unsigned long long)region_address, (unsigned long long)region_size,
+                         (unsigned)info.protection, (unsigned)info.max_protection );
+            else
+                fprintf( stderr, "macrunner-srv-region: addr=%llx size=%u ret=%d | области НЕТ "
+                         "(mach_vm_region=%d)\n",
+                         (unsigned long long)ptr, (unsigned)size, (int)ret, (int)rr );
+            fflush( stderr );
+        }
+    }
     mach_set_error( ret );
     return (ret == KERN_SUCCESS);
 }

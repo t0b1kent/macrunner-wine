@@ -453,4 +453,7 @@ static inline char* astrdupw_utf8(const wchar_t *wstr)
     return str;
 }
 
+#define SET_CS_DEBUG_NAME(cs, name) do { } while(0)
+
 #endif /* __WINE_MSVCRT_H */
+

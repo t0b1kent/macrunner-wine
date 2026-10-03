@@ -321,6 +321,13 @@ static inline NTSTATUS msync_wait_single( int obj, void *obj_shm,
             ns_timeleft = update_timeout( *end ) * 100;
             if (!ns_timeleft) return STATUS_TIMEOUT;
         }
+        /* MacRunner 2026-06-21: count BLOCKING waits by msync_type (1=SEM 2=AUTO_EV 3=MAN_EV 4=MUTEX 5=AUTO_SRV 6=MAN_SRV). */
+        {
+            static int mr_en = -1; static uint64_t mr_blk[8];
+            if (mr_en < 0) mr_en = getenv("MACRUNNER_HB_TRACE_SYNCMETER") ? 1 : 0;
+            if (mr_en) { unsigned mt = ((struct mutex *)obj_shm)->msync_type; uint64_t b = __atomic_add_fetch(&mr_blk[mt & 7],1,__ATOMIC_RELAXED);
+                if ((b % 4000)==0) fprintf(stderr,"macrunner-msync-diag: BLOCK msync_type=%u count=%llu\n", mt, (unsigned long long)b), fflush(stderr); }
+        }
         ret = ulock_wait( UL_COMPARE_AND_WAIT_SHARED | ULF_NO_ERRNO, obj_shm, val, ns_timeleft );
     } while (ret == -EINTR || ret == -EFAULT);
 
@@ -328,6 +335,151 @@ static inline NTSTATUS msync_wait_single( int obj, void *obj_shm,
         return STATUS_TIMEOUT;
 
     return STATUS_SUCCESS;
+}
+
+/* MacRunner 2026-07-29 — IN-PROCESS WAKE.
+ *
+ * Measured on Hollow Knight: 36526 waits, average latency 11449 us, none timing out and all
+ * eventually signaled — about 416 s of the 476 s cold start spent blocked rather than translating.
+ *
+ * The cost is not the translation and not the Mach send. A wait that carries an alert object (any
+ * alertable Win32 wait, which is what Mono does) cannot use msync_wait_single, because a thread can
+ * only ulock_wait on ONE address and such a wait has two wake sources: the object and the APC alert.
+ * So it takes the server-registered path, whose tid word is a three-state handshake — 2 "registered
+ * with the server", 1 "server acknowledged, blocking", 0 "woken". Reaching 1 costs one trip through
+ * the wineserver and reaching 0 costs another, and the wineserver is a single-threaded process that
+ * both trips have to queue behind. Two scheduling round trips per wait is the 11 ms.
+ *
+ * The waiter and the signaler are however almost always threads of the SAME process here: Unity and
+ * Mono workers handing each other events. Such a signaler can write the 0 and wake the sleeper
+ * itself, in nanoseconds, without involving the server at all — it only needs to know which tids are
+ * parked on the object, which the server knows and we do not.
+ *
+ * So we keep our own registry of that, process-local. This is deliberately an ADDITION and not a
+ * replacement: the server registration below stays exactly as it was, so a signaler in another
+ * process still works unchanged, and anything this registry misses degrades to today's behaviour
+ * rather than hanging. The only state it touches is the CAS from 1 to 0, which is the same
+ * transition the server would have performed.
+ *
+ * The CAS is what makes it race-free, and the reason it compares against 1 rather than "not 0":
+ * at 2 the server has not acknowledged yet and would still write its own 1 afterwards, so waking a
+ * thread in that state could leave the word at 1 with the signal already consumed and nobody left
+ * to wake it. At 2 we therefore do nothing and let the untouched server path deliver, which it
+ * will, because the signaler's message is queued after the registration it must not overtake.
+ * A late server wake after ours is harmless: the waiter re-checks which object is actually signaled
+ * and loops if none is, so a spurious wake was always tolerated by this design.
+ */
+#define MSYNC_IPW_BUCKETS 512   /* power of two — index is masked, not divided */
+#define MSYNC_IPW_SLOTS   8     /* per bucket; overflow falls back to the server path */
+
+struct msync_ipw_bucket
+{
+    os_unfair_lock lock;
+    unsigned int idx[MSYNC_IPW_SLOTS];  /* 0 = free slot; object ids are never 0 */
+    int tid[MSYNC_IPW_SLOTS];
+};
+
+static struct msync_ipw_bucket msync_ipw_table[MSYNC_IPW_BUCKETS];
+static uint64_t msync_ipw_reg, msync_ipw_woke, msync_ipw_full;
+
+static inline struct msync_ipw_bucket *msync_ipw_bucket_for( unsigned int idx )
+{
+    /* Fibonacci hashing: object ids are dense small integers handed out by the server, so the low
+     * bits alone would put every object of one run into a handful of buckets. */
+    return &msync_ipw_table[((idx * 2654435761u) >> 16) & (MSYNC_IPW_BUCKETS - 1)];
+}
+
+static int msync_ipw_enabled(void)
+{
+    static int cached = -1;
+    if (cached < 0)
+    {
+        const char *e = getenv( "MACRUNNER_MSYNC_INPROC_WAKE" );
+        cached = (e && atoi( e )) ? 1 : 0;
+    }
+    return cached;
+}
+
+static void msync_ipw_register( unsigned int idx, int tid )
+{
+    struct msync_ipw_bucket *b = msync_ipw_bucket_for( idx );
+    int i;
+
+    os_unfair_lock_lock( &b->lock );
+    for (i = 0; i < MSYNC_IPW_SLOTS; i++)
+    {
+        if (!b->idx[i])
+        {
+            b->idx[i] = idx;
+            b->tid[i] = tid;
+            os_unfair_lock_unlock( &b->lock );
+            __atomic_add_fetch( &msync_ipw_reg, 1, __ATOMIC_RELAXED );
+            return;
+        }
+    }
+    os_unfair_lock_unlock( &b->lock );
+    __atomic_add_fetch( &msync_ipw_full, 1, __ATOMIC_RELAXED );
+}
+
+static void msync_ipw_unregister( unsigned int idx, int tid )
+{
+    struct msync_ipw_bucket *b = msync_ipw_bucket_for( idx );
+    int i;
+
+    os_unfair_lock_lock( &b->lock );
+    for (i = 0; i < MSYNC_IPW_SLOTS; i++)
+    {
+        if (b->idx[i] == idx && b->tid[i] == tid)
+        {
+            b->idx[i] = 0;
+            break;
+        }
+    }
+    os_unfair_lock_unlock( &b->lock );
+}
+
+/* Called by a signaler that has just published the object state. Wakes the threads of this process
+ * that are parked on it. The ulock_wake syscalls are issued after the bucket lock is dropped:
+ * holding a lock across a syscall is how a fast path turns into the thing it replaced. */
+static void msync_ipw_wake( unsigned int idx )
+{
+    struct msync_ipw_bucket *b = msync_ipw_bucket_for( idx );
+    int found[MSYNC_IPW_SLOTS];
+    int i, n = 0;
+
+    os_unfair_lock_lock( &b->lock );
+    for (i = 0; i < MSYNC_IPW_SLOTS; i++)
+        if (b->idx[i] == idx) found[n++] = b->tid[i];
+    os_unfair_lock_unlock( &b->lock );
+
+    for (i = 0; i < n; i++)
+    {
+        int *addr = shm_tid_map + found[i];
+        int expect = 1;
+
+        if (__atomic_compare_exchange_n( addr, &expect, 0, 0,
+                                         __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST ))
+        {
+            __ulock_wake( UL_COMPARE_AND_WAIT_SHARED | ULF_WAKE_ALL, addr, 0 );
+            __atomic_add_fetch( &msync_ipw_woke, 1, __ATOMIC_RELAXED );
+        }
+    }
+}
+
+static void msync_ipw_register_all( const int *objs, int alert_obj, int count, int tid )
+{
+    int i;
+
+    for (i = 0; i < count; i++) msync_ipw_register( objs[i], tid );
+    if (alert_obj) msync_ipw_register( alert_obj, tid );
+}
+
+static void msync_ipw_unregister_all( const int *objs, int alert_obj, int count, int tid )
+{
+    int i;
+
+    for (i = 0; i < count; i++) msync_ipw_unregister( objs[i], tid );
+    if (alert_obj) msync_ipw_unregister( alert_obj, tid );
 }
 
 static inline int check_shm_contention( void **objs_shm, void *alert_obj_shm, int count, int tid )
@@ -365,6 +517,7 @@ static NTSTATUS msync_wait_multiple( const int *objs, void **objs_shm, int alert
     mach_msg_return_t mr;
     unsigned int msgh_id;
     int total_count = count + (alert_obj ? 1 : 0);
+    int ipw = msync_ipw_enabled();
 
     __atomic_store_n( addr, 2, __ATOMIC_RELEASE );
     msgh_id = (tid << 8) | total_count;
@@ -372,6 +525,66 @@ static NTSTATUS msync_wait_multiple( const int *objs, void **objs_shm, int alert
 
     if (mr != MACH_MSG_SUCCESS)
         return STATUS_PENDING;
+
+    /* After the word is already 2, so a signaler that finds us here declines and leaves the wake to
+     * the server, which is the only correct answer until the server has acknowledged. */
+    if (ipw) msync_ipw_register_all( objs, alert_obj, count, tid );
+
+    /* MacRunner 2026-07-30 — THE ACKNOWLEDGEMENT LEG (2 -> 1).
+     *
+     * Measured: the in-process wake registered 256388 waits and fired exactly ONCE, because it may
+     * only take a thread out of state 1 and the thread is almost never there. That localises the
+     * cost to this leg instead: the spin below, waiting for the single-threaded wineserver to
+     * acknowledge a registration it was sent microseconds ago. 128000 of 130449 waits in a run take
+     * this path, so at even 1 ms each it is minutes of aggregate blocking.
+     *
+     * This is a documented property of the design rather than a defect of ours: upstream wine-msync
+     * "registers the objects now associated with this semaphore to wineserver, and starts waiting",
+     * and the wineserver round trip per synchronisation is the exact bottleneck esync, fsync and
+     * finally NTSYNC were each built to remove. What is NOT known is its size HERE, and everything
+     * about what to do next depends on that: a large number justifies rebuilding this wait on a Mach
+     * PORT SET (mach_msg can receive from several ports at once, which is how one waits on the
+     * object and the APC alert together without a server, and why upstream chose Mach semaphores),
+     * a small one takes synchronisation off the list of suspects entirely, as the translation cache,
+     * the fault storm and our own tracing already came off it.
+     *
+     * Measures the leg only, not the block that follows: the clock stops when the word leaves 2. */
+    {
+        static int mr_ack_en = -1;
+        if (mr_ack_en < 0) mr_ack_en = getenv("MACRUNNER_HB_TRACE_SYNCMETER") ? 1 : 0;
+        if (mr_ack_en)
+        {
+            static uint64_t ack_calls, ack_total_ns, ack_spins;
+            struct timespec t0, t1;
+            uint64_t spins = 0, n;
+
+            clock_gettime( CLOCK_MONOTONIC, &t0 );
+            while (__atomic_load_n( addr, __ATOMIC_ACQUIRE ) == 2)
+            {
+                spins++;
+                if (check_shm_contention( objs_shm, alert_obj_shm, count, tid )) break;
+            }
+            clock_gettime( CLOCK_MONOTONIC, &t1 );
+
+            n = __atomic_add_fetch( &ack_calls, 1, __ATOMIC_RELAXED );
+            __atomic_add_fetch( &ack_total_ns,
+                                (uint64_t)(t1.tv_sec - t0.tv_sec) * 1000000000ull
+                                    + (uint64_t)t1.tv_nsec - (uint64_t)t0.tv_nsec,
+                                __ATOMIC_RELAXED );
+            __atomic_add_fetch( &ack_spins, spins, __ATOMIC_RELAXED );
+
+            if (!(n % 4000))
+            {
+                uint64_t tot = __atomic_load_n( &ack_total_ns, __ATOMIC_RELAXED );
+                fprintf( stderr, "macrunner-msync-ack: waits=%llu avg_us=%llu total_ms=%llu"
+                                 " avg_spins=%llu\n",
+                         (unsigned long long)n, (unsigned long long)(tot / n / 1000ull),
+                         (unsigned long long)(tot / 1000000ull),
+                         (unsigned long long)(__atomic_load_n( &ack_spins, __ATOMIC_RELAXED ) / n) );
+                fflush( stderr );
+            }
+        }
+    }
 
     while (__atomic_load_n( addr, __ATOMIC_ACQUIRE ) == 2)
     {
@@ -386,6 +599,7 @@ static NTSTATUS msync_wait_multiple( const int *objs, void **objs_shm, int alert
                 if (refs < 0)
                     __atomic_store_n( &obj->multiple_waiters, 0, __ATOMIC_SEQ_CST);
             }
+            if (ipw) msync_ipw_unregister_all( objs, alert_obj, count, tid );
             return STATUS_PENDING;
         }
     }
@@ -397,9 +611,25 @@ static NTSTATUS msync_wait_multiple( const int *objs, void **objs_shm, int alert
             ns_timeleft = update_timeout( *end ) * 100;
             if (!ns_timeleft)
             {
+                if (ipw) msync_ipw_unregister_all( objs, alert_obj, count, tid );
                 server_remove_wait( msgh_id, objs, objs_shm, alert_obj, alert_obj_shm, count );
                 return STATUS_TIMEOUT;
             }
+        }
+        /* MacRunner 2026-06-21: confirm the MULTIPLE (server-registered) block path is the 10ms gate. */
+        {
+            static int mr_en = -1; static uint64_t mr_mblk;
+            if (mr_en < 0) mr_en = getenv("MACRUNNER_HB_TRACE_SYNCMETER") ? 1 : 0;
+            if (mr_en) { uint64_t b = __atomic_add_fetch(&mr_mblk,1,__ATOMIC_RELAXED);
+                if ((b % 4000)==0) {
+                    fprintf(stderr,"macrunner-msync-diag: MULTIPLE-BLOCK (server-registered wait) count=%llu"
+                                   " ipw_reg=%llu ipw_woke=%llu ipw_full=%llu\n",
+                            (unsigned long long)b,
+                            (unsigned long long)__atomic_load_n(&msync_ipw_reg,__ATOMIC_RELAXED),
+                            (unsigned long long)__atomic_load_n(&msync_ipw_woke,__ATOMIC_RELAXED),
+                            (unsigned long long)__atomic_load_n(&msync_ipw_full,__ATOMIC_RELAXED));
+                    fflush(stderr);
+                } }
         }
         ret = ulock_wait( UL_COMPARE_AND_WAIT_SHARED | ULF_NO_ERRNO, addr, 1, ns_timeleft );
         val = __atomic_load_n( addr, __ATOMIC_ACQUIRE );
@@ -407,6 +637,7 @@ static NTSTATUS msync_wait_multiple( const int *objs, void **objs_shm, int alert
             break;
     } while (ret == -EINTR || ret == -EFAULT);
 
+    if (ipw) msync_ipw_unregister_all( objs, alert_obj, count, tid );
     server_remove_wait( msgh_id, objs, objs_shm, alert_obj, alert_obj_shm, count );
 
     if (ret == -ETIMEDOUT) return STATUS_TIMEOUT;
@@ -655,6 +886,10 @@ static inline void signal_all( void *shm, unsigned int shm_idx )
 
     if (!__atomic_load_n( &event_obj->multiple_waiters, __ATOMIC_SEQ_CST ))
         return;
+
+    /* Wake this process's own waiters directly. The Mach message below still goes out for waiters in
+     * other processes and for any this registry declined, so nothing here is load-bearing. */
+    if (msync_ipw_enabled()) msync_ipw_wake( shm_idx );
 
     send_header.msgh_bits = msgh_bits_send;
     send_header.msgh_id = shm_idx;

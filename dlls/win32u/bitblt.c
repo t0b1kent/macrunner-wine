@@ -35,6 +35,15 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(bitblt);
 
+/* ★ 06.09.2026 — реализация прибора в dib.c, здесь только заголовок. */
+#include "hb_probe.h"
+
+HB_PROBE_DEFINE(pr_bitblt, "bitblt",
+                "вызовы NtGdiBitBlt, дошедшие до возврата (растровая пересылка HDC->HDC). "
+                "НЕ считает: NtGdiStretchBlt напрямую, StretchDIBits (его считает sdib), "
+                "вывод через DIB-секцию и любой путь драйвера мимо этой обёртки",
+                NULL, 4096);
+
 static inline BOOL rop_uses_src( DWORD rop )
 {
     return ((rop >> 2) & 0x330000) != (rop & 0x330000);
@@ -286,8 +295,15 @@ BOOL nulldrv_StretchBlt( PHYSDEV dst_dev, struct bitblt_coords *dst,
     struct gdi_image_bits bits;
 
     src_dev = GET_DC_PHYSDEV( dc_src, pGetImage );
+    /* Итерация 414: два разных отказа этой функции по итогу неразличимы (оба дают FALSE),
+     * а лечатся в разных местах — источник против приёмника. Разводим печатью. */
     if (src_dev->funcs->pGetImage( src_dev, src_info, &bits, src ))
+    {
+        fprintf( stderr, "macrunner-nulldrv-stretch: ОТКАЗ причина=GetImage src=%dx%d bpp=%d\n",
+                 (int)src->width, (int)src->height, (int)src_info->bmiHeader.biBitCount );
+        fflush( stderr );
         return FALSE;
+    }
 
     dst_dev = GET_DC_PHYSDEV( dc_dst, pPutImage );
     copy_bitmapinfo( dst_info, src_info );
@@ -305,11 +321,26 @@ BOOL nulldrv_StretchBlt( PHYSDEV dst_dev, struct bitblt_coords *dst,
         if (dst_info->bmiHeader.biBitCount == 1 && !dst_colors)
             get_mono_dc_colors( dc_src, src_info->bmiHeader.biClrUsed, dst_info, 1 );
 
-        if (!(err = convert_bits( src_info, src, dst_info, &bits )))
+        /* Итерация 415: две ветви этого блока по итогу неразличимы (обе оставляют err != 0),
+         * а лечатся в разных местах: отказ преобразования — работа по палитре источника,
+         * отказ повторной укладки — работа по поверхности приёмника. Разводим печатью. */
+        {
+            DWORD macrunner_conv = convert_bits( src_info, src, dst_info, &bits );
+            fprintf( stderr, "macrunner-convert: conv_err=%u src_bpp=%d src_clr=%u "
+                     "dst_bpp=%d dst_clr=%u\n",
+                     (unsigned)macrunner_conv, (int)src_info->bmiHeader.biBitCount,
+                     (unsigned)src_info->bmiHeader.biClrUsed,
+                     (int)dst_info->bmiHeader.biBitCount, (unsigned)dst_info->bmiHeader.biClrUsed );
+            fflush( stderr );
+            err = macrunner_conv;
+        }
+        if (!err)
         {
             /* get rid of the fake destination table */
             dst_info->bmiHeader.biClrUsed = dst_colors;
             err = dst_dev->funcs->pPutImage( dst_dev, 0, dst_info, &bits, src, dst, rop );
+            fprintf( stderr, "macrunner-convert: повторный_PutImage_err=%u\n", (unsigned)err );
+            fflush( stderr );
         }
     }
 
@@ -321,7 +352,31 @@ BOOL nulldrv_StretchBlt( PHYSDEV dst_dev, struct bitblt_coords *dst,
         if (!err) err = dst_dev->funcs->pPutImage( dst_dev, 0, dst_info, &bits, src, dst, rop );
     }
 
+    /* Итерация 427: читаем СОДЕРЖИМОЕ кадра. Журнал вызовов исчерпан (426: отказов по данным
+     * игры ноль), осталось узнать, что игра нарисовала. Считаем долю ненулевых байт и самый
+     * частый — этого хватит, чтобы отличить пустой кадр от диалога и от картинки. */
+    if (src->width > 1000 && bits.ptr)
+    {
+        const unsigned char *b8 = bits.ptr;
+        SIZE_T n = (SIZE_T)src_info->bmiHeader.biSizeImage, i, nz = 0;
+        unsigned hist[256] = { 0 }, top = 0, topv = 0;
+        if (n > 1484784) n = 1484784;
+        for (i = 0; i < n; i += 7) { hist[b8[i]]++; if (b8[i]) nz++; }
+        for (i = 0; i < 256; i++) if (hist[i] > top) { top = hist[i]; topv = (unsigned)i; }
+        MESSAGE( "macrunner-frame: байт=%llu проб=%llu ненулевых=%llu (%.1f%%) частый=0x%02x x%u\n",
+                 (unsigned long long)src_info->bmiHeader.biSizeImage,
+                 (unsigned long long)((n + 6) / 7), (unsigned long long)nz,
+                 100.0 * (double)nz / (double)(((n + 6) / 7) ? ((n + 6) / 7) : 1), topv, top );
+    }
     if (bits.free) bits.free( &bits );
+    if (err)
+    {
+        fprintf( stderr, "macrunner-nulldrv-stretch: ОТКАЗ причина=err=%u dst=%dx%d bpp_dst=%d "
+                 "src=%dx%d bpp_src=%d rop=%06x\n",
+                 (unsigned)err, (int)dst->width, (int)dst->height, (int)dst_info->bmiHeader.biBitCount,
+                 (int)src->width, (int)src->height, (int)src_info->bmiHeader.biBitCount, (unsigned)rop );
+        fflush( stderr );
+    }
     return !err;
 }
 
@@ -573,29 +628,63 @@ BOOL WINAPI NtGdiPatBlt( HDC hdc, INT left, INT top, INT width, INT height, DWOR
 /***********************************************************************
  *           NtGdiBitBlt    (win32u.@)
  */
-BOOL WINAPI NtGdiBitBlt( HDC hdc_dst, INT x_dst, INT y_dst, INT width, INT height,
-                         HDC hdc_src, INT x_src, INT y_src, DWORD rop, DWORD bk_color, FLONG fl )
+BOOL MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiBitBlt( HDC hdc_dst, INT x_dst, INT y_dst, INT width, INT height,
+                                                        HDC hdc_src, INT x_src, INT y_src, DWORD rop, DWORD bk_color, FLONG fl )
 {
-    return NtGdiStretchBlt( hdc_dst, x_dst, y_dst, width, height,
-                            hdc_src, x_src, y_src, width, height, rop, bk_color );
+    /* MacRunner 2026-08-12, лейн ЛЕСТНИЦА, итерация 408 — БЕЗУСЛОВНЫЙ ЗОНД.
+     *
+     * Diablo (i386) делает за прогон РОВНО ОДИН BitBlt и сразу выходит сам. Все технические
+     * подозрения сняты замерами (окно 1024x768 создано и показано, цикл сообщений жив, фокус наш,
+     * CreateDCFromMemory успешен 6 из 6), поэтому остался вопрос о СОДЕРЖИМОМ: что именно
+     * копируется и куда. Печать безусловная и в stderr — канал `+bitblt` этот путь не покрывает
+     * (проверено прогоном: три трассы, ни одной отсюда), а канал ошибок wine до журналов не доходит. */
+    BOOL macrunner_ret = NtGdiStretchBlt( hdc_dst, x_dst, y_dst, width, height,
+                                          hdc_src, x_src, y_src, width, height, rop, bk_color );
+    /* ★ 06.09.2026, лейн ПРИБОРЫ-3 — счёт вёлся ВНУТРИ потолка, то есть считалось
+     * напечатанное. На вердикт опоры (scripts/opora-programm.sh считает строки этого
+     * прибора) это влияет прямо: после 4096 строк прибор молчит, и «растров больше не
+     * было» неотличимо от «дальше не печатаю». Учёт вынесен, потолок остался. */
+    HB_PROBE_LOOKED( &pr_bitblt );
+    HB_PROBE_SAY( &pr_bitblt,
+                  "n=%u ret=%d dst=%p (%d,%d) %dx%d src=%p (%d,%d) rop=%08x bk=%08x\n",
+                  (unsigned)pr_bitblt.hits, (int)macrunner_ret, hdc_dst,
+                  (int)x_dst, (int)y_dst, (int)width, (int)height,
+                  hdc_src, (int)x_src, (int)y_src, (unsigned)rop, (unsigned)bk_color );
+    fflush( stderr );
+    return macrunner_ret;
 }
 
 
 /***********************************************************************
  *           NtGdiStretchBlt    (win32u.@)
  */
-BOOL WINAPI NtGdiStretchBlt( HDC hdcDst, INT xDst, INT yDst, INT widthDst, INT heightDst,
-                             HDC hdcSrc, INT xSrc, INT ySrc, INT widthSrc, INT heightSrc,
-                             DWORD rop, COLORREF bk_color )
+BOOL MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiStretchBlt( HDC hdcDst, INT xDst, INT yDst, INT widthDst, INT heightDst,
+                                                            HDC hdcSrc, INT xSrc, INT ySrc, INT widthSrc, INT heightSrc,
+                                                            DWORD rop, COLORREF bk_color )
 {
     BOOL ret = FALSE;
     DC *dcDst, *dcSrc;
 
     if (!rop_uses_src( rop )) return NtGdiPatBlt( hdcDst, xDst, yDst, widthDst, heightDst, rop );
 
-    if (!(dcDst = get_dc_ptr( hdcDst ))) return FALSE;
+    /* Итерация 409: различаем ПРИЧИНУ отказа. `ret=FALSE` из этой функции возможен двумя
+     * путями — не взялся контекст, либо драйверный pStretchBlt вернул ложь; по итогу они
+     * неразличимы, а лечатся по-разному. */
+    if (!(dcDst = get_dc_ptr( hdcDst )))
+    {
+        fprintf( stderr, "macrunner-stretch: причина=нет_dcDst hdcDst=%p %dx%d\n",
+                 hdcDst, (int)widthDst, (int)heightDst );
+        fflush( stderr );
+        return FALSE;
+    }
 
-    if ((dcSrc = get_dc_ptr( hdcSrc )))
+    if (!(dcSrc = get_dc_ptr( hdcSrc )))
+    {
+        fprintf( stderr, "macrunner-stretch: причина=нет_dcSrc hdcSrc=%p %dx%d\n",
+                 hdcSrc, (int)widthSrc, (int)heightSrc );
+        fflush( stderr );
+    }
+    if (dcSrc)
     {
         struct bitblt_coords src, dst;
 
@@ -631,6 +720,30 @@ BOOL WINAPI NtGdiStretchBlt( HDC hdcDst, INT xDst, INT yDst, INT widthDst, INT h
             PHYSDEV src_dev = GET_DC_PHYSDEV( dcSrc, pStretchBlt );
             PHYSDEV dst_dev = GET_DC_PHYSDEV( dcDst, pStretchBlt );
             ret = dst_dev->funcs->pStretchBlt( dst_dev, &dst, src_dev, &src, rop );
+            if (!ret)
+            {
+                /* Итерация 410: печатаем РАЗРЯДНОСТИ обеих сторон и указатель таблицы
+                 * драйвера — это прямо различает две объявленные ветви: несовпадение форматов
+                 * (8 бит палитровый источник против экрана) против отсутствия поверхности. */
+                /* Итерация 411: имя драйвера — СРАВНЕНИЕМ указателя с известными таблицами,
+                 * а не угадыванием по адресу (на угадывании по адресу лейн уже обжигался). */
+                fprintf( stderr, "macrunner-stretch: dst_есть_null=%d dst_есть_dib=%d src_есть_dib=%d\n",
+                         (int)(dst_dev->funcs == &null_driver),
+                         (int)(dst_dev->funcs == &dib_driver),
+                         (int)(src_dev->funcs == &dib_driver) );
+                fprintf( stderr, "macrunner-stretch: bpp_dst=%d bpp_src=%d funcs_dst=%p funcs_src=%p\n",
+                         (int)NtGdiGetDeviceCaps( hdcDst, BITSPIXEL ),
+                         (int)NtGdiGetDeviceCaps( hdcSrc, BITSPIXEL ),
+                         (void *)dst_dev->funcs, (void *)src_dev->funcs );
+                fprintf( stderr, "macrunner-stretch: причина=драйвер hdcDst=%p hdcSrc=%p "
+                         "dst=%d,%d %dx%d vis=%d,%d-%d,%d src=%d,%d %dx%d vis=%d,%d-%d,%d rop=%06x\n",
+                         hdcDst, hdcSrc, (int)dst.x, (int)dst.y, (int)dst.width, (int)dst.height,
+                         (int)dst.visrect.left, (int)dst.visrect.top, (int)dst.visrect.right, (int)dst.visrect.bottom,
+                         (int)src.x, (int)src.y, (int)src.width, (int)src.height,
+                         (int)src.visrect.left, (int)src.visrect.top, (int)src.visrect.right, (int)src.visrect.bottom,
+                         (unsigned)rop );
+                fflush( stderr );
+            }
         }
         release_dc_ptr( dcSrc );
     }
@@ -644,9 +757,9 @@ BOOL WINAPI NtGdiStretchBlt( HDC hdcDst, INT xDst, INT yDst, INT widthDst, INT h
 /***********************************************************************
  *           NtGdiMaskBlt    (win32u.@)
  */
-BOOL WINAPI NtGdiMaskBlt( HDC hdcDest, INT nXDest, INT nYDest, INT nWidth, INT nHeight,
-                          HDC hdcSrc, INT nXSrc, INT nYSrc, HBITMAP hbmMask,
-                          INT xMask, INT yMask, DWORD dwRop, DWORD bk_color )
+BOOL MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiMaskBlt( HDC hdcDest, INT nXDest, INT nYDest, INT nWidth, INT nHeight,
+                                                         HDC hdcSrc, INT nXSrc, INT nYSrc, HBITMAP hbmMask,
+                                                         INT xMask, INT yMask, DWORD dwRop, DWORD bk_color )
 {
     HBITMAP hBitmap1, hOldBitmap1, hBitmap2, hOldBitmap2;
     HDC hDC1, hDC2;
@@ -841,9 +954,9 @@ BOOL WINAPI NtGdiMaskBlt( HDC hdcDest, INT nXDest, INT nYDest, INT nWidth, INT n
 /******************************************************************************
  *           NtGdiTransparentBlt    (win32u.@)
  */
-BOOL WINAPI NtGdiTransparentBlt( HDC hdcDest, int xDest, int yDest, int widthDest, int heightDest,
-                                 HDC hdcSrc, int xSrc, int ySrc, int widthSrc, int heightSrc,
-                                 UINT crTransparent )
+BOOL MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiTransparentBlt( HDC hdcDest, int xDest, int yDest, int widthDest, int heightDest,
+                                                                HDC hdcSrc, int xSrc, int ySrc, int widthSrc, int heightSrc,
+                                                                UINT crTransparent )
 {
     BOOL ret = FALSE;
     HDC hdcWork;
@@ -959,9 +1072,9 @@ error:
 /******************************************************************************
  *           NtGdiAlphaBlend   (win32u.@)
  */
-BOOL WINAPI NtGdiAlphaBlend( HDC hdcDst, int xDst, int yDst, int widthDst, int heightDst,
-                             HDC hdcSrc, int xSrc, int ySrc, int widthSrc, int heightSrc,
-                             DWORD blend_func, HANDLE xform )
+BOOL MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiAlphaBlend( HDC hdcDst, int xDst, int yDst, int widthDst, int heightDst,
+                                                            HDC hdcSrc, int xSrc, int ySrc, int widthSrc, int heightSrc,
+                                                            DWORD blend_func, HANDLE xform )
 {
     BLENDFUNCTION blendFunction = *(BLENDFUNCTION *)&blend_func;
     BOOL ret = FALSE;
@@ -1037,9 +1150,9 @@ BOOL WINAPI NtGdiAlphaBlend( HDC hdcDst, int xDst, int yDst, int widthDst, int h
 /*********************************************************************
  *           NtGdiPlgBlt    (win32u.@)
  */
-BOOL WINAPI NtGdiPlgBlt( HDC hdcDest, const POINT *lpPoint, HDC hdcSrc, INT nXSrc, INT nYSrc,
-                         INT nWidth, INT nHeight, HBITMAP hbmMask, INT xMask, INT yMask,
-                         DWORD bk_color )
+BOOL MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiPlgBlt( HDC hdcDest, const POINT *lpPoint, HDC hdcSrc, INT nXSrc, INT nYSrc,
+                                                        INT nWidth, INT nHeight, HBITMAP hbmMask, INT xMask, INT yMask,
+                                                        DWORD bk_color )
 {
     DWORD prev_mode;
     /* parallelogram coords */

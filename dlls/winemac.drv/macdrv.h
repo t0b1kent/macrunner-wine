@@ -40,6 +40,12 @@
 
 
 extern BOOL allow_vsync;
+/* MacRunner 2026-09-02 — фокус при SetDisplayMode (Diablo): не отдавать передний план рабочему столу
+ * при транзитной деактивации сразу после НАШЕЙ смены режима дисплея. Гейт из реестра Mac Driver. */
+extern BOOL macrunner_display_mode_changed; /* сейчас действует НАШ (не исходный) режим дисплея */
+extern BOOL macrunner_hwnd_is_fullscreen(HWND hwnd);
+extern void macrunner_note_display_mode_change(void);
+extern unsigned int macrunner_ms_since_display_mode_change(void);
 extern BOOL allow_set_gamma;
 extern BOOL allow_software_rendering;
 
@@ -156,6 +162,7 @@ extern BOOL macdrv_GetWindowStyleMasks(HWND hwnd, UINT style, UINT ex_style, UIN
 extern BOOL macdrv_CreateWindowSurface(HWND hwnd, BOOL layered, const RECT *surface_rect, struct window_surface **surface);
 extern void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT swp_flags,
                                     const struct window_rects *new_rects, struct window_surface *surface);
+extern void macdrv_winshow_activate(HWND hwnd);
 extern void macdrv_DestroyCursorIcon(HCURSOR cursor);
 extern BOOL macdrv_GetCursorPos(LPPOINT pos);
 extern void macdrv_SetCapture(HWND hwnd, UINT flags);
@@ -215,6 +222,7 @@ static inline struct macdrv_client_surface *impl_from_client_surface(struct clie
 extern struct macdrv_client_surface *macdrv_client_surface_create(HWND hwnd);
 
 extern struct macdrv_win_data *get_win_data(HWND hwnd);
+extern struct macdrv_win_data *macdrv_ensure_win_data(HWND hwnd);
 extern void release_win_data(struct macdrv_win_data *data);
 extern void init_win_context(void);
 extern macdrv_window macdrv_get_cocoa_window(HWND hwnd, BOOL require_on_screen);
@@ -222,6 +230,9 @@ extern RGNDATA *get_region_data(HRGN hrgn, HDC hdc_lptodp);
 extern void activate_on_following_focus(void);
 
 extern void macdrv_handle_event(const macdrv_event *event);
+extern void macdrv_return_route_observe(const char *stage, void *hwnd, macdrv_window window,
+                                        unsigned int keycode, unsigned int vkey, int pressed,
+                                        unsigned int flags, unsigned int event_time);
 
 extern void macdrv_window_close_requested(HWND hwnd);
 extern void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event);
@@ -279,6 +290,21 @@ extern void macdrv_status_item_mouse_move(const macdrv_event *event);
 
 extern void check_retina_status(void);
 extern void init_user_driver(void);
+
+/* MacRunner 2026-07-29 (HK E2E lane): bring the driver up from the unix side in a
+ * process whose winemac.drv PE never ran its DllMain (Hollow Knight: measured
+ * macdrv_init_entry = wow64_init_entry = dllmain_attach = 0, while winemac.so is alive
+ * in the same process through DXMT's d3dmetal `macdrv_functions` table).
+ * A/B off with MACRUNNER_MACDRV_UNIX_SELFINIT=0.  Returns TRUE if the driver is up.
+ *
+ * MACRUNNER_MACDRV_SELFINIT_DELAY_MS=<n> withholds the install for n ms from the first
+ * call, so the Mono scene load runs on win32u's placeholder.  Measured 2026-07-29, two
+ * runs each: deferred MonoManager->UnloadTime 212.6 s / 204.5 s and the menu reached
+ * (`Loaded Objects now` +440.3 s / +413.1 s), against 784.1 s / 780.9 s and no menu when
+ * the driver goes in at ~+145 s.  DECLSPEC_EXPORT because win32u's placeholder resolves
+ * this by dlsym -- the DXMT call sites all fire at swapchain creation (~+144 s) and never
+ * again, so they cannot deliver a deferred install. */
+extern DECLSPEC_EXPORT BOOL macdrv_process_selfinit(void);
 
 extern struct format_entry *get_format_entries(CFTypeRef pasteboard, UINT *entries_size);
 

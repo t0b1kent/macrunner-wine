@@ -2577,15 +2577,101 @@ void hlsl_block_add_loop(struct hlsl_ctx *ctx, struct hlsl_block *block,
         hlsl_block_cleanup(body);
 }
 
+struct clone_instr_map_entry
+{
+    const struct hlsl_ir_node *src;
+    struct hlsl_ir_node *dst;
+};
+
 struct clone_instr_map
 {
-    struct
-    {
-        const struct hlsl_ir_node *src;
-        struct hlsl_ir_node *dst;
-    } *instrs;
+    struct clone_instr_map_entry *instrs;
     size_t count, capacity;
 };
+
+static size_t clone_instr_map_slot(const struct hlsl_ir_node *src, size_t capacity)
+{
+    uintptr_t key = (uintptr_t)src >> 4;
+
+    key ^= key >> 16;
+    key *= 0x9e3779b1u;
+    key ^= key >> 16;
+    return key & (capacity - 1);
+}
+
+static bool clone_instr_map_grow(struct hlsl_ctx *ctx, struct clone_instr_map *map)
+{
+    struct clone_instr_map_entry *instrs;
+    size_t capacity, i, slot;
+
+    if (map->capacity > ~(size_t)0 / sizeof(*instrs) / 2)
+    {
+        ctx->result = VKD3D_ERROR_OUT_OF_MEMORY;
+        return false;
+    }
+    capacity = map->capacity ? map->capacity * 2 : 16;
+    if (!(instrs = hlsl_calloc(ctx, capacity, sizeof(*instrs))))
+        return false;
+
+    for (i = 0; i < map->capacity; ++i)
+    {
+        if (!map->instrs[i].src)
+            continue;
+        slot = clone_instr_map_slot(map->instrs[i].src, capacity);
+        while (instrs[slot].src)
+            slot = (slot + 1) & (capacity - 1);
+        instrs[slot] = map->instrs[i];
+    }
+    vkd3d_free(map->instrs);
+    map->instrs = instrs;
+    map->capacity = capacity;
+    return true;
+}
+
+static bool clone_instr_map_add(struct hlsl_ctx *ctx, struct clone_instr_map *map,
+        const struct hlsl_ir_node *src, struct hlsl_ir_node *dst)
+{
+    size_t slot;
+
+    if (map->capacity)
+    {
+        slot = clone_instr_map_slot(src, map->capacity);
+        while (map->instrs[slot].src)
+        {
+            /* Preserve the first mapping, as the original forward lookup did. */
+            if (map->instrs[slot].src == src)
+                return true;
+            slot = (slot + 1) & (map->capacity - 1);
+        }
+    }
+
+    /* Keep an empty slot even for unsuccessful lookups. */
+    if (map->count >= map->capacity / 2 && !clone_instr_map_grow(ctx, map))
+        return false;
+    slot = clone_instr_map_slot(src, map->capacity);
+    while (map->instrs[slot].src)
+        slot = (slot + 1) & (map->capacity - 1);
+    map->instrs[slot].src = src;
+    map->instrs[slot].dst = dst;
+    ++map->count;
+    return true;
+}
+
+static struct hlsl_ir_node *map_instr(const struct clone_instr_map *map, struct hlsl_ir_node *src)
+{
+    size_t slot;
+
+    if (!src || !map->capacity)
+        return src;
+    slot = clone_instr_map_slot(src, map->capacity);
+    while (map->instrs[slot].src)
+    {
+        if (map->instrs[slot].src == src)
+            return map->instrs[slot].dst;
+        slot = (slot + 1) & (map->capacity - 1);
+    }
+    return src;
+}
 
 static struct hlsl_ir_node *clone_instr(struct hlsl_ctx *ctx,
         struct clone_instr_map *map, const struct hlsl_ir_node *instr);
@@ -2607,36 +2693,13 @@ static bool clone_block(struct hlsl_ctx *ctx, struct hlsl_block *dst_block,
         }
         hlsl_block_add_instr(dst_block, dst);
 
-        if (!list_empty(&src->uses))
+        if (!list_empty(&src->uses) && !clone_instr_map_add(ctx, map, src, dst))
         {
-            if (!hlsl_array_reserve(ctx, (void **)&map->instrs, &map->capacity, map->count + 1, sizeof(*map->instrs)))
-            {
-                hlsl_block_cleanup(dst_block);
-                return false;
-            }
-
-            map->instrs[map->count].dst = dst;
-            map->instrs[map->count].src = src;
-            ++map->count;
+            hlsl_block_cleanup(dst_block);
+            return false;
         }
     }
     return true;
-}
-
-static struct hlsl_ir_node *map_instr(const struct clone_instr_map *map, struct hlsl_ir_node *src)
-{
-    size_t i;
-
-    if (!src)
-        return NULL;
-
-    for (i = 0; i < map->count; ++i)
-    {
-        if (map->instrs[i].src == src)
-            return map->instrs[i].dst;
-    }
-
-    return src;
 }
 
 static bool clone_deref(struct hlsl_ctx *ctx, struct clone_instr_map *map,

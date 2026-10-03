@@ -23,6 +23,7 @@
 #endif
 
 #include <assert.h>
+#include <stdlib.h>
 
 #include "ntgdi_private.h"
 #include "dibdrv.h"
@@ -1217,6 +1218,28 @@ DWORD stretch_bitmapinfo( const BITMAPINFO *src_info, void *src_bits, struct bit
           dst->x, dst->y, dst->width, dst->height, wine_dbgstr_rect(&dst->visrect),
           src->x, src->y, src->width, src->height, wine_dbgstr_rect(&src->visrect));
 
+    /* ★★★ 26.08.2026 — ПРИБОР В ТОЧКЕ ОТКАЗА.
+     *
+     * Сюда приходит отказ по адресу 0x016bfb40 — гостевому. Перевод при этом ни разу не
+     * промахнулся (macrunner-hb-guest32-miss = 0), значит указатель дошёл мимо обёртки.
+     * Путь через NtGdiStretchDIBits проверен и чист. Остаются StretchBlt и AlphaBlend,
+     * где `bits` заполняет pGetImage устройства, а не гость. Спрашиваем прямо здесь,
+     * какой из четырёх указателей гостевой: ниже 4 ГБ у нас только гостевые адреса. */
+    {
+        static unsigned n_g;
+        unsigned long long a[4] = {
+            (unsigned long long)(ULONG_PTR)src_info, (unsigned long long)(ULONG_PTR)src_bits,
+            (unsigned long long)(ULONG_PTR)dst_info, (unsigned long long)(ULONG_PTR)dst_bits };
+        static const char *имена[4] = { "src_info", "src_bits", "dst_info", "dst_bits" };
+        int i;
+        for (i = 0; i < 4; i++)
+            if (a[i] && a[i] < 0x100000000ull && ++n_g <= 16)
+                MESSAGE( "macrunner-stretch-guest-ptr: n=%u %s=%p ГОСТЕВОЙ — пришёл мимо обёртки "
+                         "(src_info=%p src_bits=%p dst_info=%p dst_bits=%p)\n",
+                         n_g, имена[i], (void *)(ULONG_PTR)a[i],
+                         src_info, src_bits, dst_info, dst_bits );
+    }
+
     init_dib_info_from_bitmapinfo( &src_dib, src_info, src_bits );
     init_dib_info_from_bitmapinfo( &dst_dib, dst_info, dst_bits );
 
@@ -1412,7 +1435,19 @@ BOOL dibdrv_StretchBlt( PHYSDEV dst_dev, struct bitblt_coords *dst,
     if (dst->width == 1 && src->width > 1) src->width--;
     if (dst->height == 1 && src->height > 1) src->height--;
 
-    return dc_dst->nulldrv.funcs->pStretchBlt( &dc_dst->nulldrv, dst, src_dev, src, rop );
+    {
+        /* Итерация 413: следующее звено цепочки после window_driver. Само оно лишь пересылает
+         * вызов в нулевой драйвер, где и делается работа через GetImage/PutImage, — поэтому
+         * печатаем ОТКАЗЫ, чтобы отделить «цепочка сюда не дошла» от «здесь и отказало». */
+        BOOL macrunner_ret = dc_dst->nulldrv.funcs->pStretchBlt( &dc_dst->nulldrv, dst, src_dev, src, rop );
+        if (!macrunner_ret)
+        {
+            fprintf( stderr, "macrunner-dibdrv-stretch: ОТКАЗ dst=%dx%d src=%dx%d rop=%06x\n",
+                     (int)dst->width, (int)dst->height, (int)src->width, (int)src->height, (unsigned)rop );
+            fflush( stderr );
+        }
+        return macrunner_ret;
+    }
 }
 
 /***********************************************************************

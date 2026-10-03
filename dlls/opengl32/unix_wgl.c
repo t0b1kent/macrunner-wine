@@ -25,6 +25,7 @@
 #include "config.h"
 
 #include <stdarg.h>
+#include <stdio.h>   /* MacRunner 2610: зонд macrunner-gl-pixfmt печатает в stderr */
 #include <stdlib.h>
 #include <assert.h>
 
@@ -2200,7 +2201,21 @@ NTSTATUS return_wow64_string( const void *str, PTR32 *wow64_str )
     else if (wow64_strings[i].wow64_str) *wow64_str = wow64_strings[i].wow64_str;
     else if (*wow64_str)
     {
-        strcpy( UlongToPtr(*wow64_str), str );
+        /* MacRunner 2026-08-27, Diablo — ТОТ ЖЕ КЛАСС, ЧТО ИТЕРАЦИЯ 2610.
+         *
+         * `*wow64_str` — адрес буфера, выделенного ГОСТЕМ: 32-битное значение из нижних
+         * 4 ГБ. Апстримный Wine пишет туда через `UlongToPtr`, и это верно там, где WOW64
+         * отображает нижние 4 ГБ тождественно; у нас гостевое окно живёт по ненулевой базе,
+         * и сырой адрес не отображён ни во что.
+         *
+         * Замер (прогон og-stack, Diablo, pid 73494): поток навсегда в отказе по пути
+         *   xtajit.dll -> __wine_unix_call_dispatcher -> return_wow64_string -> _platform_strcpy
+         * 2469 отсчётов из 2469, 99,3 % ЦП, приёмник 0x820c880 — меньше 4 ГБ, то есть
+         * непереведённый гостевой. Игра при этом не падала: отказ повторялся без конца.
+         *
+         * Дошли сюда только после того, как заработал GL-контекст, — раньше путь был
+         * недостижим, оттого дефект и не вскрывался. */
+        strcpy( macrunner_guest32_host_ptr( *wow64_str ), str );
         wow64_strings[i].wow64_str = *wow64_str;
     }
 
@@ -3031,12 +3046,179 @@ NTSTATUS wow64_get_pixel_formats( void *args )
     struct get_pixel_formats_params params =
     {
         .teb = get_teb64(params32->teb),
+        /* hdc — ОПИСАТЕЛЬ, а не указатель хоста: переводить его НЕЛЬЗЯ (та же граница, что
+         * `guest32_opaque_value` в wow64win). Оставлено сознательно. */
         .hdc = ULongToPtr(params32->hdc),
-        .formats = ULongToPtr(params32->formats),
+        /* MacRunner, лейн ЛЕСТНИЦА, итерация 2610 — СТЕНА ПОСЛЕ ОКНА, ТОТ ЖЕ КЛАСС, ЧТО 2609.
+         * `formats` — БУФЕР, в который пишет хост: `win32u_get_pixel_formats`
+         * (win32u/opengl.c:1610) делает `memcpy( formats, pixel_formats, ... )`.
+         * `ULongToPtr` отдавал сырой гостевой адрес из нижних 4 ГБ, где у нас ничего не
+         * отображено, и memcpy валился в c0000005. Замер прогона меню-2610-фикс: поток
+         * навсегда в segv-handler по пути wow64_get_pixel_formats -> opengl32.so ->
+         * win32u_get_pixel_formats, 3724 отсчёта, адреса 0x7776b068 и 0x82fe6b8 — оба
+         * меньше 4 ГБ, то есть непереведённые гостевые.
+         * Переводчик уже есть в этом же модуле (unix_private.h, итерация 258) и
+         * NULL-безопасен: первый вызов идёт с formats=NULL ради подсчёта форматов. */
+        .formats = macrunner_guest32_host_ptr(params32->formats),
         .max_formats = params32->max_formats,
     };
     NTSTATUS status;
-    status = get_pixel_formats( &params );
+    /* ★★ MacRunner 23.08, лейн ЛЕСТНИЦА, итерация 2794 — ЧТО ЛЕЖИТ В КЕШЕ ПО ПОТОКУ.
+     * 2788-2793: у гостевой `_get_pixel_formats` есть кеш в TEB32+0xb70 (glReserved1), и он
+     * промахивается 722 раза подряд. Шесть объяснений закрыты перебором (нулевая база FS,
+     * зеркало TEB32, сброс самим гостем, отказ unix-вызова, пересоздание карты, прямая память —
+     * последнее чистым A/B, доставка доказана маркером helper-mem-calls). Перебор исчерпан,
+     * нужен прямой замер: что реально лежит в слове кеша на ВХОДЕ в переходник.
+     * `params32->teb` — это тот же `ebx`, который гость кладёт первым полем блока (7a8a1509),
+     * замерено в 2785 как 7f000000. Печать по СОБЫТИЮ (несовпадение), потолок несовпадений 40,
+     * плюс первые 12 для обстановки — потолок без события морит редкое (урок 2612). */
+    {
+        static int cn, cbad;
+        int k = ++cn;
+        const ULONG *slot = params32->teb
+            ? (const ULONG *)macrunner_guest32_host_ptr( params32->teb + 0xb70 ) : NULL;
+        ULONG cached = slot ? *slot : 0xdeadbeefu;
+        int sovpalo = slot && cached == params32->hdc;
+
+        if (k <= 12 || (!sovpalo && cbad++ < 40))
+        {
+            /* ★ 2808: печатаю САМ УКАЗАТЕЛЬ. 2807 показал, что запись хоста в этот слот
+             * видна сразу (12 из 12) и исчезает к следующему входу (52 из 52 нулей). Вывод
+             * «слот затирают» держится на том, что вход и выход берут ОДИН хостовый адрес,
+             * а этого я не измеряла: указатель печатал только тычок, стоящий на выходе. */
+            fprintf( stderr, "macrunner-gl-кеш2794: n=%d teb=%08x hdc=%08x кеш=%08x совпало=%d слот=%p\n",
+                     k, (unsigned)params32->teb, (unsigned)params32->hdc,
+                     (unsigned)cached, sovpalo, slot );
+            fflush( stderr );
+        }
+    }
+    /* БЕЗУСЛОВНЫЙ ЗОНД (правило проекта: маркер за условием — лотерея, а не критерий).
+     * Печатает первые 8 вызовов ВСЕГДА, без гейта, в stderr (каналы wine до наших журналов
+     * не доходят — проверено лейном 02.08). Он же служит доказательством, что в прогоне
+     * работает ПЕРЕСОБРАННЫЙ opengl32.so, а не прежний. */
+    {
+        static int probe;
+        if (probe < 8)
+        {
+            probe++;
+            fprintf( stderr, "macrunner-gl-pixfmt: n=%d guest_formats=%08x host_formats=%p "
+                             "max=%u hdc=%08x\n", probe, (unsigned)params32->formats,
+                     params.formats, params32->max_formats, (unsigned)params32->hdc );
+            fflush( stderr );
+        }
+    }
+    /* ★ MacRunner, лейн ЛЕСТНИЦА, итерация 2715 — ВИЛКА ДЛЯ ПИШУЩЕГО В КАДР.
+     * 2713-2714 доказали: кадр гостевой `_get_pixel_formats` (opengl32+0xa15d9) к моменту
+     * возврата из ЭТОГО unix-вызова содержит {HDC 1801005b, 0000000d} вместо сохранённого
+     * `ebp` и обратного адреса, и функция штатным эпилогом уходит по адресу 0x0000000d.
+     * Гостевые аргументы лежат по `ebp-0x24`, то есть `params32` И ЕСТЬ `ebp-0x24`, а
+     * [ebp] и [ebp+4] — это `params32+0x24` и `params32+0x28`.
+     * Читаю шесть слов от конца структуры (0x18) до кадра включительно ДО и ПОСЛЕ вызова.
+     * Целы до и испорчены после -> писавший ВНУТРИ unix-вызова.
+     * Испорчены уже до -> писавший выше по гостю, и версию «пишет unix-сторона» снимаем.
+     * Зонд БЕЗУСЛОВНЫЙ, потолок 8 (столько вызовов и бывает за прогон), stderr. */
+    {
+        /* ★ ПОПРАВКА 2716 — ПОТОЛОК ВЗЯТ ИЗ ОБРЕЗАННОГО ЖЕ ЗОНДА.
+         * В 2715 я поставила потолок 8, потому что `macrunner-gl-pixfmt` печатал 8 строк.
+         * Но ТОТ зонд сам обрезан на 8 — «8 вызовов» было не итогом, а его потолком.
+         * Замер это и показал: все восемь напечатанных идут с ebp=016bf954, а больной
+         * экземпляр (сохр_ebp=016bf998, на 0x44 выше) в печать не попал.
+         * Теперь печать включает СОБЫТИЕ: слово, которое обязано быть обратным адресом
+         * в opengl32 (0x77850000..0x778f5000), им не является — либо кадр изменился за
+         * вызов. Плюс счётчик ВСЕХ вызовов, чтобы «сколько их» больше не гадать. */
+        static LONG fr_total, fr_bad;
+        const ULONG *w = (const ULONG *)((const char *)params32 + 0x18);
+        ULONG before[6], after[6];
+        int i, want, plohoi;
+        LONG nomer = ++fr_total;
+
+        for (i = 0; i < 6; i++) before[i] = w[i];
+        plohoi = !(before[4] >= 0x77850000 && before[4] < 0x778f5000);
+        status = get_pixel_formats( &params );
+        for (i = 0; i < 6; i++) after[i] = w[i];
+        if (before[3] != after[3] || before[4] != after[4]) plohoi = 1;
+        want = (nomer <= 8) || (plohoi && fr_bad++ < 32);
+        if (want)
+        {
+            fprintf( stderr, "macrunner-gl-кадр2715: n=%ld всего=%ld плохой=%d params32=%p (гость %08x) "
+                             "ДО= %08lx %08lx %08lx %08lx %08lx %08lx "
+                             "ПОСЛЕ= %08lx %08lx %08lx %08lx %08lx %08lx "
+                             "кадр_до= %08lx %08lx кадр_после= %08lx %08lx изменился=%d\n",
+                     (long)nomer, (long)fr_total, plohoi, params32,
+                     (unsigned)(ULONG_PTR)params32,
+                     (unsigned long)before[0], (unsigned long)before[1],
+                     (unsigned long)before[2], (unsigned long)before[3],
+                     (unsigned long)before[4], (unsigned long)before[5],
+                     (unsigned long)after[0], (unsigned long)after[1],
+                     (unsigned long)after[2], (unsigned long)after[3],
+                     (unsigned long)after[4], (unsigned long)after[5],
+                     (unsigned long)before[3], (unsigned long)before[4],
+                     (unsigned long)after[3], (unsigned long)after[4],
+                     (before[3] != after[3] || before[4] != after[4]) );
+            fflush( stderr );
+        }
+    }
+    /* ★★ MacRunner 23.08, лейн ЛЕСТНИЦА, итерация 2795 — СТАТУС ВОЗВРАТА, РАЗВИЛКА A/B из 2794.
+     * 2794 замерил: слот кеша `TEB32+0xb70` = 0 на всех 52 входах, то есть гостевая запись
+     * туда не ложится никогда. Осталось два объяснения: A — гость до записи не доходит и уходит
+     * по пути неудачи `7a8a1557` (ненулевой результат unix-вызова); B — доходит, но запись
+     * уходит мимо. Различает их РОВНО ЭТО ЧИСЛО. Печать безусловная, потолок 12 плюс всегда
+     * при ненулевом статусе (событие важнее потолка — урок 2612). */
+    {
+        static int sn, sbad;
+        int k = ++sn;
+
+        if (k <= 12 || (status && sbad++ < 40))
+        {
+            fprintf( stderr, "macrunner-gl-статус2795: n=%d status=%08x num=%u onscreen=%u max=%u\n",
+                     k, (unsigned)status, (unsigned)params.num_formats,
+                     (unsigned)params.num_onscreen_formats, (unsigned)params32->max_formats );
+            fflush( stderr );
+        }
+    }
+    /* ★★★ MacRunner 23.08, лейн ЛЕСТНИЦА, итерация 2807 — ТЫЧОК: ОБЩАЯ ЛИ ЭТО ПАМЯТЬ.
+     * 2806 измерил статус: 0 в 12 из 12, unix-вызов ВСЕГДА успешен; заполняющие вызовы идут,
+     * значит и выделение проходит. Обе ветви к пути неудачи закрыты ИЗМЕРЕНИЕМ — гость доходит
+     * до записи в кеш, а слот TEB32+0xb70 всё равно 0 на всех 52 входах (2794) и цикл идёт
+     * 722 витка. Осталось две причины, и различает их ОДИН опыт: записать в слот СО СТОРОНЫ
+     * ХОСТА и посмотреть, кто это увидит.
+     *   перечитал == записал      -> зеркало согласовано само с собой;
+     *   кеш2794 на СЛЕДУЮЩЕМ входе показал записанное -> память общая и стабильна, значит
+     *                                гостевая запись просто НЕ ИСПОЛНЯЕТСЯ;
+     *   кеш2794 снова 0           -> гость и хост держат РАЗНЫЕ копии (класс «две копии»,
+     *                                о котором предупреждал приказ 211).
+     * Читателем служит уже стоящий зонд 2794 — гостевой семантики опыт не требует вовсе.
+     * Под гейтом, по умолчанию ВЫКЛЮЧЕНО. Риск: если гость хранит там не описатель, а
+     * указатель, он может пойти по кешированному пути с чужим значением — прогон
+     * диагностический, гость и так умирает на eip=0000000d. */
+    {
+        static int poke_on = -1;
+        static int pn;
+
+        if (poke_on < 0)
+        {
+            const char *v = getenv( "MACRUNNER_GL_CACHE_POKE" );
+            poke_on = (v && *v != '0');
+            fprintf( stderr, "macrunner-gate: MACRUNNER_GL_CACHE_POKE=%d\n", poke_on );
+            fflush( stderr );
+        }
+        if (poke_on && !status && params32->teb && params32->max_formats)
+        {
+            ULONG *slot = (ULONG *)macrunner_guest32_host_ptr( params32->teb + 0xb70 );
+            ULONG back;
+
+            *slot = params32->hdc;
+            back = *slot;
+            if (++pn <= 12)
+            {
+                fprintf( stderr, "macrunner-gl-тычок2807: n=%d слот=%p записал=%08x "
+                                 "перечитал=%08x совпало=%d\n", pn, slot,
+                         (unsigned)params32->hdc, (unsigned)back,
+                         back == params32->hdc );
+                fflush( stderr );
+            }
+        }
+    }
     params32->num_formats = params.num_formats;
     params32->num_onscreen_formats = params.num_onscreen_formats;
     return status;

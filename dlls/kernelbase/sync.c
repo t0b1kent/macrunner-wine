@@ -40,7 +40,99 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
 
-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)WINE_USER_SHARED_DATA_ADDRESS;
+
+static BOOL macrunner_hb_0e0_pe_probe_enabled;
+
+void macrunner_hb_0e0_pe_probe_init(void)
+{
+    static const WCHAR env_name[] = L"MACRUNNER_HB_0E0_PE_PROBE";
+    WCHAR value[16];
+    UNICODE_STRING nameW, valueW;
+    NTSTATUS status;
+
+    RtlInitUnicodeString( &nameW, env_name );
+    valueW.Buffer = value;
+    valueW.Length = 0;
+    valueW.MaximumLength = sizeof(value);
+
+    status = RtlQueryEnvironmentVariable_U( NULL, &nameW, &valueW );
+    macrunner_hb_0e0_pe_probe_enabled = !status && valueW.Length && value[0] != '0';
+    if (macrunner_hb_0e0_pe_probe_enabled)
+        MESSAGE( "macrunner-hb-0e0-pe: enabled\n" );
+}
+
+static BOOL macrunner_hb_0e0_pe_probe_take_slot(void)
+{
+    static unsigned int count;
+
+    if (!macrunner_hb_0e0_pe_probe_enabled) return FALSE;
+    return ++count <= 4096;
+}
+
+static ULONG_PTR macrunner_hb_0e0_pe_read_ptr( ULONG_PTR addr )
+{
+    ULONG_PTR value = 0;
+
+    __TRY
+    {
+        value = *(const ULONG_PTR *)addr;
+    }
+    __EXCEPT_PAGE_FAULT
+    {
+        value = 0;
+    }
+    __ENDTRY
+    return value;
+}
+
+static unsigned char macrunner_hb_0e0_pe_read_byte( ULONG_PTR addr )
+{
+    unsigned char value = 0;
+
+    __TRY
+    {
+        value = *(const unsigned char *)addr;
+    }
+    __EXCEPT_PAGE_FAULT
+    {
+        value = 0;
+    }
+    __ENDTRY
+    return value;
+}
+
+static void macrunner_hb_0e0_pe_probe( const char *op, const char *phase, HANDLE handle0,
+                                        HANDLE handle1, DWORD count, BOOL wait_all,
+                                        DWORD timeout, BOOL alertable, ULONG status,
+                                        const void *caller )
+{
+    ULONG_PTR caller_u = (ULONG_PTR)caller, caller_rva = 0;
+    ULONG_PTR gate0 = 0, gate1 = 0, render_sync = 0, event = 0;
+    unsigned char stop = 0, cs_needed = 0;
+
+    if ((ULONG_PTR)handle0 != 0xe0) return;
+    if (!macrunner_hb_0e0_pe_probe_take_slot()) return;
+
+    if (caller_u >= 0x180000000 && caller_u < 0x182000000) caller_rva = caller_u - 0x180000000;
+    gate0 = macrunner_hb_0e0_pe_read_ptr( 0x181f27340 );
+    gate1 = macrunner_hb_0e0_pe_read_ptr( 0x181f27348 );
+    render_sync = macrunner_hb_0e0_pe_read_ptr( 0x181ebc780 );
+    if (render_sync)
+    {
+        stop = macrunner_hb_0e0_pe_read_byte( render_sync + 0x81 );
+        cs_needed = macrunner_hb_0e0_pe_read_byte( render_sync + 0xc0 );
+        event = macrunner_hb_0e0_pe_read_ptr( render_sync + 0xb8 );
+    }
+
+    MESSAGE( "macrunner-hb-0e0-pe: op=%s phase=%s tid=0x%Ix status=0x%08lx "
+             "handle0=%p handle1=%p count=%lu wait_all=%u timeout=0x%lx alertable=%u "
+             "caller=%p caller_rva=0x%Ix gate40=0x%Ix gate48=0x%Ix "
+             "gRenderSync=0x%Ix rs_event=0x%Ix rs_stop=%u rs_cs=%u\n",
+             op, phase, (ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread, status,
+             handle0, handle1, count, wait_all, timeout, alertable, caller, caller_rva,
+             gate0, gate1, render_sync, event, stop, cs_needed );
+}
 
 /* check if current version is NT or Win95 */
 static inline BOOL is_version_nt(void)
@@ -425,7 +517,18 @@ DWORD WINAPI DECLSPEC_HOTPATCH WaitForSingleObjectEx( HANDLE handle, DWORD timeo
 DWORD WINAPI DECLSPEC_HOTPATCH WaitForMultipleObjects( DWORD count, const HANDLE *handles,
                                                        BOOL wait_all, DWORD timeout )
 {
-    return WaitForMultipleObjectsEx( count, handles, wait_all, timeout, FALSE );
+    const void *caller = __builtin_return_address(0);
+    HANDLE handle0 = count && handles ? handles[0] : 0;
+    DWORD ret;
+
+    macrunner_hb_0e0_pe_probe( "WaitForMultipleObjects", "enter", handle0,
+                               count > 1 && handles ? handles[1] : 0, count, wait_all,
+                               timeout, FALSE, 0, caller );
+    ret = WaitForMultipleObjectsEx( count, handles, wait_all, timeout, FALSE );
+    macrunner_hb_0e0_pe_probe( "WaitForMultipleObjects", "ret", handle0,
+                               count > 1 && handles ? handles[1] : 0, count, wait_all,
+                               timeout, FALSE, ret, caller );
+    return ret;
 }
 
 
@@ -439,6 +542,8 @@ DWORD WINAPI DECLSPEC_HOTPATCH WaitForMultipleObjectsEx( DWORD count, const HAND
     HANDLE hloc[MAXIMUM_WAIT_OBJECTS];
     LARGE_INTEGER time;
     unsigned int i;
+    const void *caller = __builtin_return_address(0);
+    HANDLE handle0 = count && handles ? handles[0] : 0;
 
     if (count > MAXIMUM_WAIT_OBJECTS)
     {
@@ -447,6 +552,9 @@ DWORD WINAPI DECLSPEC_HOTPATCH WaitForMultipleObjectsEx( DWORD count, const HAND
     }
     for (i = 0; i < count; i++) hloc[i] = normalize_std_handle( handles[i] );
 
+    macrunner_hb_0e0_pe_probe( "WaitForMultipleObjectsEx", "enter", handle0,
+                               count > 1 && handles ? handles[1] : 0, count, wait_all,
+                               timeout, alertable, 0, caller );
     status = NtWaitForMultipleObjects( count, hloc, wait_all ? WaitAll : WaitAny, alertable,
                                        get_nt_timeout( &time, timeout ) );
     if (NT_ERROR(status))
@@ -454,6 +562,9 @@ DWORD WINAPI DECLSPEC_HOTPATCH WaitForMultipleObjectsEx( DWORD count, const HAND
         SetLastError( RtlNtStatusToDosError(status) );
         status = WAIT_FAILED;
     }
+    macrunner_hb_0e0_pe_probe( "WaitForMultipleObjectsEx", "ret", handle0,
+                               count > 1 && handles ? handles[1] : 0, count, wait_all,
+                               timeout, alertable, status, caller );
     return status;
 }
 
@@ -555,9 +666,27 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateEventA( SECURITY_ATTRIBUTES *sa, BOOL manu
 {
     DWORD flags = 0;
 
+    HANDLE ret;
+
     if (manual_reset) flags |= CREATE_EVENT_MANUAL_RESET;
     if (initial_state) flags |= CREATE_EVENT_INITIAL_SET;
-    return CreateEventExA( sa, name, flags, EVENT_ALL_ACCESS );
+    ret = CreateEventExA( sa, name, flags, EVENT_ALL_ACCESS );
+
+    /* MacRunner 2026-08-29 — ИМЕНОВАННЫЕ СОБЫТИЯ: кто и с каким ответом.
+     *
+     * Разбор WinMain Diablo (0x408B4A) показал проверку единственного
+     * экземпляра: CreateEventA(NULL,0,0,"DiabloEvent") -> GetLastError() ==
+     * ERROR_ALREADY_EXISTS (0xB7) -> WinMain возвращает 0 -> CRT зовёт exit().
+     * Игра не падает и никем не убивается: она СОЗНАТЕЛЬНО выходит, решив, что
+     * уже запущена. Печатаем имя и ответ, чтобы проверить это замером, а не
+     * рассуждением. */
+    if (name)
+        ERR( "macrunner-событие: имя=%s дескриптор=%p ошибка=%lu%s pid=%04lx\n",
+             debugstr_a(name), ret, GetLastError(),
+             GetLastError() == ERROR_ALREADY_EXISTS ? " (УЖЕ СУЩЕСТВУЕТ)" : "",
+             (unsigned long)GetCurrentProcessId() );
+
+    return ret;
 }
 
 
@@ -568,10 +697,15 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateEventW( SECURITY_ATTRIBUTES *sa, BOOL manu
                                               BOOL initial_state, LPCWSTR name )
 {
     DWORD flags = 0;
+    const void *caller = __builtin_return_address(0);
+    HANDLE ret;
 
     if (manual_reset) flags |= CREATE_EVENT_MANUAL_RESET;
     if (initial_state) flags |= CREATE_EVENT_INITIAL_SET;
-    return CreateEventExW( sa, name, flags, EVENT_ALL_ACCESS );
+    ret = CreateEventExW( sa, name, flags, EVENT_ALL_ACCESS );
+    macrunner_hb_0e0_pe_probe( "CreateEventW", "ret", ret, 0, flags, manual_reset,
+                               initial_state, FALSE, GetLastError(), caller );
+    return ret;
 }
 
 
@@ -604,6 +738,7 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateEventExW( SECURITY_ATTRIBUTES *sa, LPCWSTR
     UNICODE_STRING nameW;
     OBJECT_ATTRIBUTES attr;
     NTSTATUS status;
+    const void *caller = __builtin_return_address(0);
 
     /* one buggy program needs this
      * ("Van Dale Groot woordenboek der Nederlandse taal")
@@ -626,6 +761,8 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateEventExW( SECURITY_ATTRIBUTES *sa, LPCWSTR
         SetLastError( ERROR_ALREADY_EXISTS );
     else
         SetLastError( RtlNtStatusToDosError(status) );
+    macrunner_hb_0e0_pe_probe( "CreateEventExW", "ret", ret, 0, flags, access,
+                               0, FALSE, status, caller );
     return ret;
 }
 
@@ -679,7 +816,15 @@ BOOL WINAPI DECLSPEC_HOTPATCH PulseEvent( HANDLE handle )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetEvent( HANDLE handle )
 {
-    return set_ntstatus( NtSetEvent( handle, NULL ));
+    const void *caller = __builtin_return_address(0);
+    BOOL ret;
+
+    macrunner_hb_0e0_pe_probe( "SetEvent", "enter", handle, 0, 0, FALSE,
+                               0, FALSE, 0, caller );
+    ret = set_ntstatus( NtSetEvent( handle, NULL ));
+    macrunner_hb_0e0_pe_probe( "SetEvent", "ret", handle, 0, 0, FALSE,
+                               0, FALSE, ret, caller );
+    return ret;
 }
 
 
@@ -688,7 +833,15 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetEvent( HANDLE handle )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH ResetEvent( HANDLE handle )
 {
-    return set_ntstatus( NtResetEvent( handle, NULL ));
+    const void *caller = __builtin_return_address(0);
+    BOOL ret;
+
+    macrunner_hb_0e0_pe_probe( "ResetEvent", "enter", handle, 0, 0, FALSE,
+                               0, FALSE, 0, caller );
+    ret = set_ntstatus( NtResetEvent( handle, NULL ));
+    macrunner_hb_0e0_pe_probe( "ResetEvent", "ret", handle, 0, 0, FALSE,
+                               0, FALSE, ret, caller );
+    return ret;
 }
 
 
@@ -1443,9 +1596,9 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateNamedPipeW( LPCWSTR name, DWORD open_mode,
     if (instances >= PIPE_UNLIMITED_INSTANCES) instances = ~0U;
 
     time.QuadPart = (ULONGLONG)timeout * -10000;
-    status = NtCreateNamedPipeFile( &handle, access, &attr, &iosb, sharing,
-                                    FILE_OPEN_IF, options, pipe_type,
-                                    read_mode, non_block, instances, in_buff, out_buff, &time );
+    status = WINE_NT_CREATE_NAMED_PIPE_FILE( &handle, access, &attr, &iosb, sharing,
+                                             FILE_OPEN_IF, options, pipe_type,
+                                             read_mode, non_block, instances, in_buff, out_buff, &time );
     RtlFreeUnicodeString( &nt_name );
     if (!set_ntstatus( status )) return INVALID_HANDLE_VALUE;
     SetLastError( iosb.Information == FILE_CREATED ? ERROR_SUCCESS : ERROR_ALREADY_EXISTS );
@@ -1485,10 +1638,10 @@ BOOL WINAPI DECLSPEC_HOTPATCH CreatePipe( HANDLE *read_pipe, HANDLE *write_pipe,
         swprintf( name, ARRAY_SIZE(name), L"\\??\\pipe\\Win32.Pipes.%08lu.%08u",
                   GetCurrentProcessId(), ++index );
         RtlInitUnicodeString( &nt_name, name );
-        if (!NtCreateNamedPipeFile( read_pipe, GENERIC_READ | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE,
-                                    &attr, &iosb, FILE_SHARE_WRITE, FILE_OPEN_IF,
-                                    FILE_SYNCHRONOUS_IO_NONALERT,
-                                    FALSE, FALSE, FALSE, 1, size, size, &timeout ))
+        if (!WINE_NT_CREATE_NAMED_PIPE_FILE( read_pipe, GENERIC_READ | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE,
+                                             &attr, &iosb, FILE_SHARE_WRITE, FILE_OPEN_IF,
+                                             FILE_SYNCHRONOUS_IO_NONALERT,
+                                             FALSE, FALSE, FALSE, 1, size, size, &timeout ))
             break;
     }
     if (!set_ntstatus( NtOpenFile( write_pipe, GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attr,

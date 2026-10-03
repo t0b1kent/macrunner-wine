@@ -1363,6 +1363,7 @@
 @ stdcall RegUnLoadKeyW(long wstr)
 # @ stub RegisterBadMemoryNotification
 # @ stub RegisterGPNotificationInternal
+@ stdcall RegisterApplicationRestart(wstr long)
 # @ stub RegisterStateChangeNotification
 # @ stub RegisterStateLock
 @ stdcall RegisterTraceGuidsW(ptr ptr ptr long ptr wstr wstr ptr) ntdll.EtwRegisterTraceGuidsW
@@ -1670,6 +1671,7 @@
 @ stdcall UnmapViewOfFileEx(ptr long)
 # @ stub UnregisterBadMemoryNotification
 # @ stub UnregisterGPNotificationInternal
+@ stdcall UnregisterApplicationRestart()
 # @ stub UnregisterStateChangeNotification
 # @ stub UnregisterStateLock
 @ stdcall UnregisterTraceGuids(int64) ntdll.EtwUnregisterTraceGuids

@@ -1034,7 +1034,23 @@ static void load_graphics_driver( const WCHAR *driver, GUID *guid )
         }
 
         swprintf( libname, ARRAY_SIZE( libname ), L"wine%s.drv", name );
-        if ((module = LoadLibraryW( libname )) != 0) break;
+        module = LoadLibraryW( libname );
+
+        /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 336 — БЕЗУСЛОВНЫЙ ЗОНД ЗАГРУЗКИ ДРАЙВЕРА.
+         *
+         * Доказано `lsof`: в живом `explorer.exe /desktop` отображены только `win32u.so` и
+         * `ntdll.so`, а `winemac.so` НЕТ. Значит эта `LoadLibraryW` отказывает, после чего GUID
+         * обнуляется строкой ниже, окно рабочего стола создаётся с нулевым GUID, и все процессы
+         * ищут ключ `Control\Video\{00000000-…}`, которого нет. Отсюда нулевой драйвер везде.
+         *
+         * Различить надо два исхода, и по `lsof` они неразличимы: `ERROR_MOD_NOT_FOUND` (модуля
+         * нет или не грузится) против `ERROR_DLL_INIT_FAILED` (DllMain вернул FALSE). Печать
+         * безусловная, `fprintf(stderr,…)` — каналы wine до наших журналов не доходят. */
+        fprintf( stderr, "macrunner-ui-input: stage=explorer_load_driver libname=%ls module=%p err=%lu\n",
+                 libname, module, module ? 0ul : GetLastError() );
+        fflush( stderr );
+
+        if (module != 0) break;
         switch (GetLastError())
         {
         case ERROR_MOD_NOT_FOUND:

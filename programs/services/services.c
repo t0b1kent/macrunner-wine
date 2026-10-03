@@ -1285,14 +1285,18 @@ int __cdecl main(int argc, char *argv[])
     HANDLE started_event, process_monitor_thread;
     DWORD err;
 
+    WINE_TRACE("services.exe startup begin\n");
     job_object = CreateJobObjectW(NULL, NULL);
+    WINE_TRACE("created job object %p\n", job_object);
     job_limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
     if (!SetInformationJobObject(job_object, JobObjectExtendedLimitInformation, &job_limit, sizeof(job_limit)))
     {
         WINE_ERR("Failed to initialized job object, err %lu.\n", GetLastError());
         return GetLastError();
     }
+    WINE_TRACE("configured job limits\n");
     job_completion_port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+    WINE_TRACE("created completion port %p\n", job_completion_port);
     port_info.CompletionPort = job_completion_port;
     port_info.CompletionKey = job_object;
     if (!SetInformationJobObject(job_object, JobObjectAssociateCompletionPortInformation,
@@ -1301,8 +1305,10 @@ int __cdecl main(int argc, char *argv[])
         WINE_ERR("Failed to set completion port for job, err %lu.\n", GetLastError());
         return GetLastError();
     }
+    WINE_TRACE("associated job completion port\n");
 
     started_event = CreateEventW(NULL, TRUE, FALSE, svcctl_started_event);
+    WINE_TRACE("created started event %p\n", started_event);
 
     err = RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\ServiceCurrent", 0,
         NULL, REG_OPTION_VOLATILE, KEY_SET_VALUE | KEY_QUERY_VALUE, NULL,
@@ -1310,16 +1316,22 @@ int __cdecl main(int argc, char *argv[])
     if (err != ERROR_SUCCESS)
         return err;
 
+    WINE_TRACE("loading service parameters\n");
     load_registry_parameters();
+    WINE_TRACE("creating service database\n");
     err = scmdatabase_create(&active_database);
     if (err != ERROR_SUCCESS)
         return err;
+    WINE_TRACE("loading service database\n");
     if ((err = scmdatabase_load_services(active_database)) != ERROR_SUCCESS)
         return err;
+    WINE_TRACE("initializing RPC server\n");
     if ((err = RPC_Init()) == ERROR_SUCCESS)
     {
+        WINE_TRACE("RPC server initialized\n");
         scmdatabase_autostart_services(active_database);
         process_monitor_thread = CreateThread(NULL, 0, process_monitor_thread_proc, NULL, 0, NULL);
+        WINE_TRACE("setting svcctl started event\n");
         SetEvent(started_event);
         WaitForSingleObject(exit_event, INFINITE);
         PostQueuedCompletionStatus(job_completion_port, 0, 0, NULL);

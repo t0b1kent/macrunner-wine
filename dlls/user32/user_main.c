@@ -127,14 +127,61 @@ static NTSTATUS WINAPI User32RenderSynthesizedFormat( void *args, ULONG size )
     return STATUS_SUCCESS;
 }
 
+/*
+ * MacRunner 2026-07-29 (HK DllMain lane) -- measured, see
+ * reports/phase4-hollow-knight/HK-DLLMAIN-iter6-NONEXECUTABLE-MAPPING-IS-THE-ROOT-CAUSE-20260729.md
+ *
+ * In Hollow Knight's x86_64 guest process winemac.drv is the ONE wine builtin that never gets an
+ * `aarch64-windows` native twin: 37 others load twice (guest copy + twin), it loads once.  The
+ * consequence was measured on a live wedged process (`vmmap` of pid 35734 attributed against the
+ * `+loaddll` base table): of the 38 executable regions in the PE band, **38 belong to modules
+ * loaded from `aarch64-windows` and 0 to a system32 guest copy**.  Guest copies are mapped
+ * non-executable by design -- guest x86_64 code is translated, never natively executed.  So
+ * winemac.drv's only mapping in HK has no executable page anywhere in its 0x30000 image, and any
+ * attempt to run its DllMain natively branches into an `r--` page and SIGILLs.
+ *
+ * The reason it never gets a twin is this function: pinning the search path to
+ * c:\windows\system32 forces FullDllName to the system32 copy, so the module never enters the
+ * builtin-twin resolution every other builtin reaches.  Passing NULL lets the normal builtin
+ * search run, which is what produces the dual view.
+ *
+ * Default OFF -- MACRUNNER_HB_WINEMAC_TWIN_LOAD=1 to enable.  Unpinning the search path is a
+ * real semantic change (it lets a non-system32 winemac.drv win), and on this project "an offline
+ * proof that a mechanism is wrong is not a proof that removing it is safe" has already cost two
+ * guest regressions, so this stays opt-in until a run says otherwise.
+ */
+static BOOL macrunner_winemac_twin_load(void)
+{
+    WCHAR value[8];
+
+    if (!GetEnvironmentVariableW( L"MACRUNNER_HB_WINEMAC_TWIN_LOAD", value, ARRAY_SIZE(value) ))
+        return FALSE;
+    return value[0] && value[0] != '0';
+}
+
 static NTSTATUS WINAPI User32LoadDriver( void *args, ULONG size )
 {
     const WCHAR *path = args;
     UNICODE_STRING str;
     HMODULE module;
+    NTSTATUS status;
 
     RtlInitUnicodeString( &str, path );
-    return LdrLoadDll( L"c:\\windows\\system32", 0, &str, &module );
+
+    if (macrunner_winemac_twin_load())
+    {
+        status = LdrLoadDll( NULL, 0, &str, &module );
+        MESSAGE( "macrunner-hb-user32-loaddriver: driver=%s pinned=0 status=%08lx module=%p\n",
+                 debugstr_w(path), status, module );
+        /* never let the experiment lose a driver the pinned path would have found */
+        if (!status) return status;
+        MESSAGE( "macrunner-hb-user32-loaddriver: unpinned load failed, retrying pinned\n" );
+    }
+
+    status = LdrLoadDll( L"c:\\windows\\system32", 0, &str, &module );
+    MESSAGE( "macrunner-hb-user32-loaddriver: driver=%s pinned=1 status=%08lx module=%p\n",
+             debugstr_w(path), status, module );
+    return status;
 }
 
 static NTSTATUS WINAPI User32UnpackDDEMessage( void *args, ULONG size )

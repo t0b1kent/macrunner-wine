@@ -24,6 +24,7 @@
 #pragma makedep unix
 #endif
 
+#include <stdlib.h>
 #include <pthread.h>
 #include <assert.h>
 
@@ -319,6 +320,23 @@ void user_check_not_lock(void)
 {
     if (user_lock_thread == GetCurrentThreadId())
     {
+        /* MacRunner 2026-08-10, лейн ЛЕСТНИЦА: РАЗДЕЛИТЬ ДВА СЛУЧАЯ, А НЕ ГАДАТЬ.
+         *
+         * Это утверждение обрывает 32-битный путь к окну сразу после того, как
+         * `CreateWindowEx` нашёл класс (воспроизводится за 13 с программой
+         * `scratchpad/win32seq.c`). Проверка сравнивает `user_lock_thread` с текущим
+         * потоком, но при СВОБОДНОМ замке `user_lock_thread` равен нулю — значит если
+         * `GetCurrentThreadId()` на нашем пути вернёт ноль, утверждение сработает ЛОЖНО.
+         *
+         * Три числа разделяют это за один прогон:
+         *   lock_thread=0 cur=0            замок свободен, виноват нулевой номер потока
+         *   lock_thread=X cur=X, rec>0     замок ДЕЙСТВИТЕЛЬНО взят, порядок захвата наш
+         *
+         * Печать через MESSAGE: соседний `ERR` в этом же блоке до журнала НЕ доходит —
+         * проверено, 0 строк на прогоне при наличии строки самого утверждения. */
+        fprintf( stderr, "macrunner-user-lock-assert: lock_thread=%04x cur_tid=%04x rec=%u\n",
+                 user_lock_thread, (unsigned int)GetCurrentThreadId(), user_lock_rec );
+        fflush( stderr );
         ERR( "BUG: holding USER lock\n" );
         assert( 0 );
     }
@@ -1824,6 +1842,15 @@ static BOOL write_source_to_registry( struct source *source )
     set_reg_value( source->key, dpiW, REG_DWORD, &source->dpi, sizeof(source->dpi) );
 
     snprintf( buffer, sizeof(buffer), "System\\CurrentControlSet\\Control\\Video\\%s\\%04x", gpu->guid, source_index );
+    {
+        static LONG said_video;
+        if (InterlockedIncrement( &said_video ) <= 4)
+        {
+            fprintf( stderr, "macrunner-ui-input: stage=video_key_write pid=%04x path=%s\n",
+                     (unsigned int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess, buffer );
+            fflush( stderr );
+        }
+    }
     hkey = reg_create_ascii_key( config_key, buffer, REG_OPTION_VOLATILE | REG_OPTION_CREATE_LINK, NULL );
     if (!hkey) hkey = reg_create_ascii_key( config_key, buffer, REG_OPTION_VOLATILE | REG_OPTION_OPEN_LINK, NULL );
 
@@ -2759,11 +2786,37 @@ static BOOL add_virtual_source( struct device_manager_ctx *ctx )
     return STATUS_SUCCESS;
 }
 
+/* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 334 — БЕЗУСЛОВНЫЙ ЗОНД РЕГИСТРАЦИИ УСТРОЙСТВ.
+ *
+ * Зачем. Ступень 1 рисует 22 кадра и не имеет окна: `winemac.so` в процесс не загружен, потому
+ * что `load_desktop_driver` берёт имя драйвера из ключа `Control\Video\{GUID}\0000`, а GUID
+ * приходит из свойства окна `__wine_display_device_guid`, которого нет (`guid_atom=0`).
+ *
+ * ВАЖНО про измерение: ключи этой ветки создаются с `REG_OPTION_VOLATILE` (строки 1823, 1844),
+ * то есть в `system.reg` не попадают НИКОГДА. Проверка «нет раздела в system.reg» ничего о них
+ * не говорит — на этом я ошибся в итерации 333 и вывод «устройства не заводятся ни в одном
+ * префиксе» оттуда снимаю. Отсюда зонд: спрашивать надо код возврата драйвера и число
+ * заведённых источников, а не файл реестра.
+ *
+ * Печать безусловная, первые 4 раза, через `fprintf(stderr,…)`. */
 static UINT update_display_devices( struct device_manager_ctx *ctx )
 {
     UINT status;
 
-    if (!(status = user_driver->pUpdateDisplayDevices( &device_manager, ctx )))
+    status = user_driver->pUpdateDisplayDevices( &device_manager, ctx );
+    {
+        static LONG said;
+        if (InterlockedIncrement( &said ) <= 4)
+        {
+            fprintf( stderr, "macrunner-ui-input: stage=update_display_devices pid=%04x "
+                     "driver_status=%#x source_count=%u\n",
+                     (unsigned int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess,
+                     (unsigned int)status, (unsigned int)ctx->source_count );
+            fflush( stderr );
+        }
+    }
+
+    if (!status)
     {
         if (ctx->source_count && is_virtual_desktop()) return add_virtual_source( ctx );
         return status;
@@ -4421,7 +4474,35 @@ LONG WINAPI NtUserChangeDisplaySettings( UNICODE_STRING *devname, DEVMODEW *devm
     else ret = apply_display_settings( source, &full_mode, hwnd, flags, lparam );
     source_release( source );
 
+    /* Итерация 443 — ПРОВЕРКА, не лечение. Замер 442: игра просит 8 бит, мы отвечаем успехом,
+     * а поверхность остаётся 32-битной. Отказываем честно и смотрим, изменится ли выход.
+     * Гейт, умолчание ВЫКЛ: это эксперимент на один прогон, а не поведение сборки. */
+    {
+        static int refuse = -1;
+        if (refuse < 0)
+        {
+            const char *v = getenv( "MACRUNNER_REFUSE_UNSUPPORTED_BPP" );
+            refuse = (v && *v && *v != '0') ? 1 : 0;
+        }
+        if (refuse && devmode && (devmode->dmFields & DM_BITSPERPEL) && devmode->dmBitsPerPel < 16)
+        {
+            MESSAGE( "macrunner-chgdisp: ОТКАЗ_ПО_ГЕЙТУ запрошено=%ux%u bpp=%u\n",
+                     (unsigned)devmode->dmPelsWidth, (unsigned)devmode->dmPelsHeight,
+                     (unsigned)devmode->dmBitsPerPel );
+            return DISP_CHANGE_BADMODE;
+        }
+    }
     if (ret) ERR( "Changing %s display settings returned %d.\n", debugstr_us(devname), ret );
+    /* Итерация 442: замер 441 показал 2 смены режима и 6 перечислений, а кандидат 440 — что мы
+     * отвечаем «8 бит» при 32-битной поверхности. Печатаем ЗАПРОШЕННЫЙ режим и НАШ ответ:
+     * это различает «подтвердили несделанное» от «честно отказали». Ручная правка, не обёртка. */
+    MESSAGE( "macrunner-chgdisp: ret=%d запрошено=%ux%u bpp=%u freq=%u поля=%08x flags=%08x\n",
+             (int)ret,
+             devmode ? (unsigned)devmode->dmPelsWidth : 0u,
+             devmode ? (unsigned)devmode->dmPelsHeight : 0u,
+             devmode ? (unsigned)devmode->dmBitsPerPel : 0u,
+             devmode ? (unsigned)devmode->dmDisplayFrequency : 0u,
+             devmode ? (unsigned)devmode->dmFields : 0u, (unsigned)flags );
     return ret;
 }
 

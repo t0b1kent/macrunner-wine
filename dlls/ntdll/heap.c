@@ -762,9 +762,67 @@ static const char *debugstr_heap_entry( struct rtl_heap_entry *entry )
 
 static struct heap *unsafe_heap_from_handle( HANDLE handle, ULONG flags, ULONG *heap_flags )
 {
-    struct heap *heap = handle;
+    struct heap *heap;
     BOOL valid = TRUE;
 
+    /* ★ MacRunner 2026-08-28 — ВЫХОДНОЙ УКАЗАТЕЛЬ УКАЗЫВАЕТ В КОД.
+     *
+     * Diablo виснет на `create_swapchain`, и ровно там приходит отказ ЗАПИСИ:
+     * `guest_addr=0x7bd3f89d size=4 WRITE pc=0x7bd35c4c`. Оба адреса в 32-битной
+     * ntdll: pc = `unsafe_heap_from_handle+0x6C`, цель = `RtlImageNtHeader@4+0x1D`,
+     * секция `.text`, запись запрещена. То есть `heap_flags` — выходной параметр —
+     * содержит адрес внутри кода, и функция пишет туда результат.
+     *
+     * Надо понять, приходит ли мусор снаружи (дефект вызывающего или нашей
+     * передачи аргументов на границе 32<->64) или портится здесь. Печатаем ВСЕ
+     * три аргумента до первого обращения. Гейт по умолчанию ВЫКЛЮЧЕН: прибор в
+     * горячем пути кучи иначе сам исказит замер. */
+    {
+        static int probe = -1;
+        if (probe < 0)
+        {
+            /* `getenv` в ntdll недоступен (PE-сторона, нет CRT) — читаем через
+             * RtlQueryEnvironmentVariable_U, как это делает loader.c:54. */
+            static const WCHAR nameW[] = {'M','A','C','R','U','N','N','E','R','_','H','E','A','P',
+                                          '_','A','R','G','_','P','R','O','B','E',0};
+            UNICODE_STRING name, val;
+            WCHAR value[8];
+            RtlInitUnicodeString( &name, nameW );
+            val.Buffer = value;
+            val.Length = 0;
+            val.MaximumLength = sizeof(value);
+            probe = (RtlQueryEnvironmentVariable_U( NULL, &name, &val ) != STATUS_VARIABLE_NOT_FOUND
+                     && value[0] && value[0] != '0') ? 1 : 0;
+        }
+        if (probe)
+        {
+            /* Печатаем ТОЛЬКО подозрительные: здоровый `heap_flags` всегда лежит на
+             * стеке вызывающего (в замере это 0x016B****). Всё, что попадает в
+             * область загруженных модулей (0x70000000 и выше) или обнулено, —
+             * ровно тот случай, который вешает `create_swapchain`: запись уходит в
+             * `.text` ntdll. Первая редакция печатала подряд и за 32 записи до него
+             * не добралась. */
+            ULONG_PTR hf = (ULONG_PTR)heap_flags;
+            if (!heap_flags || hf >= 0x70000000u)
+            {
+                static LONG said;
+                if (said++ < 32)
+                    MESSAGE( "macrunner-heap-arg-ПОДОЗРИТЕЛЬНЫЙ: handle=%p flags=%08lx heap_flags=%p возврат=%p\n",
+                         handle, flags, heap_flags, __builtin_return_address(0) );
+            }
+        }
+    }
+
+#if defined(__aarch64__)
+    /* MacRunner: aarch64 callers can reach the heap entry points with a NULL heap handle.  This is
+     * the DXMT ARM64X CRT path: its heap-handle global lands in the uninitialised EC-view .data copy,
+     * so the CRT passes 0.  RtlAllocateHeap already substitutes process_heap (so those allocations go
+     * to the process heap); RtlFreeHeap/RtlReAllocateHeap/RtlSizeHeap/... did NOT, so the matching
+     * frees failed ("Invalid handle 0" spin, stalling Unity gfx-device init).  Apply the same
+     * substitution centrally so every heap op handles the platform NULL-heap path consistently. */
+    if (!handle && process_heap) handle = process_heap;
+#endif
+    heap = handle;
     if (!heap || (heap->magic != HEAP_MAGIC))
     {
         ERR( "Invalid handle %p!\n", handle );
@@ -986,7 +1044,9 @@ static void *allocate_region( struct heap *heap, ULONG flags, SIZE_T *region_siz
     }
 
     *region_size = ROUND_SIZE( *region_size, align - 1 );
+    if (!*region_size) *region_size = align;  /* stale-binary / optimizer alias guard: never pass size=0 to kernel */
     *commit_size = ROUND_SIZE( *commit_size, align - 1 );
+    if (!*commit_size) *commit_size = *region_size;
 
     /* allocate the memory block */
     if ((status = NtAllocateVirtualMemory( NtCurrentProcess(), &addr, 0, region_size, MEM_RESERVE,
@@ -2040,6 +2100,8 @@ void heap_thread_detach(void)
 /***********************************************************************
  *           RtlAllocateHeap   (NTDLL.@)
  */
+
+
 void *WINAPI DECLSPEC_HOTPATCH RtlAllocateHeap( HANDLE handle, ULONG flags, SIZE_T size )
 {
     struct heap *heap;
@@ -2048,6 +2110,9 @@ void *WINAPI DECLSPEC_HOTPATCH RtlAllocateHeap( HANDLE handle, ULONG flags, SIZE
     ULONG heap_flags;
     NTSTATUS status;
 
+#if defined(__aarch64__)
+    if (!handle && process_heap) handle = process_heap;
+#endif
     heap = unsafe_heap_from_handle( handle, flags, &heap_flags );
     if ((block_size = heap_get_block_size( heap, heap_flags, size )) == ~0U)
         status = STATUS_NO_MEMORY;

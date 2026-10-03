@@ -335,9 +335,26 @@ void msvcrt_init_args(void)
   MSVCRT__acmdln = _strdup( GetCommandLineA() );
   MSVCRT__wcmdln = _wcsdup( GetCommandLineW() );
   initial_wargv  = cmdline_to_argv( GetCommandLineW(), &initial_argc );
+  /* ★★★★★ ИТЕРАЦИЯ 137, лейн УСТАНОВЩИКИ — ЧТО ВЕРНУЛ РАЗБОР.
+   *
+   * Ступень 4 (JournalStudio-Setup.exe, x86_64) падает в `build_argv+0x14` на
+   * `ldr x2,[x0]` при x0=0 — три прогона дословно. Командная строка при этом ЕСТЬ:
+   * зонд в loader_init показал её у всех восьми процессов прогона, нулевых ноль
+   * (итерация 136). Значит нулевым приходит именно `initial_wargv`.
+   *
+   * Печатаем сам возврат и счётчик: это различает «не выделилась память» и
+   * «разобралось в ноль». Печать разовая на процесс. */
+  {
+      static int mr_ia_said;
+      const WCHAR *mr_cl = GetCommandLineW();
+      if (!mr_ia_said++)
+          MESSAGE( "macrunner-argv: wargv=%p argc=%d cmdline=%p acmdln=%p wcmdln=%p\n",
+                   initial_wargv, initial_argc, mr_cl,
+                   MSVCRT__acmdln, MSVCRT__wcmdln );
+  }
   MSVCRT___argc  = initial_argc;
   MSVCRT___wargv = initial_wargv;
-  MSVCRT___argv  = build_argv( initial_wargv );
+  MSVCRT___argv  = initial_wargv ? build_argv( initial_wargv ) : NULL;
 
   TRACE("got %s, wide = %s argc=%d\n", debugstr_a(MSVCRT__acmdln),
         debugstr_w(MSVCRT__wcmdln),MSVCRT___argc);
@@ -507,14 +524,19 @@ int CDECL __getmainargs(int *argc, char** *argv, char** *envp,
             build_expanded_wargv(&wargc_expand, wargv_expand);
 
             MSVCRT___argc = wargc_expand;
-            MSVCRT___argv = build_argv( wargv_expand );
+            /* ★ ИТЕРАЦИЯ 137 — второй вызов build_argv; см. комментарий выше. */
+            if (!wargv_expand) MESSAGE( "macrunner-argv-NULL: место=expand\n" );
+            MSVCRT___argv = wargv_expand ? build_argv( wargv_expand ) : NULL;
         }else {
             expand_wildcards = 0;
         }
     }
     if (!expand_wildcards) {
         MSVCRT___argc = initial_argc;
-        MSVCRT___argv = build_argv( initial_wargv );
+        /* ★ ИТЕРАЦИЯ 137 — третий вызов build_argv. Если сюда приходит NULL, значит
+         * `msvcrt_init_args` для этого процесса не отработал, и `initial_wargv` пуст. */
+        if (!initial_wargv) MESSAGE( "macrunner-argv-NULL: место=getmainargs argc=%d\n", initial_argc );
+        MSVCRT___argv = initial_wargv ? build_argv( initial_wargv ) : NULL;
     }
 
     *argc = MSVCRT___argc;

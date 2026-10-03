@@ -2169,8 +2169,17 @@ HDEVNOTIFY WINAPI I_ScRegisterDeviceNotification( HANDLE handle, DEV_BROADCAST_H
     EnterCriticalSection( &service_cs );
     list_add_tail( &device_notify_list, &notify->entry );
 
-    if (!device_notify_thread)
-        device_notify_thread = CreateThread( NULL, 0, device_notify_proc, NULL, 0, NULL );
+    /* MacRunner Lane A (2026-06-17): do NOT spawn the device-change notification thread.
+     * device_notify_proc delay-loads rpcrt4 and, under ARM64EC, crashes stochastically
+     * (exec-at-0 / rc=5 / hang) — it killed the Hollow Knight boot at input-init.  This is the
+     * single common sink for every RegisterDeviceNotificationW caller (Windows.Gaming.Input AND
+     * its XInput fallback both register here, so stubbing WGI alone was insufficient).  Device
+     * HOTPLUG notifications are non-essential for the first frame; registration still returns a
+     * valid handle (notify) so callers proceed — we simply never deliver change events.
+     * Route around the non-essential flaky subsystem.  (void) keeps device_notify_proc
+     * referenced so it is not flagged unused. */
+    (void)device_notify_proc;
+    (void)device_notify_thread;
 
     LeaveCriticalSection( &service_cs );
 

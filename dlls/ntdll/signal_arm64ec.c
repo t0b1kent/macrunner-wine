@@ -35,9 +35,99 @@
 #include "unwind.h"
 #include "wine/debug.h"
 #include "ntsyscalls.h"
+#include "unixlib.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(seh);
 WINE_DECLARE_DEBUG_CHANNEL(relay);
+
+#define MACRUNNER_HB_HOST_BOUNDARY_MIN 0x0000000100000000ULL
+#define MACRUNNER_HB_HOST_BOUNDARY_MAX 0x0000008000000000ULL
+
+static const EXCEPTION_RECORD *macrunner_hb_current_exception_record;
+
+static inline BOOL macrunner_hb_is_x64_main_process(void)
+{
+    TEB *teb = NtCurrentTeb();
+    IMAGE_NT_HEADERS *nt;
+
+    if (!teb || teb->WowTebOffset || !teb->Peb || !teb->Peb->ImageBaseAddress)
+        return FALSE;
+    if (!(nt = RtlImageNtHeader( teb->Peb->ImageBaseAddress )))
+        return FALSE;
+    return nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64;
+}
+
+static inline BOOL macrunner_hb_x64_loader_entry(void *entry)
+{
+    LDR_DATA_TABLE_ENTRY *module;
+    IMAGE_NT_HEADERS *nt;
+
+    /* ★★★ ШАГ-2 08.09.2026, договор T9 (20260907-ASTRA-WINE-FEX-CONTRACT-AUDIT.md:33).
+     *
+     * LdrInitializeThunk ниже отдавал ЛЮБУЮ точку входа в AMD64-модуле HyperBridge —
+     * `WINE_UNIX_CALL( unix_macrunner_hb_x64_thread_entry )` — и назад не возвращался
+     * (RtlExitUserThread).  Условие было ОДНО: «вход лежит в модуле AMD64», без всякого
+     * гейта, поэтому при выбранном FEX поток x64 всё равно уходил в HyperBridge, а
+     * штатного `NtContinue` -> KiUserEmulationDispatcher -> BeginSimulation не случалось.
+     *
+     * Улика прежнего поведения — ШАГ-1, рука x64 (reports/SHAG1-lab/runs/x64/run.log):
+     *     MacRunner HyperBridge x64 thread start entry=0x140001000 …
+     *     macrunner-hb-nonexec-target: … rva=0x1000 bytes=48 83 ec 28 b9 2a 00 00 00 …
+     *     macrunner-hb-run-exit: status=c000007b reason=nonexec-section   -> exit=123
+     *
+     * Владельца CPU спрашиваем ПЕРВЫМ; при backend=hb поведение побайтово прежнее. */
+    if (!macrunner_cpu_backend_is_hb()) return FALSE;
+
+    if (!entry) return FALSE;
+    if (LdrFindEntryForAddress( entry, &module )) return FALSE;
+    if (!module || !module->DllBase) return FALSE;
+    if (!(nt = RtlImageNtHeader( module->DllBase ))) return FALSE;
+    return nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64;
+}
+
+/* ★★★ ПАКЕТ-3, семья T11 — РАЗМОТКОЙ ВЛАДЕЕТ ВЛАДЕЛЕЦ ДИСПЕТЧЕРА.
+ *
+ * Ниже немодульный высокий PC в x64-процессе объявляется границей HyperBridge: размотка
+ * останавливается, FunctionEntry/LanguageHandler обнуляются ДО поиска, и наверх уходит
+ * УСПЕХ. Для HB это верно — там за этой полосой действительно наш JIT, у которого нет
+ * unwind-метаданных. У FEX своё владение JIT и диспетчером (F:ARM64EC/Module.cpp:717-745,
+ * WOW64/Module.cpp:941-942), и метаданные он ведёт сам.
+ *
+ * Тихий отказ, если не погасить: обработчик, который ДОЛЖЕН был найтись, пропускается,
+ * cleanup не отрабатывает — а наружу отдаётся успех. Громко это всплывает позже и в другом
+ * месте, как необработанное исключение, то есть отладка уходит по ложному следу.
+ *
+ * Спрашиваем владельца ПЕРВЫМ оператором, как в T9 выше (:79). При backend=hb поведение
+ * побайтово прежнее. Счётчик и его отрицательный контроль — ниже по файлу, у места
+ * применения: там уже есть безусловная печать macrunner-hb-seh-host-boundary. */
+static inline BOOL macrunner_hb_is_non_module_host_boundary_pc( DWORD64 pc )
+{
+    LDR_DATA_TABLE_ENTRY *module;
+
+    if (!macrunner_cpu_backend_is_hb())
+    {
+        static unsigned int mr_p3_muted;
+        if (mr_p3_muted++ < 8)
+            MESSAGE( "macrunner-paket3-pe: family=T11-seh-host-boundary state=MUTED n=%u pc=%p\n",
+                     mr_p3_muted, (void *)(ULONG_PTR)pc );
+        return FALSE;
+    }
+    if (!macrunner_hb_is_x64_main_process()) return FALSE;
+    if (pc < MACRUNNER_HB_HOST_BOUNDARY_MIN || pc >= MACRUNNER_HB_HOST_BOUNDARY_MAX)
+        return FALSE;
+    return LdrFindEntryForAddress( (void *)(ULONG_PTR)pc, &module ) != STATUS_SUCCESS;
+}
+
+static inline void macrunner_hb_stop_unwind_at_host_boundary( DISPATCHER_CONTEXT_ARM64EC *dispatch,
+                                                              ARM64EC_NT_CONTEXT *context )
+{
+    dispatch->ImageBase = 0;
+    dispatch->FunctionEntry = NULL;
+    dispatch->HandlerData = NULL;
+    dispatch->EstablisherFrame = 0;
+    dispatch->LanguageHandler = NULL;
+    context->ContextFlags |= CONTEXT_UNWOUND_TO_CALL;
+}
 
 /* xtajit64.dll functions */
 static void     (WINAPI *pBTCpu64FlushInstructionCache)(const void*,SIZE_T);
@@ -84,7 +174,41 @@ static inline BOOL enter_syscall_callback(void)
 
 static inline void leave_syscall_callback(void)
 {
-    get_arm64ec_cpu_area()->InSyscallCallback = 0;
+    /* MacRunner 2026-08-04 — перенесено из Wine 11.14 (у нас дерево 11.0).
+     *
+     * Пока поток находится внутри обратного вызова системного вызова, его приостановку откладывают:
+     * прерывать его на переходе через границу эмулируемого и нативного кода нельзя. Здесь, на
+     * выходе, отложенная просьба обрабатывается в безопасной точке — поток снимает собственный
+     * контекст и продолжает через NtContinue.
+     *
+     * Почему берём: механизм из той же области, где у нас ломается доставка исключений —
+     * сохранение и восстановление контекста на границе. Поле SuspendDoorbell в структуре у нас
+     * УЖЕ ЕСТЬ (winternl.h:358, смещение 0x20), не хватало только использования.
+     *
+     * Честная граница: прямых доказательств, что это именно наш дефект, НЕТ. Наш симптом —
+     * затёртая текстом область сохранения регистров, а не сорванная приостановка. Это кандидат,
+     * который проверяется прогоном, а не рассуждением. Если прогон не изменится — правка всё
+     * равно остаётся: она сокращает расхождение с upstream, а его надо сокращать.
+     *
+     * ★ 2026-09-04, ОСТОРОЖНО ТОМУ, КТО БУДЕТ ВЗВОДИТЬ ЗВОНОК. С 04.09 указатель звонка
+     * заведён (dlls/ntdll/loader.c, macrunner_hb_xtajit64_begin_thread), поэтому проверка
+     * ниже наконец что-то читает. Но СНИМАТЬ звонок у нас пока некому: у апстрима это
+     * делает unix/signal_arm64.c:361 (11.16) в signal_set_full_context, куда мы попадаем
+     * из NtContinue, — и этой ветки в нашем дереве НЕТ. Значит, если кто-то заведёт
+     * взведение звонка, не перенеся снятие, NtContinue вернётся сюда со всё ещё взведённым
+     * звонком, и получится не приостановка, а вечная петля. Переносить эти две половины
+     * можно только вместе; взведение вдобавок требует SELECT_COOPERATIVE_SUSPEND
+     * (server/protocol.def) и поля cooperative в сервере — то есть пересборки wineserver. */
+    CHPE_V2_CPU_AREA_INFO *cpu_area = get_arm64ec_cpu_area();
+    CONTEXT ctx;
+
+    cpu_area->InSyscallCallback = 0;
+
+    if (cpu_area->SuspendDoorbell && *cpu_area->SuspendDoorbell)
+    {
+        RtlCaptureContext( &ctx );
+        if (*cpu_area->SuspendDoorbell) NtContinue( &ctx, FALSE );
+    }
 }
 
 /**********************************************************************
@@ -103,8 +227,8 @@ static NTSTATUS create_cross_process_work_list( CHPEV2_PROCESS_INFO *info )
     size.QuadPart = map_size;
     status = NtCreateSection( &section, SECTION_ALL_ACCESS, NULL, &size, PAGE_READWRITE, SEC_COMMIT, 0 );
     if (status) return status;
-    status = NtMapViewOfSection( section, GetCurrentProcess(), (void **)&list, 0, 0, NULL,
-                                 &map_size, ViewShare, MEM_TOP_DOWN, PAGE_READWRITE );
+    status = WINE_NT_MAP_VIEW( section, GetCurrentProcess(), (void **)&list, 0, 0, NULL,
+                               &map_size, ViewShare, MEM_TOP_DOWN, PAGE_READWRITE );
     if (status)
     {
         NtClose( section );
@@ -174,6 +298,101 @@ static void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64E
 
 static void arm64x_check_call(void);
 
+/*
+ * MacRunner Lane A (x18-storm fix, 2026-06-12).  On Apple arm64 xnu zeros x18 (the ABI TEB
+ * register) on ANY kernel entry / preemption / sigreturn, so native PE/EC code faults on
+ * essentially every TEB-relative deref.  Durable x18 is impossible (proven: x18 dies between
+ * two adjacent ldr [x18,#0x60]).  The reliable source is the pthread TSD, read via TPIDRRO_EL0
+ * (which xnu DOES preserve): TEB = *(void**)((TPIDRRO_EL0 & ~7) + teb_key*8).  The unix-side
+ * teb_key is not visible from this PE-side TU, so we DISCOVER the TSD byte offset of the TEB
+ * once at process init (while x18 is still valid) by scanning the TSD for the slot == the TEB,
+ * validate it, and gate an inline re-materialization of x18 at the hottest EC transition
+ * prologues on that validation.  If discovery fails the gate stays 0 and the existing fault
+ * heal (unix signal_arm64.c) handles it as before.  Clobbers only x16/x17 (EC scratch) + x18. */
+/* ★ MacRunner, лейн ШАГ-1, 08.09.2026 — ТИП БЫЛ 32-РАЗРЯДНЫМ, И ЭТО ВАЛИЛО ВЕСЬ РЕЖИМ EC.
+ *
+ * Мишень PE — Windows (LLP64), там `unsigned long` = 4 БАЙТА. Отсюда два отказа сразу,
+ * оба видны в разобранном коде готового ntdll.dll (RVA 0xdcd94..0xdcda0):
+ *
+ *     mrs x9, TPIDRRO_EL0
+ *     and x9, x9, #0xfffffff8      <- верхние 32 бита ОБНУЛЕНЫ (маска 64-битная была бы
+ *                                     #0xfffffffffffffff8, как ниже в asm-макросе)
+ *     ldr x10, [x9, x8]            <- SIGSEGV: x9=0x6ff9f0e0 вместо адреса TSD
+ *
+ * На Windows/ARM64 обрезание незаметно (структура лежит ниже 4 ГБ), на macOS TPIDRRO_EL0
+ * указывает высоко, и обрезанный адрес — мусор. Отказ БЕЗУСЛОВНЫЙ: он в самом переборе,
+ * до всякого гейта, поэтому arm64ec_process_init не доживал до конца НИКОГДА.
+ *
+ * Второй отказ того же корня: asm-макрос ниже читает смещение как `ldr x17` — ВОСЕМЬ байт
+ * из четырёхбайтовой переменной, то есть прихватывает соседнюю `..._tls_ok` в старшее
+ * слово (и не гарантирует выравнивания на 8). Оба лечатся одним: 64-разрядным типом.
+ *
+ * ИЗМЕРЕНО: x64-гость под прежним владельцем CPU (backend=hb, X64_LOADER=0) до правки
+ * давал код 5 и `vhf-probe c0000005 addr=0x6ff9f0e0 pc=ntdll+0xdcda0`.
+ * ГРАНИЦЫ: правка касается ТОЛЬКО пути ARM64EC; при X64_LOADER=1 эта функция не зовётся.
+ * ОПРОВЕРГНЕТ: тот же отказ по тому же адресу после пересборки PE-половины. */
+ULONG_PTR    macrunner_hb_x18_tsd_offset = 0;
+unsigned int macrunner_hb_x18_tls_ok = 0;
+
+static void macrunner_hb_init_x18_tls_restore(void)
+{
+    TEB *teb = NtCurrentTeb();
+    ULONG_PTR base;
+    unsigned int i;
+
+    if (!teb) return;
+    __asm__ volatile( "mrs %0, TPIDRRO_EL0" : "=r"(base) );
+    base &= ~(ULONG_PTR)7;
+    for (i = 0; i < 512; i++)
+    {
+        if (((void **)base)[i] == (void *)teb)
+        {
+            macrunner_hb_x18_tsd_offset = (ULONG_PTR)i * sizeof(void *);
+            macrunner_hb_x18_tls_ok = 1;
+            return;
+        }
+    }
+}
+
+/* Inline leaf re-materialization of x18 from the TSD.  Skips fast when x18 is already valid
+ * (the healthy common case = one predicted cbnz), and when the gate is unvalidated.  Uses a
+ * numeric local label so it composes in multiple naked asm bodies.  NO sp, NO call, NO flags
+ * (and/cbz/cbnz/mrs/ldr/adrp set no NZCV), so EC .pdata/unwind (keystone) is intact. */
+#define MACRUNNER_HB_RESTORE_X18_FROM_TLS                                     \
+    "cbnz x18, 1f\n\t"                                                        \
+    "adrp x16, macrunner_hb_x18_tls_ok\n\t"                                   \
+    "ldr w16, [x16, #:lo12:macrunner_hb_x18_tls_ok]\n\t"                      \
+    "cbz w16, 1f\n\t"                                                         \
+    "mrs x16, TPIDRRO_EL0\n\t"                                                \
+    "and x16, x16, #0xfffffffffffffff8\n\t"                                   \
+    "adrp x17, macrunner_hb_x18_tsd_offset\n\t"                               \
+    "ldr x17, [x17, #:lo12:macrunner_hb_x18_tsd_offset]\n\t"                  \
+    "ldr x18, [x16, x17]\n\t"                                                 \
+    "1:\n\t"
+
+
+/* ★★★ ШАГ-4, 08.09.2026 — PE-СТОРОНА СТЕНЫ x64.
+ *
+ * `NtCurrentTeb()` в PE-половине — это ЧТЕНИЕ x18 (include/winnt.h:2498:
+ * `register struct _TEB *__wine_current_teb __asm__("x18")`).  Значит эта печать
+ * и есть прибор «x18 на этом пути», которого не хватало ШАГ-у 2.  Сверять её надо
+ * с unix-стороной (macrunner-shag4-cpuarea-set / macrunner-shag4-ec), где TEB берётся
+ * из pthread-ключа, а не из регистра.  MESSAGE() в PE-половине ARM64EC доказан
+ * (см. комментарий у macrunner-flush-probe, строка 451). */
+static void macrunner_shag4_pe_teb( const char *где )
+{
+    TEB *teb = NtCurrentTeb();
+    CHPE_V2_CPU_AREA_INFO *area = teb ? teb->ChpeV2CpuAreaInfo : NULL;
+
+    MESSAGE( "macrunner-shag4-pe: где=%s teb(x18)=%p chpe=%p chpe_off=%#x insim=%u ctx=%p "
+             "стек=%p-%p\n", где, teb, area,
+             (unsigned)FIELD_OFFSET(TEB, ChpeV2CpuAreaInfo),
+             area ? (unsigned)area->InSimulation : 0xffu,
+             area ? (void *)area->ContextAmd64 : NULL,
+             area ? (void *)(ULONG_PTR)area->EmulatorStackLimit : NULL,
+             area ? (void *)(ULONG_PTR)area->EmulatorStackBase : NULL );
+}
+
 /*******************************************************************
  *         arm64ec_process_init
  */
@@ -183,9 +402,13 @@ NTSTATUS arm64ec_process_init( HMODULE module )
     CHPEV2_PROCESS_INFO *info = (CHPEV2_PROCESS_INFO *)(RtlGetCurrentPeb() + 1);
     const IMAGE_ARM64EC_METADATA *metadata = arm64ec_get_module_metadata( module );
 
+    macrunner_shag4_pe_teb( "process-init-вход" );
     __os_arm64x_dispatch_call_no_redirect = RtlFindExportedRoutineByName( module, "ExitToX64" );
     __os_arm64x_dispatch_fptr = RtlFindExportedRoutineByName( module, "DispatchJump" );
     __os_arm64x_dispatch_ret = RtlFindExportedRoutineByName( module, "RetToEntryThunk" );
+    MESSAGE( "macrunner-shag4-dispatch: module=%p ExitToX64=%p DispatchJump=%p RetToEntryThunk=%p\n",
+             module, __os_arm64x_dispatch_call_no_redirect, __os_arm64x_dispatch_fptr,
+             __os_arm64x_dispatch_ret );
 
 #define GET_PTR(name) p ## name = arm64ec_redirect_ptr( module, \
                                       RtlFindExportedRoutineByName( module, #name ), metadata )
@@ -223,9 +446,11 @@ NTSTATUS arm64ec_process_init( HMODULE module )
     }
     if (!status && pThreadInit) status = pThreadInit();
     leave_syscall_callback();
+    macrunner_hb_init_x18_tls_restore();   /* discover TSD offset before check_call goes live */
     __os_arm64x_check_call = arm64x_check_call;
     __os_arm64x_check_icall = arm64x_check_call;
     __os_arm64x_check_icall_cfg = arm64x_check_call;
+    macrunner_shag4_pe_teb( "process-init-выход" );
     return status;
 }
 
@@ -237,6 +462,7 @@ NTSTATUS arm64ec_thread_init(void)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
+    macrunner_shag4_pe_teb( "thread-init" );
     enter_syscall_callback();
     if (pThreadInit) status = pThreadInit();
     leave_syscall_callback();
@@ -261,6 +487,33 @@ IMAGE_ARM64EC_METADATA *arm64ec_get_module_metadata( HMODULE module )
     return (IMAGE_ARM64EC_METADATA *)cfg->CHPEMetadataPointer;
 }
 
+
+
+/* MacRunner 19.08, лейн ЛЕСТНИЦА итерация 2575, по заказу лейна ЧТЕЦ (его итерация 186).
+ * ВОПРОС: Wine передаёт нам ДИАПАЗОН на четырёх путях, а наши тела его выбрасывают
+ * (unix_flush_instruction_cache_impl = `return STATUS_SUCCESS;` в ОБОИХ деревьях).
+ * Сколько раз эти пути проходятся за прогон — не измерено ничем.
+ * ★ Особо: CrossProcessMemoryWrite — ЧУЖОЙ процесс пишет в нашу память; перехват
+ * VirtualProtect (итерация 2573) этот случай НЕ ловит, там права никто не меняет.
+ * Печать по трём требованиям заказа, каждое из уже оплаченной ошибки:
+ *   ПОПРАВКА 2591: было fprintf(stderr) — и сборка отказала с итерации 2575, никем не
+ *   прочитанная: `undefined symbol: fprintf (EC symbol)` и `__acrt_iob_func (EC symbol)`
+ *   при линковке dlls/ntdll/aarch64-windows/ntdll.dll. Правило «печатать в stderr, а не
+ *   через каналы wine» (02.08) относится к UNIX-стороне, где есть libc. Этот файл идёт в
+ *   PE-сторону ARM64EC, где CRT не слинкован вовсе. Здесь работает MESSAGE(): он уже
+ *   применён в этом файле и 74 раза в соседнем signal_arm64.c, печатает БЕЗУСЛОВНО и
+ *   доходит до наших журналов — в отличие от ERR(), про который правило 02.08 и написано;
+ *   имя маркера ЛАТИНИЦЕЙ — strings рвёт строку на кириллице, grep даёт ложный ноль;
+ *   первый вызов + период, НЕ atexit — под timeout+wineserver -k atexit не вызывается.
+ * Поведение не меняется: только счётчики и печать. */
+static unsigned long mr_flush_direct, mr_flush_xproc, mr_flush_heavy, mr_xproc_dirty;
+static void mr_flush_probe( const char *site )
+{
+    unsigned long total = mr_flush_direct + mr_flush_xproc + mr_flush_heavy + mr_xproc_dirty;
+    if (total == 1 || (total & 0xFFFul) == 0)
+        MESSAGE( "macrunner-flush-probe site=%s direct=%lu xproc=%lu heavy=%lu dirty=%lu\n",
+                 site, mr_flush_direct, mr_flush_xproc, mr_flush_heavy, mr_xproc_dirty );
+}
 
 static void update_hybrid_pointer( void *module, const IMAGE_SECTION_HEADER *sec, UINT rva, void *ptr )
 {
@@ -310,6 +563,21 @@ void arm64ec_update_hybrid_metadata( void *module, IMAGE_NT_HEADERS *nt,
             SET_FUNC( GetX64InformationFunctionPointer, __os_arm64x_get_x64_information );
             SET_FUNC( SetX64InformationFunctionPointer, __os_arm64x_set_x64_information );
 #undef SET_FUNC
+            /* ★ ШАГ-4: КУДА и ЧТО легло.  Стена x64 стоит в `enter_jit`, а попасть туда
+             * можно ТОЛЬКО через один из этих слотов — значит их значения обязаны быть
+             * в журнале, иначе выбор между объяснениями делается на глаз. */
+            MESSAGE( "macrunner-shag4-hybrid: module=%p сек=%.8s no_redirect rva=%#lx слот=%p знач=%p "
+                     "| fptr rva=%#lx знач=%p | ret rva=%#lx знач=%p | call rva=%#lx icall rva=%#lx\n",
+                     module, sec->Name,
+                     (unsigned long)metadata->__os_arm64x_dispatch_call_no_redirect,
+                     get_rva( module, metadata->__os_arm64x_dispatch_call_no_redirect ),
+                     __os_arm64x_dispatch_call_no_redirect,
+                     (unsigned long)metadata->__os_arm64x_dispatch_fptr,
+                     __os_arm64x_dispatch_fptr,
+                     (unsigned long)metadata->__os_arm64x_dispatch_ret,
+                     __os_arm64x_dispatch_ret,
+                     (unsigned long)metadata->__os_arm64x_dispatch_call,
+                     (unsigned long)metadata->__os_arm64x_dispatch_icall );
 
             NtProtectVirtualMemory( NtCurrentProcess(), &base, &size, protect_old, &protect_old );
             return;
@@ -387,7 +655,7 @@ DEFINE_SYSCALL(NtCreateKeyedEvent, (HANDLE *handle, ACCESS_MASK access, const OB
 DEFINE_SYSCALL(NtCreateLowBoxToken, (HANDLE *token_handle, HANDLE token, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr, SID *sid, ULONG count, SID_AND_ATTRIBUTES *capabilities, ULONG handle_count, HANDLE *handle))
 DEFINE_SYSCALL(NtCreateMailslotFile, (HANDLE *handle, ULONG access, OBJECT_ATTRIBUTES *attr, IO_STATUS_BLOCK *io, ULONG options, ULONG quota, ULONG msg_size, LARGE_INTEGER *timeout))
 DEFINE_SYSCALL(NtCreateMutant, (HANDLE *handle, ACCESS_MASK access, const OBJECT_ATTRIBUTES *attr, BOOLEAN owned))
-DEFINE_SYSCALL(NtCreateNamedPipeFile, (HANDLE *handle, ULONG access, OBJECT_ATTRIBUTES *attr, IO_STATUS_BLOCK *io, ULONG sharing, ULONG dispo, ULONG options, ULONG pipe_type, ULONG read_mode, ULONG completion_mode, ULONG max_inst, ULONG inbound_quota, ULONG outbound_quota, LARGE_INTEGER *timeout))
+DEFINE_WRAPPED_SYSCALL(NtCreateNamedPipeFile, (HANDLE *handle, ULONG access, OBJECT_ATTRIBUTES *attr, IO_STATUS_BLOCK *io, ULONG sharing, ULONG dispo, ULONG options, const struct __wine_nt_named_pipe_extra *extra))
 DEFINE_SYSCALL(NtCreatePagingFile, (UNICODE_STRING *name, LARGE_INTEGER *min_size, LARGE_INTEGER *max_size, LARGE_INTEGER *actual_size))
 DEFINE_SYSCALL(NtCreatePort, (HANDLE *handle, OBJECT_ATTRIBUTES *attr, ULONG info_len, ULONG data_len, ULONG *reserved))
 DEFINE_SYSCALL(NtCreateProcessEx, (HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBUTES *attr, HANDLE parent, ULONG flags, HANDLE section, HANDLE debug, HANDLE token, ULONG reserved))
@@ -445,7 +713,7 @@ DEFINE_SYSCALL(NtLockVirtualMemory, (HANDLE process, PVOID *addr, SIZE_T *size, 
 DEFINE_SYSCALL(NtMakePermanentObject, (HANDLE handle))
 DEFINE_SYSCALL(NtMakeTemporaryObject, (HANDLE handle))
 DEFINE_SYSCALL(NtMapUserPhysicalPagesScatter, (void **addr, SIZE_T count, ULONG_PTR *pages))
-DEFINE_WRAPPED_SYSCALL(NtMapViewOfSection, (HANDLE handle, HANDLE process, PVOID *addr_ptr, ULONG_PTR zero_bits, SIZE_T commit_size, const LARGE_INTEGER *offset_ptr, SIZE_T *size_ptr, SECTION_INHERIT inherit, ULONG alloc_type, ULONG protect))
+DEFINE_WRAPPED_SYSCALL(NtMapViewOfSection, (HANDLE handle, HANDLE process, PVOID *addr_ptr, ULONG_PTR zero_bits, SIZE_T commit_size, const LARGE_INTEGER *offset_ptr, SIZE_T *size_ptr, const struct __wine_nt_section_extra *extra))
 DEFINE_WRAPPED_SYSCALL(NtMapViewOfSectionEx, (HANDLE handle, HANDLE process, PVOID *addr_ptr, const LARGE_INTEGER *offset_ptr, SIZE_T *size_ptr, ULONG alloc_type, ULONG protect, MEM_EXTENDED_PARAMETER *parameters, ULONG count))
 DEFINE_SYSCALL(NtNotifyChangeDirectoryFile, (HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc_context, IO_STATUS_BLOCK *iosb, void *buffer, ULONG buffer_size, ULONG filter, BOOLEAN subtree))
 DEFINE_SYSCALL(NtNotifyChangeKey, (HANDLE key, HANDLE event, PIO_APC_ROUTINE apc, void *apc_context, IO_STATUS_BLOCK *io, ULONG filter, BOOLEAN subtree, void *buffer, ULONG length, BOOLEAN async))
@@ -675,7 +943,10 @@ NTSTATUS SYSCALL_API NtFlushInstructionCache( HANDLE process, const void *addr, 
         if (!RtlIsCurrentProcess( process ))
             send_cross_process_notification( process, CrossProcessFlushCache, addr, size, 0 );
         else if (pBTCpu64FlushInstructionCache)
+        {
+            mr_flush_direct++; mr_flush_probe( "direct" );
             pBTCpu64FlushInstructionCache( addr, size );
+        }
         leave_syscall_callback();
     }
     return status;
@@ -727,13 +998,28 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size, 
     *ret_status = status;
 }
 
+/* The public/hybrid entries must match Windows, not the private eight-argument
+ * Unix ABI. In particular, x64 argument eight is a value, never an extra pointer. */
+NTSTATUS SYSCALL_API NtCreateNamedPipeFile( HANDLE *handle, ULONG access, OBJECT_ATTRIBUTES *attr,
+                                          IO_STATUS_BLOCK *io, ULONG sharing, ULONG dispo, ULONG options,
+                                          ULONG pipe_type, ULONG read_mode, ULONG completion_mode,
+                                          ULONG max_inst, ULONG inbound_quota, ULONG outbound_quota,
+                                          LARGE_INTEGER *timeout )
+{
+    const struct __wine_nt_named_pipe_extra extra =
+        { pipe_type, read_mode, completion_mode, max_inst, inbound_quota, outbound_quota, timeout };
+
+    return syscall_NtCreateNamedPipeFile( handle, access, attr, io, sharing, dispo, options, &extra );
+}
+
 NTSTATUS SYSCALL_API NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *addr_ptr,
                                          ULONG_PTR zero_bits, SIZE_T commit_size,
                                          const LARGE_INTEGER *offset, SIZE_T *size_ptr,
                                          SECTION_INHERIT inherit, ULONG alloc_type, ULONG protect )
 {
+    const struct __wine_nt_section_extra extra = { inherit, alloc_type, protect };
     NTSTATUS status = syscall_NtMapViewOfSection( handle, process, addr_ptr, zero_bits, commit_size,
-                                                  offset, size_ptr, inherit, alloc_type, protect );
+                                                  offset, size_ptr, &extra );
 
     if (NT_SUCCESS(status) && RtlIsCurrentProcess( process ) && enter_syscall_callback())
     {
@@ -884,6 +1170,8 @@ NTSTATUS SYSCALL_API NtUnmapViewOfSectionEx( HANDLE process, void *addr, ULONG f
 }
 
 
+/* Always target the public Windows-ABI adapters, never syscall_* packed stubs.
+ * hybrid_patchable generates the matching 10/14-argument x64 entry thunks. */
 asm( ".section .rdata, \"dr\"\n\t"
      ".balign 8\n\t"
      ".globl arm64ec_syscalls\n"
@@ -988,14 +1276,17 @@ void WINAPI ProcessPendingCrossProcessEmulatorWork(void)
             break;
         case CrossProcessFlushCache:
             if (!pBTCpu64FlushInstructionCache) break;
+            mr_flush_xproc++; mr_flush_probe( "xproc-flush" );
             pBTCpu64FlushInstructionCache( (void *)entry->addr, entry->size );
             break;
         case CrossProcessFlushCacheHeavy:
             if (!pFlushInstructionCacheHeavy) break;
+            mr_flush_heavy++; mr_flush_probe( "xproc-heavy" );
             pFlushInstructionCacheHeavy( (void *)entry->addr, entry->size );
             break;
         case CrossProcessMemoryWrite:
             if (!pBTCpu64NotifyMemoryDirty) break;
+            mr_xproc_dirty++; mr_flush_probe( "xproc-dirty" );
             pBTCpu64NotifyMemoryDirty( (void *)entry->addr, entry->size );
             break;
         }
@@ -1034,6 +1325,30 @@ static NTSTATUS virtual_unwind( ULONG type, DISPATCHER_CONTEXT_ARM64EC *dispatch
     nonvol_regs->GpNvRegs[9]  = 0;
     nonvol_regs->GpNvRegs[10] = context->Fp;
     for (i = 0; i < 8; i++) nonvol_regs->FpNvRegs[i] = context->V[i + 8].D[0];
+
+    if (macrunner_hb_is_non_module_host_boundary_pc( pc ))
+    {
+        static unsigned int report_count;
+        const EXCEPTION_RECORD *rec = macrunner_hb_current_exception_record;
+        LDR_DATA_TABLE_ENTRY *module = NULL;
+        NTSTATUS ldr_status = LdrFindEntryForAddress( (void *)(ULONG_PTR)pc, &module );
+        DWORD tid = HandleToULong( NtCurrentTeb()->ClientId.UniqueThread );
+
+        if (report_count++ < 64)
+        {
+            MESSAGE( "macrunner-hb-seh-host-boundary: pc=%p lr=%p sp=%016I64x\n",
+                     (void *)pc, (void *)context->Lr, context->Sp );
+            MESSAGE( "macrunner-hb-seh-host-boundary-detail: side=arm64ec tid=%04lx pc=%p lr=%p "
+                     "sp=%016I64x x64_rip=%p x64_rsp=%p exception=%08lx flags=%08lx "
+                     "ldr_status=%08lx module=%p resume=stop-unwind\n",
+                     tid, (void *)pc, (void *)context->Lr, context->Sp,
+                     (void *)context->AMD64_Context.Rip, (void *)context->AMD64_Context.Rsp,
+                     rec ? rec->ExceptionCode : 0, rec ? rec->ExceptionFlags : 0,
+                     ldr_status, module ? module->DllBase : NULL );
+        }
+        macrunner_hb_stop_unwind_at_host_boundary( dispatch, context );
+        return STATUS_SUCCESS;
+    }
 
     dispatch->FunctionEntry = RtlLookupFunctionEntry( pc, &dispatch->ImageBase, dispatch->HistoryTable );
 
@@ -1143,6 +1458,7 @@ static DWORD __attribute__((naked)) call_seh_handler( EXCEPTION_RECORD *rec, ULO
 NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
 {
     EXCEPTION_REGISTRATION_RECORD *teb_frame = NtCurrentTeb()->Tib.ExceptionList;
+    const EXCEPTION_RECORD *old_record = macrunner_hb_current_exception_record;
     DISPATCHER_CONTEXT_NONVOLREG_ARM64 nonvol_regs;
     UNWIND_HISTORY_TABLE table;
     DISPATCHER_CONTEXT_ARM64EC dispatch;
@@ -1151,6 +1467,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
     ULONG_PTR frame;
     DWORD res;
 
+    macrunner_hb_current_exception_record = rec;
     context.AMD64_Context = *orig_context;
     context.ContextFlags &= ~0x40; /* Clear xstate flag. */
 
@@ -1162,7 +1479,7 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
     for (;;)
     {
         status = virtual_unwind( UNW_FLAG_EHANDLER, &dispatch, &context );
-        if (status != STATUS_SUCCESS) return status;
+        if (status != STATUS_SUCCESS) goto done;
 
     unwind_done:
         if (!dispatch.EstablisherFrame) break;
@@ -1187,8 +1504,8 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
             switch (res)
             {
             case ExceptionContinueExecution:
-                if (rec->ExceptionFlags & EXCEPTION_NONCONTINUABLE) return STATUS_NONCONTINUABLE_EXCEPTION;
-                return STATUS_SUCCESS;
+                status = (rec->ExceptionFlags & EXCEPTION_NONCONTINUABLE) ? STATUS_NONCONTINUABLE_EXCEPTION : STATUS_SUCCESS;
+                goto done;
             case ExceptionContinueSearch:
                 break;
             case ExceptionNestedException:
@@ -1201,7 +1518,8 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
                                   &context.AMD64_Context, &dispatch.HandlerData, &frame, NULL );
                 goto unwind_done;
             default:
-                return STATUS_INVALID_DISPOSITION;
+                status = STATUS_INVALID_DISPOSITION;
+                goto done;
             }
         }
         /* hack: call wine handlers registered in the tib list */
@@ -1216,8 +1534,8 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
             switch (res)
             {
             case ExceptionContinueExecution:
-                if (rec->ExceptionFlags & EXCEPTION_NONCONTINUABLE) return STATUS_NONCONTINUABLE_EXCEPTION;
-                return STATUS_SUCCESS;
+                status = (rec->ExceptionFlags & EXCEPTION_NONCONTINUABLE) ? STATUS_NONCONTINUABLE_EXCEPTION : STATUS_SUCCESS;
+                goto done;
             case ExceptionContinueSearch:
                 break;
             case ExceptionNestedException:
@@ -1231,14 +1549,19 @@ NTSTATUS call_seh_handlers( EXCEPTION_RECORD *rec, CONTEXT *orig_context )
                 teb_frame = teb_frame->Prev;
                 goto unwind_done;
             default:
-                return STATUS_INVALID_DISPOSITION;
+                status = STATUS_INVALID_DISPOSITION;
+                goto done;
             }
             teb_frame = teb_frame->Prev;
         }
 
         if (context.Sp == (ULONG64)NtCurrentTeb()->Tib.StackBase) break;
     }
-    return STATUS_UNHANDLED_EXCEPTION;
+    status = STATUS_UNHANDLED_EXCEPTION;
+
+done:
+    macrunner_hb_current_exception_record = old_record;
+    return status;
 }
 
 
@@ -1279,14 +1602,19 @@ static void dispatch_syscall( ARM64_NT_CONTEXT *context )
 
 static void * __attribute__((used)) prepare_exception_arm64ec( EXCEPTION_RECORD *rec, ARM64EC_NT_CONTEXT *context, ARM64_NT_CONTEXT *arm_ctx )
 {
+    TEB *teb = NtCurrentTeb();
+    void *dispatcher = NULL;
+
     if (rec->ExceptionCode == STATUS_EMULATION_SYSCALL) dispatch_syscall( arm_ctx );
     context_arm_to_x64( context, arm_ctx );
     if (pResetToConsistentState) pResetToConsistentState( rec, &context->AMD64_Context, arm_ctx );
     /* call x64 dispatcher if the thunk or the function pointer was modified */
-    if (pWow64PrepareForException || memcmp( KiUserExceptionDispatcher_thunk, KiUserExceptionDispatcher_orig,
-                                             sizeof(KiUserExceptionDispatcher_orig) ))
-        return KiUserExceptionDispatcher_thunk;
-    return NULL;
+    if (__os_arm64x_dispatch_call_no_redirect &&
+        (pWow64PrepareForException || memcmp( KiUserExceptionDispatcher_thunk, KiUserExceptionDispatcher_orig,
+                                              sizeof(KiUserExceptionDispatcher_orig) )))
+        dispatcher = KiUserExceptionDispatcher_thunk;
+    __asm__ volatile( "mov x18, %0" :: "r"(teb) : "memory" );
+    return dispatcher;
 }
 
 /*******************************************************************
@@ -1356,6 +1684,8 @@ __ASM_GLOBAL_FUNC( "#KiUserCallbackDispatcher",
                    ".seh_handler user_callback_handler, @except\n\t"
                    "ldr x0, [sp]\n\t"             /* args */
                    "ldp w1, w2, [sp, #0x08]\n\t"  /* len, id */
+                   /* MacRunner: re-materialize x18 (TEB) from TLS before the PEB deref. */
+                   MACRUNNER_HB_RESTORE_X18_FROM_TLS
                    "ldr x3, [x18, 0x60]\n\t"      /* peb */
                    "ldr x3, [x3, 0x58]\n\t"       /* peb->KernelCallbackTable */
                    "ldr x15, [x3, x2, lsl #3]\n\t"
@@ -1878,6 +2208,9 @@ static void __attribute__((naked)) arm64x_check_call(void)
 {
     asm( ".seh_proc \"#arm64x_check_call\"\n\t"
          ".seh_endprologue\n\t"
+         /* MacRunner: re-materialize x18 (TEB) from TLS — xnu zeroes it on any kernel entry,
+          * and this helper is on essentially every x64<->EC crossing (981 x18-faults/boot here). */
+         MACRUNNER_HB_RESTORE_X18_FROM_TLS
          /* check for EC code */
          "ldr x16, [x18, #0x60]\n\t"        /* peb */
          "lsr x17, x11, #18\n\t"            /* dest / page_size / 64 */
@@ -1936,6 +2269,27 @@ static void __attribute__((naked)) arm64x_check_call(void)
          "b \"#arm64x_check_call\"\n"       /* restart checks with jump destination */
          /* not a special sequence, call the exit thunk */
          ".Lexit:\n\t"
+         /* MacRunner Lane A (+2 EC entry-thunk recovery): an ARM64EC import can reach
+          * us with the CodeMap type tag still set in the low 2 bits of the call target
+          * (dest = entry_thunk | type).  That tag defeats the `tst dest,#15` alignment
+          * gate above, so a *tagged fast-forward entry thunk* falls through to here and
+          * would be emulated mid-instruction via the exit thunk (the recorded spin/OOM
+          * below Mono).  If stripping the tag yields a 16-aligned address whose first
+          * 8 bytes are the fast-forward prologue, adopt the aligned thunk and restart:
+          * the ffwd path then performs the proper x64->ARM64EC transition.  Genuine
+          * (untagged) exit-thunk targets and any non-ffwd address are left untouched. */
+         "tst x11, #3\n\t"                  /* tag bits set? */
+         "b.eq .Lexit_real\n\t"
+         "tst x11, #12\n\t"                 /* misalignment confined to the tag bits? */
+         "b.ne .Lexit_real\n\t"
+         "bic x16, x11, #3\n\t"             /* aligned entry-thunk candidate */
+         "ldr x17, [x16]\n\t"
+         "ldr x9, .Lffwd_seq\n\t"
+         "cmp x17, x9\n\t"                  /* first 8 bytes == ffwd prologue? */
+         "b.ne .Lexit_real\n\t"
+         "mov x11, x16\n\t"
+         "b \"#arm64x_check_call\"\n\t"     /* restart on the aligned thunk */
+         ".Lexit_real:\n\t"
          "mov x9, x11\n\t"
          "mov x11, x10\n\t"
          ".Ldone:\n\t"
@@ -2093,6 +2447,8 @@ void WINAPI LdrInitializeThunk( CONTEXT *arm_context, ULONG_PTR unk2, ULONG_PTR 
 {
     ARM64EC_NT_CONTEXT context;
 
+    MESSAGE( "macrunner-hb-ldr-entry: arm_context=%p unk2=%p unk3=%p unk4=%p\n",
+         arm_context, (void *)unk2, (void *)unk3, (void *)unk4 );
     if (!__os_arm64x_check_call)
     {
         __os_arm64x_check_call = arm64x_check_call_early;
@@ -2103,8 +2459,35 @@ void WINAPI LdrInitializeThunk( CONTEXT *arm_context, ULONG_PTR unk2, ULONG_PTR 
     }
 
     context_arm_to_x64( &context, (ARM64_NT_CONTEXT *)arm_context );
+    MESSAGE( "macrunner-hb-ldr-after-xlat: x0=%p x1=%p rcx=%p rdx=%p rip=%p rsp=%p\n",
+         (void *)context.X0, (void *)context.X1, (void *)context.AMD64_Context.Rcx,
+         (void *)context.AMD64_Context.Rdx, (void *)context.AMD64_Context.Rip,
+         (void *)context.AMD64_Context.Rsp );
     loader_init( &context.AMD64_Context, (void **)&context.X0 );
+    MESSAGE( "macrunner-hb-ldr-after-loader-init: x0=%p x1=%p rcx=%p rdx=%p rip=%p rsp=%p entry_x64=%u\n",
+         (void *)context.X0, (void *)context.X1, (void *)context.AMD64_Context.Rcx,
+         (void *)context.AMD64_Context.Rdx, (void *)context.AMD64_Context.Rip,
+         (void *)context.AMD64_Context.Rsp,
+         macrunner_hb_x64_loader_entry( (void *)(ULONG_PTR)context.X0 ) );
+    macrunner_shag4_pe_teb( "перед-входом-в-гостя" );
     TRACE_(relay)( "\1Starting thread proc %p (arg=%p)\n", (void *)context.X0, (void *)context.X1 );
+    if (macrunner_hb_x64_loader_entry( (void *)(ULONG_PTR)context.X0 ))
+    {
+        struct macrunner_hb_x64_thread_entry_params params = {0};
+        NTSTATUS status;
+
+        params.entry = (void *)(ULONG_PTR)context.X0;
+        params.arg = (void *)(ULONG_PTR)context.X1;
+        MESSAGE( "macrunner-hb-ldr-thread-entry: entry=%p arg=%p rip=%p rsp=%p\n",
+             params.entry, params.arg, (void *)context.AMD64_Context.Rip,
+             (void *)context.AMD64_Context.Rsp );
+        status = WINE_UNIX_CALL( unix_macrunner_hb_x64_thread_entry, &params );
+        MESSAGE( "macrunner-hb-ldr-thread-return: entry=%p arg=%p status=%lx ret=%s blocks=%s steps=%s\n",
+             params.entry, params.arg, (unsigned long)status, wine_dbgstr_longlong(params.ret),
+             wine_dbgstr_longlong(params.blocks), wine_dbgstr_longlong(params.steps) );
+        if (status) RtlExitUserThread( status );
+        RtlExitUserThread( params.ret );
+    }
     NtContinue( &context.AMD64_Context, TRUE );
 }
 

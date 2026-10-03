@@ -40,7 +40,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(process);
 
-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)WINE_USER_SHARED_DATA_ADDRESS;
 
 typedef struct
 {
@@ -61,6 +61,20 @@ SYSTEM_BASIC_INFORMATION system_info = { 0 };
 #define PDB32_WIN32S_PROC   0x8000  /* Win32s process */
 
 static DWORD (WINAPI *wait_input_idle)( HANDLE process, DWORD timeout );
+static APPLICATION_RECOVERY_CALLBACK recovery_callback;
+static void *recovery_param;
+static DWORD recovery_ping_interval;
+static DWORD recovery_flags;
+static BOOL recovery_in_progress;
+static BOOL recovery_finished;
+static CRITICAL_SECTION recovery_section;
+static CRITICAL_SECTION_DEBUG recovery_section_debug =
+{
+    0, 0, &recovery_section,
+    { &recovery_section_debug.ProcessLocksList, &recovery_section_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": recovery_section") }
+};
+static CRITICAL_SECTION recovery_section = { &recovery_section_debug, -1, 0, 0, 0, 0 };
 
 /***********************************************************************
  *           RegisterWaitForInputIdle   (KERNEL32.@)
@@ -524,16 +538,6 @@ BOOL WINAPI CmdBatNotification( BOOL bBatchRunning )
     return FALSE;
 }
 
-/***********************************************************************
- *           RegisterApplicationRestart       (KERNEL32.@)
- */
-HRESULT WINAPI RegisterApplicationRestart(PCWSTR pwzCommandLine, DWORD dwFlags)
-{
-    FIXME("(%s,%ld)\n", debugstr_w(pwzCommandLine), dwFlags);
-
-    return S_OK;
-}
-
 /**********************************************************************
  *           WTSGetActiveConsoleSessionId     (KERNEL32.@)
  */
@@ -576,8 +580,12 @@ BOOL WINAPI SetProcessDEPPolicy( DWORD flags )
  */
 VOID WINAPI ApplicationRecoveryFinished(BOOL success)
 {
-    FIXME(": stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    TRACE( "%u\n", success );
+
+    RtlEnterCriticalSection( &recovery_section );
+    recovery_finished = success;
+    recovery_in_progress = FALSE;
+    RtlLeaveCriticalSection( &recovery_section );
 }
 
 /**********************************************************************
@@ -585,9 +593,19 @@ VOID WINAPI ApplicationRecoveryFinished(BOOL success)
  */
 HRESULT WINAPI ApplicationRecoveryInProgress(PBOOL canceled)
 {
-    FIXME(":%p stub\n", canceled);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return E_FAIL;
+    BOOL in_progress;
+
+    TRACE( "%p\n", canceled );
+
+    if (!canceled) return E_INVALIDARG;
+
+    RtlEnterCriticalSection( &recovery_section );
+    in_progress = recovery_in_progress;
+    RtlLeaveCriticalSection( &recovery_section );
+
+    if (!in_progress) return E_FAIL;
+    *canceled = FALSE;
+    return S_OK;
 }
 
 /**********************************************************************
@@ -595,7 +613,39 @@ HRESULT WINAPI ApplicationRecoveryInProgress(PBOOL canceled)
  */
 HRESULT WINAPI RegisterApplicationRecoveryCallback(APPLICATION_RECOVERY_CALLBACK callback, PVOID param, DWORD pingint, DWORD flags)
 {
-    FIXME("%p, %p, %ld, %ld: stub, faking success\n", callback, param, pingint, flags);
+    TRACE( "%p, %p, %ld, %ld\n", callback, param, pingint, flags );
+
+    if (!callback || flags || pingint > RECOVERY_MAX_PING_INTERVAL) return E_INVALIDARG;
+    if (!pingint) pingint = RECOVERY_DEFAULT_PING_INTERVAL;
+
+    RtlEnterCriticalSection( &recovery_section );
+    recovery_callback = callback;
+    recovery_param = param;
+    recovery_ping_interval = pingint;
+    recovery_flags = flags;
+    recovery_finished = FALSE;
+    recovery_in_progress = FALSE;
+    RtlLeaveCriticalSection( &recovery_section );
+
+    return S_OK;
+}
+
+/**********************************************************************
+ *           UnregisterApplicationRecoveryCallback     (KERNEL32.@)
+ */
+HRESULT WINAPI UnregisterApplicationRecoveryCallback(void)
+{
+    TRACE( "\n" );
+
+    RtlEnterCriticalSection( &recovery_section );
+    recovery_callback = NULL;
+    recovery_param = NULL;
+    recovery_ping_interval = 0;
+    recovery_flags = 0;
+    recovery_finished = FALSE;
+    recovery_in_progress = FALSE;
+    RtlLeaveCriticalSection( &recovery_section );
+
     return S_OK;
 }
 
@@ -848,16 +898,6 @@ BOOL WINAPI GetProcessDEPPolicy(HANDLE process, LPDWORD flags, PBOOL permanent)
 
     if (permanent) *permanent = (dep_flags & MEM_EXECUTE_OPTION_PERMANENT) != 0;
     return TRUE;
-}
-
-/***********************************************************************
- *           UnregisterApplicationRestart       (KERNEL32.@)
- */
-HRESULT WINAPI UnregisterApplicationRestart(void)
-{
-    FIXME(": stub\n");
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return S_OK;
 }
 
 /***********************************************************************

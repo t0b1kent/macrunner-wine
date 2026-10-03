@@ -539,7 +539,7 @@ static void test_cross_process_notifications( HANDLE process, ULONG_PTR section,
     ret = DuplicateHandle( process, (HANDLE)section, GetCurrentProcess(), &mapping,
                            0, FALSE, DUPLICATE_SAME_ACCESS );
     ok( ret, "DuplicateHandle failed %lu\n", GetLastError() );
-    status = NtMapViewOfSection( mapping, GetCurrentProcess(), &addr, 0, 0, NULL,
+    status = WINE_NT_MAP_VIEW( mapping, GetCurrentProcess(), &addr, 0, 0, NULL,
                                  &size, ViewShare, 0, PAGE_READWRITE );
     ok( !status, "NtMapViewOfSection failed %lx\n", status );
     ok( size == 0x4000, "unexpected size %Ix\n", size );
@@ -560,7 +560,7 @@ static void test_cross_process_notifications( HANDLE process, ULONG_PTR section,
         UnmapViewOfFile( addr2 );
         addr2 = NULL;
         size = 0;
-        status = NtMapViewOfSection( mapping, GetCurrentProcess(), &addr2, 0, 0, NULL,
+        status = WINE_NT_MAP_VIEW( mapping, GetCurrentProcess(), &addr2, 0, 0, NULL,
                                      &size, ViewShare, 0, PAGE_READWRITE );
         ok( !status, "NtMapViewOfSection failed %lx\n", status );
         ok( !memcmp( addr2, addr, size ), "wrong data\n" );
@@ -759,7 +759,7 @@ static void test_cross_process_notifications( HANDLE process, ULONG_PTR section,
     addr = NULL;
     size = 0;
     offset.QuadPart = 0;
-    status = NtMapViewOfSection( mapping, process, &addr, 0, 0, &offset, &size, ViewShare, 0, PAGE_READONLY );
+    status = WINE_NT_MAP_VIEW( mapping, process, &addr, 0, 0, &offset, &size, ViewShare, 0, PAGE_READONLY );
     ok( NT_SUCCESS(status), "NtMapViewOfSection failed %lx\n", status );
     entry = pop_from_work_list( &list->work_list );
     ok( !entry, "list not empty\n" );
@@ -1784,7 +1784,7 @@ static void test_notifications( HMODULE module, CROSS_PROCESS_WORK_LIST *list )
         addr = NULL;
         size = 0;
         offset.QuadPart = 0;
-        status = NtMapViewOfSection( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
+        status = WINE_NT_MAP_VIEW( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
                                      ViewShare, 0, PAGE_READONLY );
         ok( NT_SUCCESS(status), "NtMapViewOfSection failed %lx\n", status );
         expect_notifications( results, 0, NULL, TRUE );
@@ -1795,7 +1795,7 @@ static void test_notifications( HMODULE module, CROSS_PROCESS_WORK_LIST *list )
         addr = NULL;
         size = 0;
         results[1] = STATUS_SUCCESS;
-        status = NtMapViewOfSection( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
+        status = WINE_NT_MAP_VIEW( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
                                      ViewShare, 0, PAGE_READONLY );
         ok( NT_SUCCESS(status), "NtMapViewOfSection failed %lx\n", status );
         expect.args[0] = results[2];  /* FIXME: first parameter unknown */
@@ -1806,7 +1806,7 @@ static void test_notifications( HMODULE module, CROSS_PROCESS_WORK_LIST *list )
         NtUnmapViewOfSection( GetCurrentProcess(), addr );
 
         results[1] = 0xdeadbeef;
-        status = NtMapViewOfSection( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
+        status = WINE_NT_MAP_VIEW( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
                                      ViewShare, 0, PAGE_READONLY );
 #ifdef _WIN64
         if (NtCurrentTeb()->ChpeV2CpuAreaInfo->InSyscallCallback)
@@ -1837,7 +1837,7 @@ static void test_notifications( HMODULE module, CROSS_PROCESS_WORK_LIST *list )
         addr = NULL;
         size = 0;
         offset.QuadPart = 0;
-        status = NtMapViewOfSection( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
+        status = WINE_NT_MAP_VIEW( mapping, GetCurrentProcess(), &addr, 0, 0, &offset, &size,
                                      ViewShare, 0, PAGE_READONLY );
         ok( NT_SUCCESS(status), "NtMapViewOfSection failed %lx\n", status );
         NtUnmapViewOfSection( GetCurrentProcess(), (char *)addr + 0x123 );

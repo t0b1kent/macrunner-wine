@@ -1,3 +1,93 @@
+# MacRunner Wine
+
+Public Wine source for [MacRunner releases](https://github.com/t0b1kent/macrunner-app/releases),
+based on CodeWeavers CrossOver 26.1.0 / Wine 11.0. MacRunner integrates native
+macOS Wine with [HyperBridge](https://github.com/t0b1kent/hyperbridge).
+
+Wine is **LGPL-2.1-or-later**: see [COPYING.LIB](COPYING.LIB) and [LICENSE](LICENSE).
+All upstream copyright, author and third-party notices are retained, including
+the original Wine README below and [its unchanged copy](docs/UPSTREAM-README.md).
+The retained source-only HyperBridge dependency is MIT-licensed; its license
+is in [third_party/hyperbridge/LICENSE](third_party/hyperbridge/LICENSE).
+
+History:
+
+- `crossover-26.1.0`: exact unmodified `sources/wine` import from the
+  [public CrossOver tarball](https://media.codeweavers.com/pub/crossover/source/crossover-sources-26.1.0.tar.gz),
+  SHA256 `e4ec87d5821a009dd1f1d2e36ffe2e24b8fcbae9516375ea42f95a16928ab8fa`.
+- `macrunner-1.0.7`: published 1.0.7 source patch plus selected release inputs,
+  portable recipes and cloud build. See [PROVENANCE](docs/PROVENANCE.md) and
+  [the precise archived source map](docs/release-source-map.json).
+
+## Build on native macOS ARM64
+
+Install Homebrew and Xcode or Command Line Tools first. The recipes use Python
+3.12 or later; bootstrap installs Homebrew Python. From a fresh checkout:
+
+```sh
+bash build-recipes/bootstrap.sh
+BUILD_JOBS=2 nice -n 20 bash build-recipes/build-wine-arm64ec-spike.sh
+```
+
+The recipe downloads **llvm-mingw 20260505**, verifies SHA256
+`050379de888f0c843787819dadf183df3693330a5724643919e9121f16355295`,
+and configures native arm64 with deployment target macOS 14.0, four PE
+architectures (`aarch64,arm64ec,x86_64,i386`), CoreAudio, no X11 and no tests.
+Homebrew provides Python, bison, flex, pkg-config, freetype, fontconfig, libpng,
+gstreamer, glib, gettext, gnutls, libusb, SDL2, ffmpeg and ccache.
+The recipe stages the unchanged Wine tree as `_build/source-wine` beside
+`_build/hyperbridge`, preserving the original relative include layout.
+It builds the archived HyperBridge source, then runs Wine `make` and `make install`.
+Everything remains inside `_toolchain`, `_build` and `_install` by default.
+
+To check configure without a full build:
+
+```sh
+bash build-recipes/configure.sh
+```
+
+`LLVM_MINGW_ROOT` can select an already extracted, SHA-verified 20260505
+toolchain. `WINE_BUILD` and `WINE_INSTALL` can select isolated output directories.
+The executable recipe is the portable equivalent of the published configure
+command and `build-wine-arm64ec-spike.sh`; no maintainer machine paths are needed.
+
+## Release source and overlays
+
+The published September tree differs from the selected release sources.
+This tree installs the five historical floor sources, the accepted Unix ntdll
+source/header map (including short `signal_arm64`, native-prefix/direct-resume
+headers, system fixes and ALIAS-L0 `virtual.c`), the selected WoW64/WoW64Win
+compiled inputs, loader `main.c/main.h`, and the cooperative wineserver sources.
+Those replacements are recorded with old/new SHA256 and archive paths in
+[release-source-map.json](docs/release-source-map.json). C/H/Makefile inputs remain
+byte-exact; build staging preserves dependency paths and applies the selected
+Wine-side probe header in the isolated sibling include tree.
+
+The original release combined builds from different dates and architectures;
+this is a clean compilation of their selected combined source state.
+Compiler/SDK and dependency drift, retained historical objects, PE stripping,
+configured paths and code signing prevent a promise of identical release bytes.
+See [RECOMPILE-CHECK](docs/RECOMPILE-CHECK.md). A completed full cloud build is
+required before claiming that this recipe builds all release modules.
+
+## GitHub Actions
+
+[build.yml](.github/workflows/build.yml) runs manually or on `macrunner-*` tags,
+with `contents: read`, no repository secrets and a 330-minute job limit.
+The coordinator measured `macos-15` as an ARM64 Apple M2 Pro virtual runner;
+the first step prints `uname -m` and CPU brand and rejects a non-ARM64 assignment.
+Homebrew dependency versions and the runner compiler/SDK are logged because
+they are not pinned to the historical release machine.
+
+Artifacts contain SHA256 of ntdll, win32u, wow64*, kernelbase, loaders and other
+selected outputs, raw build logs, toolchain versions and a comparison with
+[32 signed 1.0.7 reference hashes](docs/release-1.0.7-sha256.tsv).
+The comparison reports `MATCH`, `DIFFERENT` or `MISSING`; byte differences do
+not fail the build. Compile/configure/install failures still fail the job.
+Cloud verification is pending the curator's repository creation and push.
+
+## Original Wine README
+
 ## INTRODUCTION
 
 Wine is a program which allows running Microsoft Windows programs

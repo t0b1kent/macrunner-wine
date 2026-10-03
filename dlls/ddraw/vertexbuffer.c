@@ -375,11 +375,10 @@ static HRESULT WINAPI d3d_vertex_buffer7_Optimize(IDirect3DVertexBuffer7 *iface,
 
     TRACE("iface %p, device %p, flags %#lx.\n", iface, device, flags);
 
-    if (!hide)
-    {
-        FIXME("iface %p, device %p, flags %#lx stub!\n", iface, device, flags);
-        hide = TRUE;
-    }
+    /* Это НЕ заглушка: оптимизация буфера — необязательная подсказка драйверу,
+     * и единственное, что обязан сделать вызов, — пометить буфер оптимизированным,
+     * что и делается ниже. Прежний FIXME вводил в заблуждение при разборе журнала:
+     * функция выглядела недостачей, хотя контракт выполнен полностью. */
 
     /* We could forward this call to WineD3D and take advantage
      * of it once we use OpenGL vertex buffers
@@ -417,10 +416,16 @@ static HRESULT WINAPI d3d_vertex_buffer7_ProcessVerticesStrided(IDirect3DVertexB
         DWORD vertex_op, DWORD dst_idx, DWORD count, D3DDRAWPRIMITIVESTRIDEDDATA *data,
         DWORD fvf, IDirect3DDevice7 *device, DWORD flags)
 {
-    FIXME("iface %p, vertex_op %#lx, dst_idx %lu, count %lu, data %p, fvf %#lx, device %p, flags %#lx stub!\n",
+    FIXME("iface %p, vertex_op %#lx, dst_idx %lu, count %lu, data %p, fvf %#lx, device %p, flags %#lx.\n",
             iface, vertex_op, dst_idx, count, data, fvf, device, flags);
 
-    return DD_OK;
+    /* Обработка вершин из «расслоённых» массивов не реализована. Прежний DD_OK
+     * означал «вершины обработаны», хотя буфер оставался нетронутым — и
+     * приложение рисовало мусор, не понимая почему. Отказ честнее. */
+    if (!data || !count)
+        return DDERR_INVALIDPARAMS;
+
+    return DDERR_UNSUPPORTED;
 }
 
 /*****************************************************************************

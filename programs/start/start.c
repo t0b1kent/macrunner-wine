@@ -554,14 +554,34 @@ static void parse_command_line( int argc, WCHAR *argv[] )
 int __cdecl wmain (int argc, WCHAR *argv[])
 {
 	DWORD binary_type;
+	BOOL trace_start = GetEnvironmentVariableW(L"MACRUNNER_TRACE_START", NULL, 0) != 0;
 
         parse_command_line( argc, argv );
+        if (trace_start)
+        {
+            fprintf(stderr, "macrunner-start: after-parse file=%s params=%s dir=%s mask=0x%lx flags=0x%lx machine=0x%x\n",
+                    wine_dbgstr_w(opts.sei.lpFile), wine_dbgstr_w(opts.sei.lpParameters),
+                    wine_dbgstr_w(opts.sei.lpDirectory), opts.sei.fMask, opts.creation_flags, opts.machine);
+            fflush(stderr);
+        }
 
+        if (trace_start)
+        {
+            fprintf(stderr, "macrunner-start: before-GetBinaryType file=%s\n", wine_dbgstr_w(opts.sei.lpFile));
+            fflush(stderr);
+        }
         if (GetBinaryTypeW(opts.sei.lpFile, &binary_type)) {
                     WCHAR *commandline;
                     STARTUPINFOEXW si = {{ sizeof(si.StartupInfo) }};
                     PROCESS_INFORMATION process_information;
                     int len = lstrlenW(opts.sei.lpFile) + 4 + lstrlenW(opts.sei.lpParameters);
+
+                    if (trace_start)
+                    {
+                        fprintf(stderr, "macrunner-start: after-GetBinaryType ok type=0x%lx file=%s\n",
+                                binary_type, wine_dbgstr_w(opts.sei.lpFile));
+                        fflush(stderr);
+                    }
 
                     /* explorer on windows always quotes the filename when running a binary on windows (see bug 5224) so we have to use CreateProcessW in this case */
 
@@ -584,16 +604,37 @@ int __cdecl wmain (int argc, WCHAR *argv[])
                     si.StartupInfo.dwFlags |= STARTF_USESHOWWINDOW;
                     si.StartupInfo.lpTitle = opts.title;
 
+                    if (trace_start)
+                    {
+                        fprintf(stderr, "macrunner-start: before-CreateProcess app=%s cmd=%s dir=%s flags=0x%lx inherit=%u\n",
+                                wine_dbgstr_w(opts.sei.lpFile), wine_dbgstr_w(commandline),
+                                wine_dbgstr_w(opts.sei.lpDirectory), opts.creation_flags, opts.cp_inherit);
+                        fflush(stderr);
+                    }
                     if (!CreateProcessW( opts.sei.lpFile, commandline, NULL, NULL, opts.cp_inherit,
                                          opts.creation_flags, NULL, opts.sei.lpDirectory,
                                          &si.StartupInfo, &process_information ))
                     {
 			fatal_string_error(STRING_EXECFAIL, GetLastError(), opts.sei.lpFile);
                     }
+                    if (trace_start)
+                    {
+                        fprintf(stderr, "macrunner-start: after-CreateProcess process=%p thread=%p pid=%lu tid=%lu\n",
+                                process_information.hProcess, process_information.hThread,
+                                process_information.dwProcessId, process_information.dwThreadId);
+                        fflush(stderr);
+                    }
                     opts.sei.hProcess = process_information.hProcess;
                     goto done;
         }
 
+        if (trace_start)
+        {
+            DWORD error = GetLastError();
+            fprintf(stderr, "macrunner-start: after-GetBinaryType fail error=%lu file=%s before-ShellExecute\n",
+                    error, wine_dbgstr_w(opts.sei.lpFile));
+            fflush(stderr);
+        }
         if (!ShellExecuteExW(&opts.sei))
         {
             const WCHAR *filename = opts.sei.lpFile;
@@ -637,10 +678,17 @@ int __cdecl wmain (int argc, WCHAR *argv[])
 
             fatal_string_error(STRING_EXECFAIL, GetLastError(), filename);
         }
+        else if (trace_start)
+        {
+            fprintf(stderr, "macrunner-start: after-ShellExecute process=%p file=%s params=%s\n",
+                    opts.sei.hProcess, wine_dbgstr_w(opts.sei.lpFile), wine_dbgstr_w(opts.sei.lpParameters));
+            fflush(stderr);
+        }
 
 done:
 	if (opts.sei.fMask & SEE_MASK_NOCLOSEPROCESS) {
 		DWORD exitcode;
+		DWORD wait_result;
 		HANDLE hJob;
 		JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
 
@@ -659,8 +707,22 @@ done:
 		SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &info, sizeof(info));
 		AssignProcessToJobObject(hJob, opts.sei.hProcess);
 
-		WaitForSingleObject(opts.sei.hProcess, INFINITE);
+		if (trace_start)
+		{
+			fprintf(stderr, "macrunner-start: before-wait child=%p child_pid=%lu\n",
+			        opts.sei.hProcess, GetProcessId(opts.sei.hProcess));
+			fflush(stderr);
+		}
+		wait_result = WaitForSingleObject(opts.sei.hProcess, INFINITE);
 		GetExitCodeProcess(opts.sei.hProcess, &exitcode);
+		if (GetEnvironmentVariableW(L"MACRUNNER_TRACE_PROCESS_EXIT", NULL, 0))
+		{
+			fprintf(stderr,
+			        "macrunner-start-exit: pid=%lu child_pid=%lu wait=0x%lx exitcode=0x%lx file=%s params=%s\n",
+			        GetCurrentProcessId(), GetProcessId(opts.sei.hProcess), wait_result, exitcode,
+			        wine_dbgstr_w(opts.sei.lpFile), wine_dbgstr_w(opts.sei.lpParameters));
+			fflush(stderr);
+		}
 		ExitProcess(exitcode);
 	}
 

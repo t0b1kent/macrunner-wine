@@ -1931,7 +1931,45 @@ DECL_HANDLER(read_process_memory)
     struct process *process;
     data_size_t len = get_reply_max_size();
 
-    if (!(process = get_process_from_handle( req->handle, PROCESS_VM_READ ))) return;
+    if (!(process = get_process_from_handle( req->handle, PROCESS_VM_READ )))
+    {
+        /* ★ MacRunner, лейн ЛЕСТНИЦА, итерация 2635 — ПОЧЕМУ ОПИСАТЕЛЬ НЕ ГОДИТСЯ.
+         *
+         * 2634 показал зондом в mach.c: отказы c0000022 до чтения памяти НЕ доходят, зонд
+         * области на них не срабатывает ни разу. Значит их источник — ровно эта строка.
+         * Но «почему» она отказывает, я не знаю: не хватает права, объекта уже нет, или
+         * ребёнок завершился. Спрашиваю прямо, вместо того чтобы гадать (в 2632 и 2633 я
+         * уже дважды объяснил этот отказ неверно).
+         *
+         * Печать при отказе, потолок 24 — событие редкое, горячий путь не задет. Пробуем
+         * взять тот же описатель с ослабленным доступом: если объект достанется, значит
+         * дело в ПРАВЕ, и заодно печатаем состояние процесса. */
+        unsigned int err = get_error();
+        static int said;
+        extern int macrunner_srv_probes(void);
+
+        if (macrunner_srv_probes() && said++ < 24)
+        {
+            struct process *weak;
+
+            clear_error();
+            weak = get_process_from_handle( req->handle, PROCESS_QUERY_LIMITED_INFORMATION );
+            if (weak)
+                fprintf( stderr, "macrunner-srv-handle: описатель=%04x отказ=%08x addr=%llx | "
+                         "объект ЕСТЬ при слабом доступе: потоков=%d код_выхода=%d\n",
+                         (unsigned)req->handle, err, (unsigned long long)req->addr,
+                         weak->running_threads, weak->exit_code );
+            else
+                fprintf( stderr, "macrunner-srv-handle: описатель=%04x отказ=%08x addr=%llx | "
+                         "объекта НЕТ и при слабом доступе (отказ=%08x)\n",
+                         (unsigned)req->handle, err, (unsigned long long)req->addr,
+                         get_error() );
+            if (weak) release_object( weak );
+            fflush( stderr );
+        }
+        set_error( err );
+        return;
+    }
 
     if (len)
     {

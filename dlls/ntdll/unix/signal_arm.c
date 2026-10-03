@@ -796,7 +796,7 @@ static BOOL handle_syscall_fault( ucontext_t *context, EXCEPTION_RECORD *rec )
         REGn_sig(0, context) = (DWORD)ntdll_get_thread_data()->jmp_buf;
         REGn_sig(1, context) = 1;
         PC_sig(context)      = (DWORD)longjmp;
-        ntdll_get_thread_data()->jmp_buf = NULL;
+        ntdll_set_exception_jmp_buf( NULL );
     }
     else
     {

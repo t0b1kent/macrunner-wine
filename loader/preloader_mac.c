@@ -44,6 +44,17 @@
 #include <mach-o/loader.h>
 #include <mach-o/ldsyms.h>
 #endif
+#ifdef __aarch64__
+#include <mach/mach_init.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_map.h>
+#include <mach/vm_statistics.h>
+
+#define ARM64_SHARED_USER_DATA_ADDR ((void *)0x000007FFE0000000ULL)
+#define ARM64_SHARED_USER_DATA_SIZE 0x00010000
+
+extern int proc_regionfilename( int pid, uint64_t address, void *buffer, uint32_t buffersize ) __attribute__((weak_import));
+#endif
 
 #include "wine/asm.h"
 #include "main.h"
@@ -88,6 +99,14 @@ static struct wine_preload_info preload_info[] =
     { (void *)0x00010000, 0x00100000 },  /* DOS area */
     { (void *)0x00110000, 0x67ef0000 },  /* low memory area */
     { (void *)0x7f000000, 0x03000000 },  /* top-down allocations + shared user data + virtual heap */
+#elif defined(__aarch64__)
+    /* arm64 macOS forces __PAGEZERO >= 4 GB on every user Mach-O, so the
+     * canonical Windows ARM64 USD address 0x7ffe0000 (~2 GB) and the
+     * conventional 0x7f000000 top-down zone both live inside PAGEZERO
+     * and cannot be reserved. Relocate both above PAGEZERO. The USD
+     * address must match WINE_USER_SHARED_DATA_ADDRESS in winternl.h. */
+    { ARM64_SHARED_USER_DATA_ADDR, ARM64_SHARED_USER_DATA_SIZE }, /* shared user data, ~8.8 TB */
+    { (void *)0x000007FFD0000000ULL, 0x01000000 }, /* 16 MB top-down + virtual heap, below USD */
 #else  /* __i386__ */
     { (void *)0x000000001000, 0x1fffff000 }, /* WINE_RESERVE section */
     { (void *)0x7ff000000000, 0x01ff0000 },  /* top-down allocations + virtual heap */
@@ -322,6 +341,77 @@ __ASM_GLOBAL_FUNC( start,
                    "\tmovq $0,%rbp\n"               /* restore ebp back to zero */
                    "\tjmpq *%rax\n" )               /* jump to the entry point */
 
+#elif defined(__aarch64__)
+
+/* Apple Silicon uses 16k pages. */
+static const size_t page_mask = 0x3fff;
+#define target_mach_header      mach_header_64
+#define target_segment_command  segment_command_64
+#define TARGET_LC_SEGMENT       LC_SEGMENT_64
+#define target_thread_state_t   arm_thread_state64_t
+#define target_thread_ip(x)     arm_thread_state64_get_pc(*(x))
+
+#define SYSCALL_FUNC( name, nr ) \
+    __ASM_GLOBAL_FUNC( name, \
+                       "\tmov x16,#" #nr "\n" \
+                       "\tsvc #0x80\n" \
+                       "\tb.cc 1f\n" \
+                       "\tmov x0,#-1\n" \
+                       "1:\tret\n" )
+
+#define SYSCALL_NOERR( name, nr ) \
+    __ASM_GLOBAL_FUNC( name, \
+                       "\tmov x16,#" #nr "\n" \
+                       "\tsvc #0x80\n" \
+                       "\tret\n" )
+
+__ASM_GLOBAL_FUNC( start,
+                   __ASM_CFI("\t.cfi_undefined lr\n")
+                   "\tsub sp,sp,#16\n"              /* room for local variables */
+
+                   /* reconstruct stack pointer expected by wld_start */
+                   "\tsub x10,x1,#8\n"              /* assume [argc][argv] */
+                   "\tldr x11,[x10]\n"
+                   "\tcmp x11,x0\n"
+                   "\tb.eq 1f\n"
+                   "\tsub x10,x1,#4\n"              /* fallback for 32-bit argc slot */
+                   "\tldr w11,[x10]\n"
+                   "\tcmp w11,w0\n"
+                   "\tb.eq 1f\n"
+                   "\tsub x10,x1,#8\n"              /* best effort fallback */
+                   "1:\tstr x10,[sp,#8]\n"
+
+                   /* call wld_start(stack, &is_unix_thread) */
+                   "\tmov x0,x10\n"                 /* stack */
+                   "\tmov x1,sp\n"                  /* &is_unix_thread */
+                   "\tstr wzr,[x1]\n"
+                   "\tbl _wld_start\n"
+                   "\tmov x12,x0\n"                 /* save entry point */
+
+                   /* jmp based on is_unix_thread */
+                   "\tldr w9,[sp]\n"
+                   "\tcbnz w9,2f\n"
+
+                   /* LC_MAIN */
+                   "\tldr x10,[sp,#8]\n"            /* reconstructed stack pointer */
+                   "\tldr x0,[x10]\n"               /* x0 = argc */
+                   "\tadd x1,x10,#8\n"              /* x1 = argv */
+                   "\tadd x2,x1,x0,lsl #3\n"
+                   "\tadd x2,x2,#8\n"               /* x2 = env */
+                   "\tmov x3,x2\n"
+                   "3:\tldr x9,[x3]\n"
+                   "\tadd x3,x3,#8\n"
+                   "\tcbnz x9,3b\n"                 /* x3 = apple data */
+
+                   "\tadd sp,sp,#16\n"              /* remove local variables */
+                   "\tblr x12\n"                    /* call main(argc,argv,env,apple) */
+                   "\tbl _wld_exit\n"
+                   "\thlt #0\n"
+
+                   /* LC_UNIXTHREAD */
+                   "2:\tadd sp,sp,#16\n"            /* restore stack pointer */
+                   "\tbr x12\n" )                   /* jump to the entry point */
+
 #else
 #error preloader not implemented for this CPU
 #endif
@@ -338,6 +428,11 @@ SYSCALL_FUNC( wld_mmap, 197 /* SYS_mmap */ );
 void *wld_munmap( void *start, size_t len );
 SYSCALL_FUNC( wld_munmap, 73 /* SYS_munmap */ );
 
+#ifdef __aarch64__
+pid_t wld_getpid(void);
+SYSCALL_FUNC( wld_getpid, 20 /* SYS_getpid */ );
+#endif
+
 static intptr_t (*p_dyld_get_image_slide)( const struct target_mach_header* mh );
 
 #define MAKE_FUNCPTR(f) static typeof(f) * p##f
@@ -346,7 +441,9 @@ MAKE_FUNCPTR(dlsym);
 MAKE_FUNCPTR(dladdr);
 #undef MAKE_FUNCPTR
 
+#ifndef __aarch64__
 extern int _dyld_func_lookup( const char *dyld_func_name, void **address );
+#endif
 
 /* replacement for libc functions */
 
@@ -471,7 +568,7 @@ static int preloader_overlaps_range( const void *start, const void *end )
             if (!wld_strncmp( seg->segname, reserved_segname, sizeof(reserved_segname)-1 ))
                 continue;
 
-            if (end > seg_start && start <= seg_end)
+            if (end > seg_start && start < seg_end)
             {
                 char segname[sizeof(seg->segname) + 1];
                 memcpy(segname, seg->segname, sizeof(seg->segname));
@@ -602,12 +699,103 @@ static int is_zerofill( struct wine_preload_info *info )
     return 0;
 }
 
+#ifdef __aarch64__
+static int is_shared_user_data( struct wine_preload_info *info )
+{
+    return info->addr == ARM64_SHARED_USER_DATA_ADDR && info->size == ARM64_SHARED_USER_DATA_SIZE;
+}
+
+static void log_region_conflict( struct wine_preload_info *info, mach_vm_address_t probe,
+                                 mach_vm_size_t probe_size, vm_region_basic_info_data_64_t *binfo )
+{
+    char filename[128];
+
+    filename[0] = 0;
+    if (proc_regionfilename)
+        proc_regionfilename( wld_getpid(), probe, filename, sizeof(filename) );
+
+    wld_printf( "preloader: Warning: failed to reserve range %p-%p "
+                "(occupied by %p-%p prot=%x max=%x)\n",
+                info->addr, (char *)info->addr + info->size,
+                (void *)(uintptr_t)probe, (void *)(uintptr_t)(probe + probe_size),
+                binfo->protection, binfo->max_protection );
+    if (filename[0])
+        wld_printf( "preloader: conflicting region file: %s\n", filename );
+}
+
+static void fail_shared_user_data_reserve( struct wine_preload_info *info )
+{
+    if (is_shared_user_data( info ))
+        fatal_error( "preloader: failed to reserve shared user data range %p-%p\n",
+                     info->addr, (char *)info->addr + info->size );
+}
+#endif
+
 static int map_region( struct wine_preload_info *info )
 {
     int flags = MAP_PRIVATE | MAP_ANON;
     void *ret;
 
+#ifdef __aarch64__
+    /* macOS 26 (Tahoe) added EXC_GUARD/GUARD_TYPE_VIRT_MEMORY/DEALLOC_GAP
+     * which fatally kills the process from inside vm_map_enter() if a
+     * fixed allocation would create a gap by partially overlapping an
+     * existing VM map entry. This fires on both mmap(MAP_FIXED) and
+     * mach_vm_allocate(VM_FLAGS_FIXED). With PIE+ASLR on arm64, dyld can
+     * place dylibs anywhere, including inside our hinted reservations.
+     *
+     * Probe the range with mach_vm_region() first: if any existing
+     * mapping intersects our [addr, addr+size), bail out cleanly with a
+     * warning — letting wld_start call remove_preload_range() — instead
+     * of risking a SIGKILL from the guard. Only if the range is fully
+     * empty do we attempt mach_vm_allocate(VM_FLAGS_FIXED). */
+    if (info->addr && !is_zerofill( info ))
+    {
+        mach_vm_address_t hint = (mach_vm_address_t)(uintptr_t)info->addr;
+        mach_vm_address_t end  = hint + info->size;
+        mach_vm_address_t probe = hint;
+        mach_vm_size_t probe_size = 0;
+        vm_region_basic_info_data_64_t binfo;
+        mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t obj = MACH_PORT_NULL;
+        kern_return_t kr;
+
+        kr = mach_vm_region( mach_task_self(), &probe, &probe_size,
+                             VM_REGION_BASIC_INFO_64, (vm_region_info_t)&binfo,
+                             &cnt, &obj );
+        if (kr == KERN_SUCCESS && probe < end)
+        {
+            /* something is mapped inside our hinted range — bail cleanly
+             * to avoid triggering the DEALLOC_GAP guard */
+            log_region_conflict( info, probe, probe_size, &binfo );
+            fail_shared_user_data_reserve( info );
+            return 0;
+        }
+        /* range is clear (kr == KERN_INVALID_ADDRESS means no region above
+         * probe at all; KERN_SUCCESS with probe >= end means next mapping
+         * starts beyond our range). Safe to allocate. */
+        {
+            mach_vm_address_t addr = hint;
+            kr = mach_vm_allocate( mach_task_self(), &addr,
+                                   info->size, VM_FLAGS_FIXED );
+            if (kr == KERN_SUCCESS && addr == hint)
+            {
+                mach_vm_protect( mach_task_self(), addr, info->size,
+                                 FALSE, VM_PROT_NONE );
+                return 1;
+            }
+            if (kr == KERN_SUCCESS)
+                mach_vm_deallocate( mach_task_self(), addr, info->size );
+            wld_printf( "preloader: Warning: failed to reserve range %p-%p\n",
+                        info->addr, (char *)info->addr + info->size );
+            fail_shared_user_data_reserve( info );
+            return 0;
+        }
+    }
+    if (is_zerofill( info )) flags |= MAP_FIXED;
+#else
     if (!info->addr || is_zerofill( info )) flags |= MAP_FIXED;
+#endif
 
     ret = wld_mmap( info->addr, info->size, PROT_NONE, flags, -1, 0 );
     if (ret == info->addr) return 1;
@@ -620,6 +808,7 @@ static int map_region( struct wine_preload_info *info )
     return 0;
 }
 
+#ifndef __aarch64__
 static inline void get_dyld_func( const char *name, void **func )
 {
     _dyld_func_lookup( name, func );
@@ -628,6 +817,11 @@ static inline void get_dyld_func( const char *name, void **func )
 
 #define LOAD_POSIX_DYLD_FUNC(f) get_dyld_func( "__dyld_" #f, (void **)&p##f )
 #define LOAD_MACHO_DYLD_FUNC(f) get_dyld_func( "_" #f, (void **)&p##f )
+#else
+extern intptr_t _dyld_get_image_slide( const struct target_mach_header* mh );
+#define LOAD_POSIX_DYLD_FUNC(f) do { p##f = f; } while (0)
+#define LOAD_MACHO_DYLD_FUNC(f) do { p##f = f; } while (0)
+#endif
 
 static void fixup_stack( void *stack )
 {
@@ -717,13 +911,39 @@ void *wld_start( void *stack, int *is_unix_thread )
     LOAD_MACHO_DYLD_FUNC( _dyld_get_image_slide );
 
     /* reserve memory that Wine needs */
-    if (reserve) preload_reserve( reserve );
-    for (i = 0; preload_info[i].size; i++)
+    /* ★★★★★ 28.08.2026 — ГДЕ УМИРАЕТ ВТОРОЙ ЭКЗЕМПЛЯР DIABLO.
+     *
+     * Замер сузил место до отрезка МЕЖДУ `exec_wineloader` и конструктором ntdll.so: процесс
+     * создаётся (machine=014c, exec удаётся), но своего события не создаёт, журнала не
+     * оставляет и в списке процессов не появляется. На этом отрезке работает только preloader.
+     *
+     * Печатаем каждый шаг: что просили зарезервировать, что удалось, загрузился ли бинарь.
+     * Гейт `MACRUNNER_PRELOAD_PROBE` (переменная окружения наследуется дочерним всегда). */
     {
-        if (!map_region( &preload_info[i] ))
+        char **e;
+        int probe = 0;
+        for (e = argv + *pargc + 1; *e; e++)
+            if (!wld_strncmp( *e, "MACRUNNER_PRELOAD_PROBE=", 24 )) probe = 1;
+        if (probe)
         {
-            remove_preload_range( i );
-            i--;
+            wld_printf( "macrunner-preload: старт, образ=%s, reserve=%s\n",
+                        argv[1] ? argv[1] : "(нет)", reserve ? reserve : "(нет)" );
+        }
+        if (reserve) preload_reserve( reserve );
+        for (i = 0; preload_info[i].size; i++)
+        {
+            if (!map_region( &preload_info[i] ))
+            {
+                if (probe)
+                    wld_printf( "macrunner-preload: НЕ ОТОБРАЗИЛСЯ участок %p размер %p\n",
+                                preload_info[i].addr, (void *)preload_info[i].size );
+                remove_preload_range( i );
+                i--;
+            }
+        }
+        if (probe)
+        {
+            wld_printf( "macrunner-preload: участки готовы, гружу бинарь\n" );
         }
     }
 
@@ -735,6 +955,15 @@ void *wld_start( void *stack, int *is_unix_thread )
     /* load the main binary */
     if (!(mod = pdlopen( argv[1], RTLD_NOW )))
         fatal_error( "%s: could not load binary\n", argv[1] );
+    {
+        char **e;
+        for (e = argv + *pargc + 1; *e; e++)
+            if (!wld_strncmp( *e, "MACRUNNER_PRELOAD_PROBE=", 24 ))
+            {
+                wld_printf( "macrunner-preload: бинарь загружен, идём к точке входа\n" );
+                break;
+            }
+    }
 
 #ifdef __i386__
     if (builtin_dlls.size)

@@ -378,6 +378,7 @@ done:
  */
 HDRVR WINAPI OpenDriver(LPCWSTR lpDriverName, LPCWSTR lpSectionName, LPARAM lParam)
 {
+    static const WCHAR msacmW[] = L"msacm.";
     LPWINE_DRIVER	lpDrv = NULL;
     WCHAR 		libName[MAX_PATH + 1];
     LPCWSTR		lsn = lpSectionName;
@@ -390,7 +391,8 @@ HDRVR WINAPI OpenDriver(LPCWSTR lpDriverName, LPCWSTR lpSectionName, LPARAM lPar
     if (lsn == NULL) {
 	lstrcpynW(libName, lpDriverName, ARRAY_SIZE(libName));
 
-	if ((lpDrv = DRIVER_TryOpenDriver32(libName, lParam)))
+	if (wcsnicmp( lpDriverName, msacmW, ARRAY_SIZE(msacmW) - 1 ) &&
+            (lpDrv = DRIVER_TryOpenDriver32(libName, lParam)))
 	    goto the_end;
 	lsn = L"Drivers32";
     }

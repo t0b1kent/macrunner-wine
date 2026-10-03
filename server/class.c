@@ -51,6 +51,12 @@ struct window_class
     class_shm_t        *shared;          /* class in session shared memory */
 };
 
+static int macrunner_trace_createwindow(void)
+{
+    const char *val = getenv( "MACRUNNER_HB_TRACE_CREATEWINDOW" );
+    return val && val[0] && val[0] != '0';
+}
+
 C_ASSERT( sizeof(class_shm_t) == offsetof(class_shm_t, extra[0]) );
 
 static struct window_class *create_class( struct process *process, int local, struct unicode_str *name, unsigned int name_offset,
@@ -124,9 +130,17 @@ static struct window_class *find_class( struct process *process, atom_t atom, mo
         const class_shm_t *shared = class->shared;
         if (class->atom != atom) continue;
         is_win16 = !(shared->instance >> 16);
+        if (macrunner_trace_createwindow())
+            fprintf( stderr, "macrunner-server-find-class: candidate process=%p atom=%04x "
+                     "request_instance=%08lx class_instance=%08lx local=%d is_win16=%d\n",
+                     process, atom, (unsigned long)instance,
+                     (unsigned long)shared->instance, class->local, is_win16 );
         if (!instance || !class->local || shared->instance == instance ||
             (!is_win16 && ((shared->instance & ~0xffff) == (instance & ~0xffff)))) return class;
     }
+    if (macrunner_trace_createwindow())
+        fprintf( stderr, "macrunner-server-find-class: miss process=%p atom=%04x request_instance=%08lx\n",
+                 process, atom, (unsigned long)instance );
     return NULL;
 }
 
@@ -139,8 +153,19 @@ struct window_class *grab_class( struct process *process, atom_t atom, mod_handl
         class->count++;
         *extra_bytes = class->shared->win_extra;
         *locator = get_shared_object_locator( class->shared );
+        if (macrunner_trace_createwindow())
+            fprintf( stderr, "macrunner-server-grab-class: hit process=%p atom=%04x "
+                     "request_instance=%08lx class_instance=%08lx local=%d extra=%d count=%d\n",
+                     process, atom, (unsigned long)instance,
+                     (unsigned long)class->shared->instance, class->local, *extra_bytes, class->count );
     }
-    else set_error( STATUS_INVALID_HANDLE );
+    else
+    {
+        if (macrunner_trace_createwindow())
+            fprintf( stderr, "macrunner-server-grab-class: invalid-handle process=%p atom=%04x "
+                     "request_instance=%08lx\n", process, atom, (unsigned long)instance );
+        set_error( STATUS_INVALID_HANDLE );
+    }
     return class;
 }
 
@@ -250,6 +275,11 @@ DECL_HANDLER(create_class)
     class->client_ptr = req->client_ptr;
     reply->locator   = get_shared_object_locator( class->shared );
     reply->atom      = base_atom;
+    if (macrunner_trace_createwindow())
+        fprintf( stderr, "macrunner-server-create-class: process=%p atom=%04x base_atom=%04x "
+                 "instance=%08lx local=%d style=%08x cls_extra=%d win_extra=%d client=%08lx\n",
+                 current->process, atom, base_atom, (unsigned long)req->instance, req->local,
+                 req->style, req->cls_extra, req->win_extra, (unsigned long)req->client_ptr );
 }
 
 /* destroy a window class */

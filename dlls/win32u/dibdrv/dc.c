@@ -231,6 +231,32 @@ DWORD convert_bitmapinfo( const BITMAPINFO *src_info, void *src_bits, struct bit
     }
     __EXCEPT
     {
+        /* Итерация 417: печать тут БЫЛА, но через WARN — а канал wine до наших журналов не
+         * доходит (правило лейна от 02.08). Дублируем в stderr и печатаем обе стороны: если
+         * указатель источника лежит в младших 4 ГиБ, это непереведённый гостевой адрес. */
+        fprintf( stderr, "macrunner-convfault: ОТКАЗ_ДОСТУПА src_bits=%p (младшие_4ГиБ=%d) "
+                 "src=%dx%d bpp=%d clr=%u sizeimage=%u | dst_bits=%p bpp=%d\n",
+                 src_bits, (int)((uintptr_t)src_bits < (1ull << 32)),
+                 (int)src_info->bmiHeader.biWidth, (int)src_info->bmiHeader.biHeight,
+                 (int)src_info->bmiHeader.biBitCount, (unsigned)src_info->bmiHeader.biClrUsed,
+                 (unsigned)src_info->bmiHeader.biSizeImage,
+                 dst_bits, (int)dst_info->bmiHeader.biBitCount );
+        {
+            /* Итерация 418: спрашиваем у ЯДРА, что по этому адресу на самом деле — состояние,
+             * база области, её размер и права. Приём безусловного зонда (`macrunner-hb-vmprobe`),
+             * которым проект уже отвечал на «есть ли память по адресу». */
+            MEMORY_BASIC_INFORMATION mbi;
+            SIZE_T got = 0;
+            NTSTATUS qst = NtQueryVirtualMemory( GetCurrentProcess(), src_bits,
+                                                 MemoryBasicInformation, &mbi, sizeof(mbi), &got );
+            fprintf( stderr, "macrunner-convfault-vm: qst=%08x base=%p alloc=%p размер=%llu "
+                     "state=%08x protect=%08x type=%08x нужно=%u\n",
+                     (unsigned)qst, mbi.BaseAddress, mbi.AllocationBase,
+                     (unsigned long long)mbi.RegionSize, (unsigned)mbi.State,
+                     (unsigned)mbi.Protect, (unsigned)mbi.Type,
+                     (unsigned)src_info->bmiHeader.biSizeImage );
+            fflush( stderr );
+        }
         WARN( "invalid bits pointer %p\n", src_bits );
         ret = FALSE;
     }
@@ -972,6 +998,17 @@ static BOOL windrv_StretchBlt( PHYSDEV dst_dev, struct bitblt_coords *dst,
     dst_dev = GET_NEXT_PHYSDEV( dst_dev, pStretchBlt );
     ret = dst_dev->funcs->pStretchBlt( dst_dev, dst, src_dev, src, rop );
     unlock_surfaces( dst_physdev, src_physdev );
+    /* Итерация 412: зонд отвечает СРАЗУ на два вопроса — тот ли это драйвер у приёмника
+     * (в bitblt.c сравнить нельзя: window_driver объявлен static) и что вернул СЛЕДУЮЩИЙ
+     * уровень, куда вызов переслан. Печатаем только отказы, чтобы не залить журнал. */
+    if (!ret)
+    {
+        fprintf( stderr, "macrunner-windrv-stretch: ОТКАЗ ret=0 dst=%dx%d src=%dx%d rop=%06x "
+                 "src_из_окна=%d\n",
+                 (int)dst->width, (int)dst->height, (int)src->width, (int)src->height,
+                 (unsigned)rop, (int)(src_physdev != NULL) );
+        fflush( stderr );
+    }
     return ret;
 }
 

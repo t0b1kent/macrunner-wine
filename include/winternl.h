@@ -3456,7 +3456,19 @@ typedef struct _RTL_ATOM_TABLE
 #define FILE_PIPE_SERVER_END            0x00000001
 #define FILE_PIPE_CLIENT_END            0x00000000
 
-#define INTERNAL_TS_ACTIVE_CONSOLE_ID ( *((volatile ULONG*)(0x7ffe02d8)) )
+#if (defined(__aarch64__) || defined(__arm64ec__)) && (defined(__APPLE__) || defined(_WIN32))
+/* macOS arm64 enforces a 4 GB PAGEZERO on every user binary, so the
+ * canonical Windows ARM64 shared user data address is not mappable.
+ * Keep this in sync with preloader_mac.c.
+ * NB: arm64ec-clang defines __arm64ec__/__x86_64__ but NOT __aarch64__,
+ * so ARM64EC TUs must be gated explicitly or they silently fall into the
+ * non-Apple branch (this bit the hybrid ntdll). */
+#define WINE_USER_SHARED_DATA_ADDRESS ((ULONG_PTR)0x000007FFE0000000ULL)
+#else
+#define WINE_USER_SHARED_DATA_ADDRESS ((ULONG_PTR)0x000000007ffe0000ULL)
+#endif
+
+#define INTERNAL_TS_ACTIVE_CONSOLE_ID ( *((volatile ULONG *)(WINE_USER_SHARED_DATA_ADDRESS + 0x2d8)) )
 
 #define LOGONID_CURRENT    ((ULONG)-1)
 
@@ -4601,7 +4613,33 @@ NTSYSAPI NTSTATUS  WINAPI NtCreateKeyedEvent(HANDLE*,ACCESS_MASK,const OBJECT_AT
 NTSYSAPI NTSTATUS  WINAPI NtCreateLowBoxToken(HANDLE*,HANDLE,ACCESS_MASK,OBJECT_ATTRIBUTES*,SID*,ULONG,SID_AND_ATTRIBUTES*,ULONG,HANDLE*);
 NTSYSAPI NTSTATUS  WINAPI NtCreateMailslotFile(PHANDLE,ACCESS_MASK,POBJECT_ATTRIBUTES,PIO_STATUS_BLOCK,ULONG,ULONG,ULONG,PLARGE_INTEGER);
 NTSYSAPI NTSTATUS  WINAPI NtCreateMutant(HANDLE*,ACCESS_MASK,const OBJECT_ATTRIBUTES*,BOOLEAN);
+#if defined(__aarch64__) || defined(__arm64ec__)
+struct __wine_nt_named_pipe_extra
+{
+    ULONG           pipe_type;
+    ULONG           read_mode;
+    ULONG           completion_mode;
+    ULONG           max_inst;
+    ULONG           inbound_quota;
+    ULONG           outbound_quota;
+    PLARGE_INTEGER  timeout;
+};
+#endif
+#if defined(__aarch64__) && !defined(__arm64ec__)
+NTSYSAPI NTSTATUS  WINAPI NtCreateNamedPipeFile(PHANDLE,ULONG,POBJECT_ATTRIBUTES,PIO_STATUS_BLOCK,ULONG,ULONG,ULONG,const struct __wine_nt_named_pipe_extra *);
+#else
 NTSYSAPI NTSTATUS  WINAPI NtCreateNamedPipeFile(PHANDLE,ULONG,POBJECT_ATTRIBUTES,PIO_STATUS_BLOCK,ULONG,ULONG,ULONG,ULONG,ULONG,ULONG,ULONG,ULONG,ULONG,PLARGE_INTEGER);
+#endif
+
+/* ARM64EC public entries retain the Windows ABI and pack inside ntdll. */
+#if defined(__aarch64__) && !defined(__arm64ec__)
+#define WINE_NT_CREATE_NAMED_PIPE_FILE(handle, access, attr, io, sharing, dispo, options, pipe_type, read_mode, completion_mode, max_inst, inbound_quota, outbound_quota, timeout) \
+    ({ struct __wine_nt_named_pipe_extra _wine_np_extra = { (pipe_type), (read_mode), (completion_mode), (max_inst), (inbound_quota), (outbound_quota), (timeout) }; \
+       NtCreateNamedPipeFile((handle),(access),(attr),(io),(sharing),(dispo),(options), &_wine_np_extra); })
+#else
+#define WINE_NT_CREATE_NAMED_PIPE_FILE(handle, access, attr, io, sharing, dispo, options, pipe_type, read_mode, completion_mode, max_inst, inbound_quota, outbound_quota, timeout) \
+    NtCreateNamedPipeFile((handle),(access),(attr),(io),(sharing),(dispo),(options),(pipe_type),(read_mode),(completion_mode),(max_inst),(inbound_quota),(outbound_quota),(timeout))
+#endif
 NTSYSAPI NTSTATUS  WINAPI NtCreatePagingFile(PUNICODE_STRING,PLARGE_INTEGER,PLARGE_INTEGER,PLARGE_INTEGER);
 NTSYSAPI NTSTATUS  WINAPI NtCreatePort(PHANDLE,POBJECT_ATTRIBUTES,ULONG,ULONG,PULONG);
 NTSYSAPI NTSTATUS  WINAPI NtCreateProcess(PHANDLE,ACCESS_MASK,POBJECT_ATTRIBUTES,HANDLE,BOOLEAN,HANDLE,HANDLE,HANDLE);
@@ -4666,7 +4704,38 @@ NTSYSAPI NTSTATUS  WINAPI NtLockFile(HANDLE,HANDLE,PIO_APC_ROUTINE,void*,PIO_STA
 NTSYSAPI NTSTATUS  WINAPI NtLockVirtualMemory(HANDLE,PVOID*,SIZE_T*,ULONG);
 NTSYSAPI NTSTATUS  WINAPI NtMakePermanentObject(HANDLE);
 NTSYSAPI NTSTATUS  WINAPI NtMakeTemporaryObject(HANDLE);
+#if defined(__aarch64__) || defined(__arm64ec__)
+/* arm64 macOS: pack last three args into a struct so the call fits in
+ * x0..x7. mingw-clang (PE side, Microsoft AAPCS64) and Apple clang (Unix
+ * side, natural-alignment deviation) disagree on stack-arg layout. With
+ * 10 args, 2 stack slots cause "protect" to come through garbled in
+ * shared_session_init and other PE callers. Avoiding stack args entirely
+ * sidesteps the disagreement. */
+struct __wine_nt_section_extra
+{
+    SECTION_INHERIT inherit;
+    ULONG           alloc_type;
+    ULONG           protect;
+};
+#endif
+#if defined(__aarch64__) && !defined(__arm64ec__)
+NTSYSAPI NTSTATUS  WINAPI NtMapViewOfSection(HANDLE,HANDLE,PVOID*,ULONG_PTR,SIZE_T,const LARGE_INTEGER*,SIZE_T*,const struct __wine_nt_section_extra *);
+#else
 NTSYSAPI NTSTATUS  WINAPI NtMapViewOfSection(HANDLE,HANDLE,PVOID*,ULONG_PTR,SIZE_T,const LARGE_INTEGER*,SIZE_T*,SECTION_INHERIT,ULONG,ULONG);
+#endif
+
+/* WINE_NT_MAP_VIEW: portable 10-argument shape that forwards to the
+ * packed signature on native arm64 macOS. ARM64EC packs inside its public
+ * Windows-ABI adapter, including calls from x64 through arm64ec_syscalls.
+ * Use this at every call site instead of NtMapViewOfSection directly. */
+#if defined(__aarch64__) && !defined(__arm64ec__)
+#define WINE_NT_MAP_VIEW(handle, process, addr, zero_bits, commit_size, offset, size, inherit, alloc_type, protect) \
+    ({ struct __wine_nt_section_extra _wine_mvs_extra = { (inherit), (alloc_type), (protect) }; \
+       NtMapViewOfSection((handle),(process),(addr),(zero_bits),(commit_size),(offset),(size), &_wine_mvs_extra); })
+#else
+#define WINE_NT_MAP_VIEW(handle, process, addr, zero_bits, commit_size, offset, size, inherit, alloc_type, protect) \
+    NtMapViewOfSection((handle),(process),(addr),(zero_bits),(commit_size),(offset),(size),(inherit),(alloc_type),(protect))
+#endif
 NTSYSAPI NTSTATUS  WINAPI NtMapViewOfSectionEx(HANDLE,HANDLE,PVOID*,const LARGE_INTEGER*,SIZE_T*,ULONG,ULONG,MEM_EXTENDED_PARAMETER*,ULONG);
 NTSYSAPI NTSTATUS  WINAPI NtNotifyChangeDirectoryFile(HANDLE,HANDLE,PIO_APC_ROUTINE,PVOID,PIO_STATUS_BLOCK,PVOID,ULONG,ULONG,BOOLEAN);
 NTSYSAPI NTSTATUS  WINAPI NtNotifyChangeKey(HANDLE,HANDLE,PIO_APC_ROUTINE,PVOID,PIO_STATUS_BLOCK,ULONG,BOOLEAN,PVOID,ULONG,BOOLEAN);

@@ -1005,6 +1005,24 @@ BOOL WINAPI NtGdiGetDCDword( HDC hdc, UINT method, DWORD *result )
 
     if (!(dc = get_dc_ptr( hdc ))) return 0;
 
+    /* MacRunner 2026-08-27, Diablo — ЧТО ИМЕННО СПРАШИВАЮТ У DC.
+     *
+     * После правки PSHUFD игра доходит до создания окна 640x480, затем 1,4 с крутит
+     * цикл NtGdiGetDCDword + NtAllocateVirtualMemory (688 и 697 вызовов, шаг 2 мс),
+     * шлёт 6002 NtDelayExecution и вызывает NtTerminateProcess — то есть выходит
+     * ШТАТНО, ничего не нарисовав: растры только 32x32 и 16x16, кадра нет.
+     * Трасса ddraw при включённом канале пуста — DirectDraw не зовётся вовсе.
+     * Код запроса скажет, чего игра ждёт от GDI. */
+    {
+        static unsigned счёт[64];
+        unsigned k = method < 64 ? method : 63;
+        if (++счёт[k] <= 3 || (счёт[k] % 200) == 0)
+            MESSAGE( "macrunner-dcdword: method=%u раз=%u hdc=%p тип=%#x is_display=%d memdc=%d\n",
+                 method, счёт[k], hdc, (unsigned)get_gdi_object_type( hdc ),
+                 (int)dc->is_display,
+                 (int)(get_gdi_object_type( hdc ) == NTGDI_OBJ_MEMDC) );
+    }
+
     switch (method)
     {
     case NtGdiGetArcDirection:

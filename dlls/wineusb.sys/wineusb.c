@@ -374,6 +374,11 @@ static void get_instance_id(const struct usb_device *device, struct string_buffe
     append_id(buffer, L"%u&%u&%u&%u", device->usbver, device->revision, device->busnum, device->portnum);
 }
 
+static void get_serial_number(const struct usb_device *device, struct string_buffer *buffer)
+{
+    get_instance_id(device, buffer);
+}
+
 static void get_hardware_ids(const struct usb_device *device, struct string_buffer *buffer)
 {
     if (device->interface)
@@ -406,6 +411,13 @@ static void get_compatible_ids(const struct usb_device *device, struct string_bu
     append_id(buffer, L"");
 }
 
+static void get_container_id(const struct usb_device *device, struct string_buffer *buffer)
+{
+    append_id(buffer, L"{57494E45-%04X-%04X-%04X-%04X%02X%02X0000}",
+            device->vendor, device->product, device->revision,
+            device->usbver, device->busnum, device->portnum);
+}
+
 static NTSTATUS query_id(struct usb_device *device, IRP *irp, BUS_QUERY_ID_TYPE type)
 {
     struct string_buffer buffer = {0};
@@ -422,12 +434,20 @@ static NTSTATUS query_id(struct usb_device *device, IRP *irp, BUS_QUERY_ID_TYPE 
             get_instance_id(device, &buffer);
             break;
 
+        case BusQueryDeviceSerialNumber:
+            get_serial_number(device, &buffer);
+            break;
+
         case BusQueryHardwareIDs:
             get_hardware_ids(device, &buffer);
             break;
 
         case BusQueryCompatibleIDs:
             get_compatible_ids(device, &buffer);
+            break;
+
+        case BusQueryContainerID:
+            get_container_id(device, &buffer);
             break;
 
         default:

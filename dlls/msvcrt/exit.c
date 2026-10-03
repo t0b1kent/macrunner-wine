@@ -186,6 +186,10 @@ _onexit_t CDECL __dllonexit(_onexit_t func, _onexit_t **start, _onexit_t **end)
  */
 void CDECL _exit(int exitcode)
 {
+  void *caller = __builtin_return_address(0);
+
+  MESSAGE( "macrunner-msvcrt-exit: status=0x%x caller=%p\n", exitcode, caller );
+
   TRACE("(%d)\n", exitcode);
   ExitProcess(exitcode);
 }
@@ -232,6 +236,9 @@ static void DoMessageBox(const char *lead, const char *message)
  */
 void CDECL _amsg_exit(int errnum)
 {
+  MESSAGE( "macrunner-msvcrt-amsg-exit: errnum=%d caller=%p\n",
+           errnum, __builtin_return_address(0) );
+
   TRACE("(%d)\n", errnum);
 
   if ((MSVCRT_error_mode == _OUT_TO_MSGBOX) ||
@@ -251,6 +258,17 @@ void CDECL _amsg_exit(int errnum)
  */
 void CDECL abort(void)
 {
+  /* MacRunner 04.08 — печатаем ВЫЗЫВАЮЩЕГО abort, а не вызывающего _exit.
+   *
+   * HK умирает exit=3 в 10 прогонах из 16 подряд, вперемешку с прогонами, живущими 425-554 с.
+   * Проба на _exit называла лишь адрес внутри самого CRT (0x87EFA9618E0), потому что к _exit
+   * ведут ровно два пути в этом файле — abort и _wassert, — и оба уже внутри CRT.  Текста
+   * утверждения в логах нет, "abnormal program termination" для ucrtbase скомпилировано прочь
+   * (#if ниже), _amsg_exit молчит своей пробой — то есть путь остаётся один, и назвать нужно
+   * ТОГО, КТО ЗВАЛ abort: это уже код игры (UnityPlayer / mono), а его модуль опознаётся по
+   * адресу, как это в лейне уже дважды сработало. */
+  MESSAGE( "macrunner-msvcrt-abort: caller=%p\n", __builtin_return_address(0) );
+
   TRACE("()\n");
 
 #if (_MSVCR_VER > 0 && _MSVCR_VER < 100) || _MSVCR_VER == 120 || defined(_DEBUG)
@@ -292,6 +310,11 @@ unsigned int CDECL _set_abort_behavior(unsigned int flags, unsigned int mask)
  */
 void DECLSPEC_NORETURN CDECL _wassert(const wchar_t* str, const wchar_t* file, unsigned int line)
 {
+  /* MacRunner 04.08 — ERR() до наших логов не доходит (правило лейна: строк err: нет ни в одном
+   * прогоне за всю историю), поэтому вторая копия через MESSAGE, которая доходит. */
+  MESSAGE( "macrunner-msvcrt-wassert: expr=%s file=%s line=%u caller=%p\n",
+           debugstr_w(str), debugstr_w(file), line, __builtin_return_address(0) );
+
   ERR("(%s,%s,%d)\n", debugstr_w(str), debugstr_w(file), line);
 
   if ((MSVCRT_error_mode == _OUT_TO_MSGBOX) ||
@@ -493,6 +516,8 @@ _purecall_handler CDECL _get_purecall_handler(void)
  */
 void CDECL _purecall(void)
 {
+  MESSAGE( "macrunner-msvcrt-purecall: caller=%p\n", __builtin_return_address(0) );
+
   TRACE("(void)\n");
 
   if(purecall_handler)

@@ -24,7 +24,37 @@
 #import "cocoa_window.h"
 #import "cocoa_icon_utils.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <objc/runtime.h>
+
 #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
+
+/* Трасса пути ввода/окон — тот же гейт, что в cocoa_window.m и keyboard.c.
+ * Значение читается один раз: это не горячий путь, но и звать getenv на каждом
+ * обращении незачем. */
+/* Гейт запасного пути активации — см. место вызова ниже.
+ *
+ * ★ УМОЛЧАНИЕ ВКЛЮЧЕНО. Парный замер на клонах префикса, Diablo, 2 круга по 2 руки:
+ *
+ *     без гейта:  спустя 500 мс `активно=0` (3 и 3 раза), ключевое окно 0x0,
+ *                 applicationDidBecomeActive НИ РАЗУ
+ *     с гейтом:   `активно=1`, ключевое окно ненулевое (3 и 2 раза),
+ *                 applicationDidBecomeActive 1
+ *
+ * Без него игра активной не становится вовсе и ждёт. Выключить: значение 0. */
+
+static BOOL macrunner_ui_input_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
 
 
 static NSString* const WineAppWaitQueryResponseMode = @"WineAppWaitQueryResponseMode";
@@ -42,6 +72,122 @@ static NSString* const WineAppWillActivateNotification = @"WineAppWillActivateNo
 static NSString* const WineActivatingAppPIDKey = @"ActivatingAppPID";
 static NSString* const WineActivatingAppPrefixKey = @"ActivatingAppPrefix";
 static NSString* const WineActivatingAppConfigDirKey = @"ActivatingAppConfigDir";
+
+static BOOL trace_ui_input_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
+
+static BOOL trace_ui_input_mouse_button_event(NSEventType type)
+{
+    return type == NSEventTypeLeftMouseDown || type == NSEventTypeLeftMouseUp ||
+           type == NSEventTypeRightMouseDown || type == NSEventTypeRightMouseUp ||
+           type == NSEventTypeOtherMouseDown || type == NSEventTypeOtherMouseUp;
+}
+
+static const char *trace_ui_input_event_name(NSEventType type)
+{
+    switch (type)
+    {
+    case NSEventTypeLeftMouseDown: return "LeftMouseDown";
+    case NSEventTypeLeftMouseUp: return "LeftMouseUp";
+    case NSEventTypeRightMouseDown: return "RightMouseDown";
+    case NSEventTypeRightMouseUp: return "RightMouseUp";
+    case NSEventTypeOtherMouseDown: return "OtherMouseDown";
+    case NSEventTypeOtherMouseUp: return "OtherMouseUp";
+    default: return "Other";
+    }
+}
+
+/* MacRunner 2026-07-29 (HK E2E lane): KEYBOARD-side counterpart of the trace below.
+ *
+ * trace_ui_input_event() filters out everything that is not a mouse BUTTON event
+ * (see its early return on trace_ui_input_mouse_button_event), so -sendEvent: has never
+ * been observable for keys at all.  Measured in laneA-HK-E2E-12-SELFINIT: HK's process
+ * has a WineApplication with will_run=1, a real 1512x982 Cocoa window and the real user
+ * driver installed, injection reports 4 posted CGEvents per key, and
+ * stage=macdrv_key_event is still 0 — with no way to tell whether AppKit delivered the
+ * event to -sendEvent: and it was dropped for want of a key window, or whether it never
+ * arrived.  Those need opposite fixes, so print the routing state with the event.
+ *
+ * Cheap by construction: key events only, and a hard budget, so it can ride the same
+ * narrow MACRUNNER_TRACE_WINEMAC_KEYS gate that keyboard.c uses without the
+ * ProcessEvents flood that MACRUNNER_TRACE_WINEMAC_INPUT causes at frame rates. */
+static BOOL trace_key_input_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_KEYS") != NULL || trace_ui_input_enabled();
+    return enabled;
+}
+
+/* MacRunner 2026-07-29 (HK E2E lane): see -[WineApplicationController handleEvent:].
+ * ON by default -- it is the fix; "0" restores AppKit's key-window-only routing. */
+static BOOL macrunner_keydown_without_keywindow_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *env = getenv("MACRUNNER_MACDRV_KEYDOWN_NO_KEYWINDOW");
+        enabled = !(env && env[0] == '0');
+    }
+    return enabled;
+}
+
+static BOOL trace_key_input_event_type(NSEventType type)
+{
+    return type == NSEventTypeKeyDown || type == NSEventTypeKeyUp ||
+           type == NSEventTypeFlagsChanged;
+}
+
+static void trace_key_input_event(const char *stage, NSEvent *event)
+{
+    static int budget = 60;
+    NSEventType type;
+
+    if (!trace_key_input_enabled()) return;
+    type = [event type];
+    if (!trace_key_input_event_type(type)) return;
+    if (budget-- <= 0) return;
+
+    fprintf(stderr,
+            "macrunner-ui-input: stage=%s pid=%d type=%ld keycode=%u window=%p class=%s "
+            "keyWindow=%p mainWindow=%p active=%d policy=%ld\n",
+            stage, getpid(), (long)type, (unsigned)[event keyCode], [event window],
+            [event window] ? object_getClassName([event window]) : "(nil)",
+            [NSApp keyWindow], [NSApp mainWindow], (int)[NSApp isActive],
+            (long)[NSApp activationPolicy]);
+    fflush(stderr);
+}
+
+static void trace_ui_input_event(const char *stage, NSEvent *event)
+{
+    NSEventType type;
+    NSWindow *window;
+    CGPoint pt = CGPointMake(-1, -1);
+
+    if (!trace_ui_input_enabled()) return;
+
+    type = [event type];
+    if (!trace_ui_input_mouse_button_event(type)) return;
+
+    window = [event window];
+    if ([event CGEvent]) pt = CGEventGetLocation([event CGEvent]);
+
+    fprintf(stderr,
+            "macrunner-ui-input: stage=%s pid=%d type=%ld/%s window=%p class=%s button=%ld loc=%.1f,%.1f\n",
+            stage, getpid(), (long)type, trace_ui_input_event_name(type), window,
+            window ? object_getClassName(window) : "(nil)", (long)[event buttonNumber], pt.x, pt.y);
+    fflush(stderr);
+}
 
 /* CW Hack 22310, 24199 */
 // WineExternalQuitRequestNotification is sent on the distributed notification center when an app
@@ -82,7 +228,32 @@ bool macdrv_err_on;
  */
 static NSString* WineLocalizedString(unsigned int stringID)
 {
-    return ((NSDictionary*)localized_strings)[@(stringID)];
+    NSString* str = ((NSDictionary*)localized_strings)[@(stringID)];
+
+    /* MacRunner 2026-07-29 (HK E2E lane): fall back to the English resource text when the
+     * dictionary has no entry.  It has none at all when the driver was brought up by
+     * macdrv_process_selfinit(), which has no PE to LoadStringW() the resources from --
+     * and every caller below feeds this straight into -[NSMenu initWithTitle:] /
+     * -[NSMenuItem setTitle:] / +[NSString stringWithFormat:], all of which raise
+     * NSInvalidArgumentException on nil.  Values are the winemac.rc defaults verbatim. */
+    if (!str) switch (stringID)
+    {
+        case STRING_MENU_WINE:                    str = @"Wine"; break;
+        case STRING_MENU_ITEM_HIDE_APPNAME:       str = @"Hide %@"; break;
+        case STRING_MENU_ITEM_HIDE:               str = @"Hide"; break;
+        case STRING_MENU_ITEM_HIDE_OTHERS:        str = @"Hide Others"; break;
+        case STRING_MENU_ITEM_SHOW_ALL:           str = @"Show All"; break;
+        case STRING_MENU_ITEM_QUIT_APPNAME:       str = @"Quit %@"; break;
+        case STRING_MENU_ITEM_QUIT:               str = @"Quit"; break;
+        case STRING_MENU_WINDOW:                  str = @"Window"; break;
+        case STRING_MENU_ITEM_MINIMIZE:           str = @"Minimize"; break;
+        case STRING_MENU_ITEM_ZOOM:               str = @"Zoom"; break;
+        case STRING_MENU_ITEM_ENTER_FULL_SCREEN:  str = @"Enter Full Screen"; break;
+        case STRING_MENU_ITEM_BRING_ALL_TO_FRONT: str = @"Bring All to Front"; break;
+        default:                                  str = @""; break;
+    }
+
+    return str;
 }
 
 
@@ -92,11 +263,26 @@ static NSString* WineLocalizedString(unsigned int stringID)
 
     - (void) sendEvent:(NSEvent*)anEvent
     {
-        if (![wineController handleEvent:anEvent])
+        BOOL handled;
+
+        trace_ui_input_event("app_sendEvent_enter", anEvent);
+        trace_key_input_event("app_sendEvent_key_enter", anEvent);
+        handled = [wineController handleEvent:anEvent];
+        if (trace_ui_input_enabled() && trace_ui_input_mouse_button_event([anEvent type]))
         {
-            [super sendEvent:anEvent];
-            [wineController didSendEvent:anEvent];
+            fprintf(stderr, "macrunner-ui-input: stage=app_sendEvent_after_handle pid=%d handled=%d\n",
+                    getpid(), handled);
+            fflush(stderr);
         }
+        if (!handled)
+        {
+            trace_ui_input_event("app_sendEvent_super_enter", anEvent);
+            [super sendEvent:anEvent];
+            trace_ui_input_event("app_sendEvent_super_exit", anEvent);
+            [wineController didSendEvent:anEvent];
+            trace_ui_input_event("app_sendEvent_didSendEvent_exit", anEvent);
+        }
+        trace_ui_input_event("app_sendEvent_exit", anEvent);
     }
 
     - (void) setWineController:(WineApplicationController*)newController
@@ -1595,6 +1781,8 @@ static NSString* WineLocalizedString(unsigned int stringID)
         WineWindow* windowBroughtForward = nil;
         BOOL process = FALSE;
 
+        trace_ui_input_event("handleMouseButton_enter", theEvent);
+
         if ([window isKindOfClass:[WineWindow class]] &&
             type == NSEventTypeLeftMouseDown &&
             ![theEvent wine_commandKeyDown])
@@ -1684,11 +1872,27 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 unmatchedMouseDowns &= ~downMask;
             }
 
+            if (trace_ui_input_enabled())
+            {
+                fprintf(stderr,
+                        "macrunner-ui-input: stage=handleMouseButton_decision pid=%d window=%p process=%d capture=%p dragged=%lu\n",
+                        getpid(), window, process, mouseCaptureWindow, (unsigned long)[windowsBeingDragged count]);
+                fflush(stderr);
+            }
+
             if (process)
             {
                 macdrv_event* event;
 
                 pt = cgpoint_win_from_mac(pt);
+
+                if (trace_ui_input_enabled())
+                {
+                    fprintf(stderr,
+                            "macrunner-ui-input: stage=handleMouseButton_post pid=%d window=%p button=%ld pressed=%d x=%.1f y=%.1f\n",
+                            getpid(), window, (long)[theEvent buttonNumber], pressed, pt.x, pt.y);
+                    fflush(stderr);
+                }
 
                 event = macdrv_create_event(MOUSE_BUTTON, window);
                 event->mouse_button.button = [theEvent buttonNumber];
@@ -1697,10 +1901,14 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 event->mouse_button.y = floor(pt.y);
                 event->mouse_button.time_ms = [self ticksForEventTime:[theEvent timestamp]];
 
+                trace_ui_input_event("handleMouseButton_queue_post_enter", theEvent);
                 [window.queue postEvent:event];
+                trace_ui_input_event("handleMouseButton_queue_post_exit", theEvent);
 
                 macdrv_release_event(event);
             }
+            else
+                trace_ui_input_event("handleMouseButton_no_post", theEvent);
         }
 
         if (windowBroughtForward)
@@ -1899,6 +2107,9 @@ static NSString* WineLocalizedString(unsigned int stringID)
         BOOL ret = FALSE;
         NSEventType type = [anEvent type];
 
+        trace_ui_input_event("controller_handleEvent", anEvent);
+        trace_key_input_event("controller_handleEvent_key", anEvent);
+
         if (type == NSEventTypeFlagsChanged)
             self.lastFlagsChanged = anEvent;
         else if (type == NSEventTypeMouseMoved || type == NSEventTypeLeftMouseDragged ||
@@ -1929,6 +2140,38 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 [anEvent.window sendEvent:anEvent];
                 ret = TRUE;
             }
+            /* MacRunner 2026-07-29 (HK E2E lane) — THE LAST BREAK IN THE KEYBOARD CHAIN.
+             *
+             * Measured in laneA-HK-E2E-13-KEYTRACE, HK's process, for all four injected
+             * keys (Down/Down/Up/Return), both down and up:
+             *   stage=app_sendEvent_key_enter    type=10 keycode=125 window=0x876864000
+             *       class=WineWindow keyWindow=0x0 mainWindow=0x0 active=0 policy=0
+             *   stage=controller_handleEvent_key ... identical
+             * so AppKit delivers the event, it carries the correct WineWindow, and this
+             * method sees it -- and macdrv_key_event is still 0.  The reason is right
+             * here: with no kVK_Help match this branch leaves ret = FALSE, so
+             * -[WineApplication sendEvent:] falls through to -[NSApplication sendEvent:],
+             * whose keyDown routing goes to the KEY WINDOW.  There is none, so the event
+             * is dropped and -[WineWindow keyDown:] -> postKeyEvent: never runs.  The
+             * KeyUp branch below then also drops it, because isKeyPressed: is false.
+             *
+             * No key window is not an anomaly to be fixed upstream of here: the process
+             * is not active (active=0), the driver only came up at ~+155 s via
+             * macdrv_process_selfinit, and CGEventPostToPid -- the whole point of which
+             * is unattended injection into a NON-frontmost app -- can never make one.
+             * The event already names its target window, so deliver it there, exactly as
+             * the Help bypass above and the KeyUp branch below already do.
+             *
+             * Deliberately narrow: only when NSApp genuinely has no key window (when it
+             * has one, AppKit's normal routing is correct and untouched).
+             * A/B: MACRUNNER_MACDRV_KEYDOWN_NO_KEYWINDOW=0 restores the old behaviour. */
+            else if (![NSApp keyWindow] && [[anEvent window] isKindOfClass:[WineWindow class]] &&
+                     macrunner_keydown_without_keywindow_enabled())
+            {
+                trace_key_input_event("controller_keydown_no_keywindow", anEvent);
+                [anEvent.window sendEvent:anEvent];
+                ret = TRUE;
+            }
         }
         else if (type == NSEventTypeKeyUp)
         {
@@ -1942,6 +2185,12 @@ static NSString* WineLocalizedString(unsigned int stringID)
             }
         }
 
+        if (trace_ui_input_enabled() && trace_ui_input_mouse_button_event(type))
+        {
+            fprintf(stderr, "macrunner-ui-input: stage=controller_handleEvent_exit pid=%d ret=%d type=%ld/%s\n",
+                    getpid(), ret, (long)type, trace_ui_input_event_name(type));
+            fflush(stderr);
+        }
         return ret;
     }
 
@@ -2177,6 +2426,19 @@ static NSString* WineLocalizedString(unsigned int stringID)
         NSString *configDir, *prefix;
         NSDictionary *userInfo;
 
+        if (macrunner_ui_input_trace_enabled())
+        {
+            NSBundle *mb = [NSBundle mainBundle];
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=активация_вход активно=%d ignore=%d "
+                    "есть_yield=%d bundle_id=%s политика=%ld\n",
+                    (int)[NSApp isActive], (int)ignore,
+                    (int)[NSApplication instancesRespondToSelector:@selector(yieldActivationToApplication:)],
+                    mb.bundleIdentifier ? [mb.bundleIdentifier UTF8String] : "(нет)",
+                    (long)[NSApp activationPolicy]);
+            fflush(stderr);
+        }
+
         if ([NSApp isActive]) return;  /* Nothing to do. */
 
         if (!ignore ||
@@ -2206,6 +2468,66 @@ static NSString* WineLocalizedString(unsigned int stringID)
 
         /* This is racy. See the note in otherWineAppWillActivate:. */
         [NSApp activate];
+
+        /* ★ MacRunner 01.09.2026 — ЗАПАСНОЙ ПУТЬ АКТИВАЦИИ.
+         *
+         * ЗАМЕР (Diablo, гейт MACRUNNER_TRACE_UI_INPUT): активация запрашивается 5 раз,
+         * каждый раз `активно=0 ignore=1 есть_yield=1 политика=0`, и через 500 мс
+         * `активно=0 ключевое=0x0 главное=0x0`. То есть окно на экране есть, политика
+         * уже Regular, а приложение активным не становится — оттого нет ни
+         * WM_ACTIVATEAPP, ни WM_PAINT, и игра ждёт.
+         *
+         * Почему: при `есть_yield=1` прямой `activateIgnoringOtherApps` НЕ вызывается
+         * вовсе, вместо него рассылается просьба уступить активацию — но уступают
+         * только ДРУГИЕ приложения Wine. Мы запускаемся из терминала, активен не Wine,
+         * уступать некому, и просьба уходит в никуда.
+         *
+         * СВЕРКА С ЭТАЛОНОМ (CrossOver 26.1.0 = Wine 11.0, scripts/чьё-это.sh):
+         * `transformProcessToForeground` у нас совпадает с ним ДОСЛОВНО, а
+         * `tryToActivateIgnoringOtherApps` в эталоне делает ровно то же, что делали мы
+         * до правки — рассылает уведомление и зовёт `[NSApp activate]`. Запасного пути
+         * у эталона НЕТ: его замысел рассчитан на то, что уступит другое приложение
+         * Wine либо что нас запустил сам пользователь. Способ запуска из терминала,
+         * когда активен не Wine, там не покрыт вовсе. Значит это не расхождение с
+         * эталоном, а дополнение к нему.
+         *
+         * Запасной путь: сначала честно идём предписанной дорогой, и только если она
+         * ДОКАЗАННО не сработала (спустя 400 мс мы всё ещё не активны) — зовём прямой
+         * способ. Гейт снят 02.09.2026: срабатывание узкое — только если спустя
+         * 400 мс мы всё ещё НЕ активны, то есть собственная активация уже не
+         * сработала. Замер: активно 0 -> 1, ключевое окно 0x0 -> ненулевое. */
+        {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(400 * NSEC_PER_MSEC)),
+                           dispatch_get_main_queue(), ^{
+                if ([NSApp isActive]) return;
+                [NSApp activateIgnoringOtherApps:YES];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(300 * NSEC_PER_MSEC)),
+                               dispatch_get_main_queue(), ^{
+                    fprintf(stderr,
+                            "macrunner-ui-input: stage=активация_запасная активно=%d "
+                            "ключевое=%p главное=%p\n",
+                            (int)[NSApp isActive], [NSApp keyWindow], [NSApp mainWindow]);
+                    fflush(stderr);
+                });
+            });
+        }
+
+        /* Активация асинхронна: сразу после вызова isActive ещё нулевой.
+         * Смотрим спустя время — иначе замер ничего не значит. */
+        if (macrunner_ui_input_trace_enabled())
+        {
+            fprintf(stderr, "macrunner-ui-input: stage=активация_сразу активно=%d\n",
+                    (int)[NSApp isActive]);
+            fflush(stderr);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)),
+                           dispatch_get_main_queue(), ^{
+                fprintf(stderr,
+                        "macrunner-ui-input: stage=активация_спустя_500мс активно=%d "
+                        "ключевое=%p главное=%p\n",
+                        (int)[NSApp isActive], [NSApp keyWindow], [NSApp mainWindow]);
+                fflush(stderr);
+            });
+        }
      }
 
     /* CW Hack 22310, 24199 */
@@ -2435,6 +2757,14 @@ static NSString* WineLocalizedString(unsigned int stringID)
         NSNumber* displayID;
         NSDictionary* modesToRealize = [latentDisplayModes autorelease];
 
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=applicationDidBecomeActive pid=%d beenActive=%d\n",
+                    getpid(), beenActive);
+            fflush(stderr);
+        }
+
         latentDisplayModes = [[NSMutableDictionary alloc] init];
         for (displayID in modesToRealize)
         {
@@ -2483,6 +2813,14 @@ static NSString* WineLocalizedString(unsigned int stringID)
     {
         macdrv_event* event;
         WineEventQueue* queue;
+
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=applicationDidResignActive pid=%d\n",
+                    getpid());
+            fflush(stderr);
+        }
 
         [self invalidateGotFocusEvents];
 

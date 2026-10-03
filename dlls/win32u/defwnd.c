@@ -3018,6 +3018,27 @@ LRESULT desktop_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, 
         CREATESTRUCTW *cs = (CREATESTRUCTW *)lparam;
         const GUID *guid = cs->lpCreateParams;
 
+        /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 335 — БЕЗУСЛОВНЫЙ ЗОНД СОЗДАНИЯ РАБОЧЕГО СТОЛА.
+         *
+         * Это ЕДИНСТВЕННОЕ место, где ставится свойство `__wine_display_device_guid`, а
+         * `load_desktop_driver` берёт из него GUID ключа `Control\Video\{GUID}\0000`. В прогонах
+         * Diablo `guid_atom=0`, при том что устройство заведено и ключ записан с настоящим GUID
+         * `{9e4bf620-…}` — то есть пишущий и читающий не сходятся в имени. Отличить «окно создано
+         * без GUID» от «свойство потерялось после установки» можно только здесь.
+         *
+         * Печать безусловная, первые 4 раза, `fprintf(stderr,…)`. */
+        {
+            static LONG said;
+            if (InterlockedIncrement( &said ) <= 4)
+            {
+                fprintf( stderr, "macrunner-ui-input: stage=desktop_wndproc_nccreate pid=%04x hwnd=%p "
+                         "guid=%s\n",
+                         (unsigned int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess, hwnd,
+                         guid ? debugstr_guid( guid ) : "NULL" );
+                fflush( stderr );
+            }
+        }
+
         if (guid)
         {
             ATOM atom = 0;

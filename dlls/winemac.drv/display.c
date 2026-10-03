@@ -790,6 +790,7 @@ LONG macdrv_ChangeDisplaySettings(LPDEVMODEW displays, LPCWSTR primary_name, HWN
     CFArrayRef display_modes;
     struct display_mode_descriptor *desc;
     CGDisplayModeRef best_display_mode;
+    CGDisplayModeRef macrunner_last_set = NULL;
 
     TRACE("%p %s %p 0x%08x %p\n", displays, debugstr_w(primary_name), hwnd, flags, lpvoid);
 
@@ -837,11 +838,25 @@ LONG macdrv_ChangeDisplaySettings(LPDEVMODEW displays, LPCWSTR primary_name, HWN
             WARN("Failed to set display mode\n");
             ret = DISP_CHANGE_FAILED;
         }
+        else macrunner_last_set = best_display_mode;
     }
+
+    /* MacRunner 2026-09-02 — фокус: действует ли сейчас НАШ режим (не исходный). Условие удержания фокуса, не зависящее от времени:
+     * fok-2 показал потерю фокуса спустя ~5 с после SetDisplayMode (окно 3 с не спасло бы) → игра встала навсегда. */
+    if (ret == DISP_CHANGE_SUCCESSFUL && macrunner_last_set)
+        macrunner_display_mode_changed = !display_mode_matches_descriptor(macrunner_last_set, desc);
 
     free_display_mode_descriptor(desc);
     CFRelease(display_modes);
     macdrv_reset_device_metrics();
+
+    /* MacRunner 2026-09-02 — фокус: запомнить момент НАШЕЙ смены режима (окно удержания в обработчиках потери фокуса). */
+    if (ret == DISP_CHANGE_SUCCESSFUL)
+    {
+        macrunner_note_display_mode_change();
+        MESSAGE("macrunner-focus: смена режима дисплея выполнена, fg=%p\n", NtUserGetForegroundWindow());
+        MESSAGE("macrunner-focus: наш режим действует=%d (путь при emulate_modeset НЕ исполняется — якорь перенесён в WindowPosChanged)\n", macrunner_display_mode_changed);
+    }
 
     return ret;
 }

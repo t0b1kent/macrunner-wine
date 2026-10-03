@@ -128,6 +128,22 @@ static void timer_callback( void *private )
 {
     struct timer *timer = (struct timer *)private;
 
+    /* MacRunner 2026-06-21: characterize the ~9.5ms guest scene-load pacing — is it a periodic
+     * timer firing? Log the firing timer's period + inter-fire gap (file: wineserver stderr uncaptured). */
+    {
+        static int mr_en = -1; static FILE *mr_f; static unsigned long long mr_n, mr_last;
+        if (mr_en < 0) { mr_en = getenv("MACRUNNER_HB_TRACE_SYNCMETER") ? 1 : 0; if (mr_en) mr_f = fopen("/tmp/hk-timer-fire.txt","a"); }
+        if (mr_en && mr_f) {
+            struct timeval tv; gettimeofday(&tv, NULL);
+            unsigned long long now = (unsigned long long)tv.tv_sec*1000000ull + tv.tv_usec;
+            unsigned long long gap = mr_last ? now - mr_last : 0; mr_last = now;
+            if ((++mr_n % 500) == 0) {
+                fprintf(mr_f, "timer-fire: n=%llu period_ms=%u last_gap_us=%llu\n", mr_n, timer->period, gap);
+                fflush(mr_f);
+            }
+        }
+    }
+
     /* queue an APC */
     if (timer->thread)
     {

@@ -18,6 +18,9 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "user_private.h"
@@ -30,6 +33,14 @@
 WINE_DEFAULT_DEBUG_CHANNEL(win);
 
 #define MAX_ATOM_LEN 255 /* from dlls/kernel32/atom.c */
+
+static BOOL trace_secondary_window_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) enabled = getenv("MACRUNNER_TRACE_SECONDARY_WINDOW") != NULL;
+    return enabled;
+}
 
 static const char *debugstr_us( const UNICODE_STRING *us )
 {
@@ -293,12 +304,28 @@ HWND WIN_CreateWindowEx( CREATESTRUCTW *cs, LPCWSTR className, HINSTANCE module,
     init_class_name( &class, className );
     get_class_version( &class, &version, TRUE );
 
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=user32_create_window_class pid=%lu module=%p "
+                 "instance=%p class_arg_atom=%lu class=%s version_len=%u style=0x%lx ex_style=0x%lx parent=%p\n",
+                 GetCurrentProcessId(), module, cs->hInstance,
+                 IS_INTRESOURCE( className ) ? ((ULONG_PTR)className & 0xffff) : 0,
+                 debugstr_us( &class ), version.Length, cs->style, cs->dwExStyle, cs->hwndParent );
+
     if (!NtUserGetClassInfoEx( module, &class, &info, NULL, FALSE ))
     {
+        if (trace_secondary_window_enabled())
+            fprintf( stderr, "macrunner-secondary: stage=user32_create_window_class_missing pid=%lu "
+                     "module=%p class=%s last_error=%lu\n",
+                     GetCurrentProcessId(), module, debugstr_us( &class ), GetLastError() );
         TRACE( "%s %p -> not found\n", debugstr_us(&class), module );
         SetLastError( ERROR_CLASS_DOES_NOT_EXIST );
         return FALSE;
     }
+
+    if (trace_secondary_window_enabled() && IS_INTRESOURCE( className ))
+        fprintf( stderr, "macrunner-secondary: stage=user32_create_window_class_found pid=%lu "
+                 "module=%p class=%s wndproc=%p cbWndExtra=%d\n",
+                 GetCurrentProcessId(), module, debugstr_us( &class ), info.lpfnWndProc, info.cbWndExtra );
 
     TRACE("%s %s%s%s ex=%08lx style=%08lx %d,%d %dx%d parent=%p menu=%p inst=%p params=%p\n",
           unicode ? debugstr_w(cs->lpszName) : debugstr_a((LPCSTR)cs->lpszName),
@@ -430,6 +457,29 @@ HWND WINAPI DECLSPEC_HOTPATCH CreateWindowExA( DWORD exStyle, LPCSTR className,
 {
     CREATESTRUCTA cs;
 
+    /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 239 — ИСТИННЫЙ ВЫЗЫВАЮЩИЙ.
+     * За ночь два класса приборов исчерпаны и оба дали противоречащие ответы: обход стека по
+     * ebp не отличает живой кадр от остатка (226, 236), а счётчик блоков трансляции говорит,
+     * что путь исполнен ОДИН раз, тогда как переходник wow64win насчитал 6000 вызовов (238).
+     * Здесь адрес возврата берётся ни тем ни другим способом, а самим фактом вызова функции,
+     * поэтому спор решается. Печать ограничена по числу, гейта нет намеренно: в этом модуле
+     * getenv недоступен (ловушка 210). */
+    {
+        static LONG cw_n;
+        LONG k = InterlockedIncrement( &cw_n );
+
+        /* Итерация 291: добавлено ИМЯ окна. Ступень 1 Diablo встала в насосе сообщений перед
+         * диалогом Storm `SDlgDialog 280x144` с одной кнопкой, и весь вопрос теперь в том, что
+         * в этом диалоге написано: про компакт-диск — стена в данных, про видеорежим — наша.
+         * Класс мы печатали, а имя, которое и есть текст заголовка, — нет. */
+        if (k <= 12 || !(k % 1000))
+            MESSAGE( "macrunner-user32-createwindow: n=%d возврат=%p класс=%s имя=\"%s\" %dx%d стиль=%08x\n",
+                     (int)k, __builtin_return_address(0),
+                     IS_INTRESOURCE(className) ? "(атом)" : className,
+                     windowName ? windowName : "(нет)",
+                     width, height, (unsigned)style );
+    }
+
     cs.lpCreateParams = data;
     cs.hInstance      = instance;
     cs.hMenu          = menu;
@@ -466,6 +516,17 @@ HWND WINAPI DECLSPEC_HOTPATCH CreateWindowExW( DWORD exStyle, LPCWSTR className,
                                  HINSTANCE instance, LPVOID data )
 {
     CREATESTRUCTW cs;
+
+    /* Итерация 239: парная точка к CreateWindowExA. Узкий вариант дал НОЛЬ вызовов при 6000
+     * созданиях окна, то есть путь идёт не через него — проверяем широкий. */
+    {
+        static LONG cww_n;
+        LONG k = InterlockedIncrement( &cww_n );
+
+        if (k <= 4 || !(k % 1000))
+            MESSAGE( "macrunner-user32-createwindow-w: n=%d возврат=%p %dx%d стиль=%08x\n",
+                     (int)k, __builtin_return_address(0), width, height, (unsigned)style );
+    }
 
     cs.lpCreateParams = data;
     cs.hInstance      = instance;
@@ -529,6 +590,18 @@ HWND WINAPI FindWindowExW( HWND parent, HWND child, const WCHAR *class, const WC
 HWND WINAPI FindWindowA( LPCSTR className, LPCSTR title )
 {
     HWND ret = FindWindowExA( 0, 0, className, title );
+
+    /* MacRunner 2026-08-29 — КТО КОГО НАШЁЛ.
+     *
+     * Разбор WinMain Diablo (0x408B4A) показал условие раннего выхода:
+     *   call 0x408DB1 -> FindWindowA("DIABLO", NULL)
+     *   test eax, eax ; jne 0x408CA9 -> xor eax,eax ; ret  (WinMain возвращает 0)
+     * Если окно класса DIABLO уже есть, игра считает себя запущенной и выходит,
+     * а CRT зовёт exit(). Ни падения, ни убийства — сознательный выход.
+     * Печатаем, что именно нашлось и в каком процессе. */
+    ERR( "macrunner-поиск-окна: класс=%s имя=%s НАЙДЕНО=%p pid=%04lx\n",
+         debugstr_a(className), debugstr_a(title), ret,
+         (unsigned long)GetCurrentProcessId() );
     if (!ret) SetLastError (ERROR_CANNOT_FIND_WND_CLASS);
     return ret;
 }
@@ -1146,6 +1219,15 @@ INT WINAPI GetWindowTextW( HWND hwnd, LPWSTR lpString, INT nMaxCount )
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetWindowTextA( HWND hwnd, LPCSTR lpString )
 {
+    /* Итерация 291: текст диалога Storm ставится СЮДА — при создании `SDlgStatic 240x80`
+     * имя пустое. Печать первых 12: это и есть сообщение, на котором встала ступень 1. */
+    {
+        static LONG swt_n;
+        LONG k = InterlockedIncrement( &swt_n );
+        if (k <= 12)
+            MESSAGE( "macrunner-user32-settext: n=%d окно=%p текст=\"%s\"\n",
+                     (int)k, hwnd, lpString ? lpString : "(нет)" );
+    }
     if (is_broadcast(hwnd))
     {
         SetLastError( ERROR_INVALID_PARAMETER );

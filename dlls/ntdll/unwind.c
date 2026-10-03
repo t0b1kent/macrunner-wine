@@ -23,6 +23,7 @@
 
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -777,11 +778,77 @@ static ARM64_RUNTIME_FUNCTION *find_function_info_arm64( ULONG_PTR pc, ULONG_PTR
     return NULL;
 }
 
+static ARM64_RUNTIME_FUNCTION *find_function_info_arm64_pdata_section( ULONG_PTR pc, ULONG_PTR *base )
+{
+    LDR_DATA_TABLE_ENTRY *module;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_SECTION_HEADER *sec;
+    unsigned int i;
+
+    if (LdrFindEntryForAddress( (void *)pc, &module )) return NULL;
+    if (!(nt = RtlImageNtHeader( module->DllBase ))) return NULL;
+
+    sec = IMAGE_FIRST_SECTION( nt );
+    for (i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++)
+    {
+        ULONG size;
+        ARM64_RUNTIME_FUNCTION *func, *ret;
+
+        if (memcmp( sec->Name, ".pdata", sizeof(".pdata") )) continue;
+        size = sec->Misc.VirtualSize ? sec->Misc.VirtualSize : sec->SizeOfRawData;
+        func = (ARM64_RUNTIME_FUNCTION *)((char *)module->DllBase + sec->VirtualAddress);
+        ret = find_function_info_arm64( pc, (ULONG_PTR)module->DllBase, func, size / sizeof(*func) );
+        if (ret)
+        {
+            *base = (ULONG_PTR)module->DllBase;
+            return ret;
+        }
+    }
+    return NULL;
+}
+
 #ifdef __arm64ec__
 #define RtlVirtualUnwind RtlVirtualUnwind_arm64
 #define RtlVirtualUnwind2 RtlVirtualUnwind2_arm64
 #define RtlLookupFunctionEntry RtlLookupFunctionEntry_arm64
 #define __C_specific_handler __C_specific_handler_arm64
+#endif
+
+EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *frame,
+                                                   ARM64_NT_CONTEXT *context,
+                                                   DISPATCHER_CONTEXT_ARM64 *dispatch );
+
+#ifdef __arm64ec__
+static BOOL macrunner_unwind_arm64_c_specific_handler( ULONG_PTR pc, ARM64_NT_CONTEXT *context,
+                                                       ULONG_PTR *frame_ret,
+                                                       PEXCEPTION_ROUTINE *handler_ret )
+{
+    ULONG_PTR start = (ULONG_PTR)__C_specific_handler;
+    ULONG_PTR sp = context->Sp;
+    ULONG_PTR *slots = (ULONG_PTR *)sp;
+
+    if (pc < start || pc >= start + 0x338) return FALSE;
+    if ((void *)sp < NtCurrentTeb()->Tib.StackLimit ||
+        sp + 0x80 < sp || (void *)(sp + 0x80) > NtCurrentTeb()->Tib.StackBase)
+        return FALSE;
+
+    context->X19 = slots[0x20 / sizeof(*slots)];
+    context->X20 = slots[0x28 / sizeof(*slots)];
+    context->X21 = slots[0x30 / sizeof(*slots)];
+    context->X22 = slots[0x38 / sizeof(*slots)];
+    context->X23 = slots[0x40 / sizeof(*slots)];
+    context->X24 = slots[0x48 / sizeof(*slots)];
+    context->X25 = slots[0x50 / sizeof(*slots)];
+    context->X26 = slots[0x58 / sizeof(*slots)];
+    context->X27 = slots[0x60 / sizeof(*slots)];
+    context->X28 = slots[0x68 / sizeof(*slots)];
+    context->Lr  = slots[0x70 / sizeof(*slots)];
+    context->Pc  = context->Lr;
+    context->Sp  = sp + 0x80;
+    *handler_ret = NULL;
+    *frame_ret = context->Sp;
+    return TRUE;
+}
 #endif
 
 /**********************************************************************
@@ -798,10 +865,16 @@ NTSTATUS WINAPI RtlVirtualUnwind2( ULONG type, ULONG_PTR base, ULONG_PTR pc,
     TRACE( "type %lx base %I64x pc %I64x rva %I64x sp %I64x\n", type, base, pc, pc - base, context->Sp );
     if (limit_low || limit_high) FIXME( "limits not supported\n" );
 
-    if (!func && pc == context->Lr) return STATUS_BAD_FUNCTION_TABLE;  /* invalid leaf function */
-
     *handler_data = NULL;
     context->ContextFlags |= CONTEXT_UNWOUND_TO_CALL;
+
+#ifdef __arm64ec__
+    if (!func && macrunner_unwind_arm64_c_specific_handler( pc, context, frame_ret, handler_ret ))
+        return STATUS_SUCCESS;
+#endif
+
+    if (!func && (pc == context->Lr || pc + 4 == context->Lr))
+        return STATUS_BAD_FUNCTION_TABLE;  /* invalid/no-progress leaf function */
 
     if (!func)  /* leaf function */
         *handler_ret = NULL;
@@ -920,7 +993,26 @@ PARM64_RUNTIME_FUNCTION WINAPI RtlLookupFunctionEntry( ULONG_PTR pc, ULONG_PTR *
     ULONG size;
 
     if ((func = (ARM64_RUNTIME_FUNCTION *)RtlLookupFunctionTable( pc, base, &size )))
-        return find_function_info_arm64( pc, *base, func, size / sizeof(*func));
+    {
+        ARM64_RUNTIME_FUNCTION *ret = find_function_info_arm64( pc, *base, func, size / sizeof(*func));
+#ifdef __arm64ec__
+        if (!ret)
+        {
+            LDR_DATA_TABLE_ENTRY *module;
+            ULONG normal_size;
+            ARM64_RUNTIME_FUNCTION *normal_func;
+
+            if (!LdrFindEntryForAddress( (void *)pc, &module ) &&
+                (normal_func = (ARM64_RUNTIME_FUNCTION *)RtlImageDirectoryEntryToData(
+                    module->DllBase, TRUE, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &normal_size )) &&
+                normal_func != func)
+                ret = find_function_info_arm64( pc, (ULONG_PTR)module->DllBase, normal_func,
+                                                normal_size / sizeof(*normal_func) );
+        }
+#endif
+        if (!ret) ret = find_function_info_arm64_pdata_section( pc, base );
+        return ret;
+    }
 
     if ((func = (ARM64_RUNTIME_FUNCTION *)lookup_dynamic_function_table( pc, &dynbase, &size )))
     {
@@ -928,6 +1020,8 @@ PARM64_RUNTIME_FUNCTION WINAPI RtlLookupFunctionEntry( ULONG_PTR pc, ULONG_PTR *
         if (ret) *base = dynbase;
         return ret;
     }
+
+    if ((func = find_function_info_arm64_pdata_section( pc, base ))) return func;
 
     *base = 0;
     return NULL;

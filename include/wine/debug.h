@@ -27,6 +27,10 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#if defined(WINE_UNIX_LIB) && defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
 #include <windef.h>
 #include <winbase.h>
 #ifndef GUID_DEFINED
@@ -207,6 +211,42 @@ static inline int __wine_dbg_cdecl wine_dbg_log( enum __wine_debug_class cls,
     return ret;
 }
 
+#if defined(WINE_UNIX_LIB) && defined(__APPLE__)
+static inline int wine_dbg_unix_ptr_readable( const void *ptr, size_t size )
+{
+    mach_vm_address_t addr = (mach_vm_address_t)(ULONG_PTR)ptr;
+    mach_vm_address_t end;
+
+    if (!size) return 1;
+    if (!ptr) return 0;
+    if (addr + size - 1 < addr) return 0;
+    end = addr + size - 1;
+
+    while (addr <= end)
+    {
+        mach_vm_address_t region = addr;
+        mach_vm_address_t region_end;
+        mach_vm_size_t region_size = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t object = MACH_PORT_NULL;
+        kern_return_t ret;
+
+        ret = mach_vm_region( mach_task_self(), &region, &region_size, VM_REGION_BASIC_INFO_64,
+                              (vm_region_info_t)&info, &count, &object );
+        if (object != MACH_PORT_NULL) mach_port_deallocate( mach_task_self(), object );
+        if (ret != KERN_SUCCESS || region > addr || !region_size || !(info.protection & VM_PROT_READ))
+            return 0;
+
+        region_end = region + region_size - 1;
+        if (region_end < region) return 0;
+        if (end <= region_end) return 1;
+        addr = region_end + 1;
+    }
+    return 1;
+}
+#endif
+
 static inline const char *wine_dbgstr_an( const char *str, int n )
 {
     static const char hex[16] = {'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
@@ -214,10 +254,26 @@ static inline const char *wine_dbgstr_an( const char *str, int n )
 
     if (!str) return "(null)";
     if (!((ULONG_PTR)str >> 16)) return wine_dbg_sprintf( "#%04x", LOWORD(str) );
-#ifndef WINE_UNIX_LIB
+#if defined(WINE_UNIX_LIB) && defined(__APPLE__)
+    if (n == -1)
+    {
+        for (n = 0; n < (int)(sizeof(buffer) - 9); n++)
+        {
+            if (!wine_dbg_unix_ptr_readable( str + n, sizeof(*str) )) return "(invalid)";
+            if (!str[n]) break;
+        }
+    }
+    else if (n > 0)
+    {
+        size_t check = n < (int)(sizeof(buffer) - 9) ? n : sizeof(buffer) - 9;
+        if (!wine_dbg_unix_ptr_readable( str, check * sizeof(*str) )) return "(invalid)";
+    }
+#else
+# ifndef WINE_UNIX_LIB
     if (IsBadStringPtrA( str, n )) return "(invalid)";
-#endif
+# endif
     if (n == -1) for (n = 0; str[n]; n++) ;
+#endif
     *dst++ = '"';
     while (n-- > 0 && dst <= buffer + sizeof(buffer) - 9)
     {
@@ -258,10 +314,26 @@ static inline const char *wine_dbgstr_wn( const WCHAR *str, int n )
 
     if (!str) return "(null)";
     if (!((ULONG_PTR)str >> 16)) return wine_dbg_sprintf( "#%04x", LOWORD(str) );
-#ifndef WINE_UNIX_LIB
+#if defined(WINE_UNIX_LIB) && defined(__APPLE__)
+    if (n == -1)
+    {
+        for (n = 0; n < (int)(sizeof(buffer) - 10); n++)
+        {
+            if (!wine_dbg_unix_ptr_readable( str + n, sizeof(*str) )) return "(invalid)";
+            if (!str[n]) break;
+        }
+    }
+    else if (n > 0)
+    {
+        size_t check = n < (int)(sizeof(buffer) - 10) ? n : sizeof(buffer) - 10;
+        if (!wine_dbg_unix_ptr_readable( str, check * sizeof(*str) )) return "(invalid)";
+    }
+#else
+# ifndef WINE_UNIX_LIB
     if (IsBadStringPtrW( str, n )) return "(invalid)";
-#endif
+# endif
     if (n == -1) for (n = 0; str[n]; n++) ;
+#endif
     *dst++ = 'L';
     *dst++ = '"';
     while (n-- > 0 && dst <= buffer + sizeof(buffer) - 10)

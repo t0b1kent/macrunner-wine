@@ -36,6 +36,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(ddraw);
  *****************************************************************************/
 static HRESULT WINAPI ddraw_palette_QueryInterface(IDirectDrawPalette *iface, REFIID refiid, void **obj)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_palette_QueryInterface\n" ); }
+    ERR( "macrunner-ddraw-веха: palette QueryInterface\n" );
     TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(refiid), obj);
 
     if (IsEqualGUID(refiid, &IID_IUnknown)
@@ -63,6 +65,7 @@ static HRESULT WINAPI ddraw_palette_QueryInterface(IDirectDrawPalette *iface, RE
  *****************************************************************************/
 static ULONG WINAPI ddraw_palette_AddRef(IDirectDrawPalette *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_palette_AddRef\n" ); }
     struct ddraw_palette *This = impl_from_IDirectDrawPalette(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
 
@@ -82,6 +85,8 @@ static ULONG WINAPI ddraw_palette_AddRef(IDirectDrawPalette *iface)
  *****************************************************************************/
 static ULONG WINAPI ddraw_palette_Release(IDirectDrawPalette *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_palette_Release\n" ); }
+    ERR( "macrunner-ddraw-веха: palette Release\n" );
     struct ddraw_palette *palette = impl_from_IDirectDrawPalette(iface);
     ULONG ref = InterlockedDecrement(&palette->ref);
 
@@ -121,6 +126,7 @@ static ULONG WINAPI ddraw_palette_Release(IDirectDrawPalette *iface)
 static HRESULT WINAPI ddraw_palette_Initialize(IDirectDrawPalette *iface,
         IDirectDraw *ddraw, DWORD flags, PALETTEENTRY *entries)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_palette_Initialize\n" ); }
     TRACE("iface %p, ddraw %p, flags %#lx, entries %p.\n",
             iface, ddraw, flags, entries);
 
@@ -129,6 +135,8 @@ static HRESULT WINAPI ddraw_palette_Initialize(IDirectDrawPalette *iface,
 
 static HRESULT WINAPI ddraw_palette_GetCaps(IDirectDrawPalette *iface, DWORD *caps)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_palette_GetCaps\n" ); }
+    ERR( "macrunner-ddraw-веха: palette GetCaps\n" );
     struct ddraw_palette *palette = impl_from_IDirectDrawPalette(iface);
 
     TRACE("iface %p, caps %p.\n", iface, caps);
@@ -160,6 +168,8 @@ static HRESULT WINAPI ddraw_palette_GetCaps(IDirectDrawPalette *iface, DWORD *ca
 static HRESULT WINAPI ddraw_palette_SetEntries(IDirectDrawPalette *iface,
         DWORD flags, DWORD start, DWORD count, PALETTEENTRY *entries)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_palette_SetEntries\n" ); }
+    ERR( "macrunner-ddraw-веха: palette SetEntries\n" );
     struct ddraw_palette *palette = impl_from_IDirectDrawPalette(iface);
     HRESULT hr;
 
@@ -199,6 +209,8 @@ static HRESULT WINAPI ddraw_palette_SetEntries(IDirectDrawPalette *iface,
 static HRESULT WINAPI ddraw_palette_GetEntries(IDirectDrawPalette *iface,
         DWORD flags, DWORD start, DWORD count, PALETTEENTRY *entries)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_palette_GetEntries\n" ); }
+    ERR( "macrunner-ddraw-веха: palette GetEntries\n" );
     struct ddraw_palette *palette = impl_from_IDirectDrawPalette(iface);
     HRESULT hr;
 

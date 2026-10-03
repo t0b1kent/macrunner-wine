@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <signal.h>
 #include <spawn.h>
+#include <strings.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -94,6 +95,8 @@
 #include "wine/list.h"
 #include "ntsyscalls.h"
 #include "wine/debug.h"
+#include "../../../../hyperbridge/include/hb_memory.h"
+#include "../../../../hyperbridge/include/hb_runtime.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(module);
 WINE_DECLARE_DEBUG_CHANNEL(syscall);
@@ -114,6 +117,8 @@ void *p__wine_ctrl_routine = NULL;
 SYSTEM_DLL_INIT_BLOCK *pLdrSystemDllInitBlock = NULL;
 
 extern typeof(NtReadFile) __wine_rpc_NtReadFile;
+extern void macrunner_hb_register_x64_original_exec_sections( void *module, const IMAGE_NT_HEADERS *nt );
+extern void macrunner_hb_init_environment( void );
 
 static void stub_syscall( const char *name )
 {
@@ -141,12 +146,42 @@ static void stub_syscall( const char *name )
 #define SYSCALL_STUB(name) static void name(void) { stub_syscall( #name ); }
 ALL_SYSCALL_STUBS
 
+#if defined(__APPLE__) && defined(__aarch64__)
+/* The syscall dispatcher supplies eight-byte Windows stack slots. Darwin C
+ * packs narrow stack arguments; adapt only the syscall-table boundary. */
+static NTSTATUS macrunner_notify_key_slots( HANDLE key, HANDLE event, PIO_APC_ROUTINE apc,
+                                            void *context, IO_STATUS_BLOCK *io, ULONG filter,
+                                            BOOLEAN subtree, void *buffer,
+                                            ULONG_PTR length, ULONG_PTR async )
+{
+    return NtNotifyChangeKey( key, event, apc, context, io, filter, subtree,
+                              buffer, (ULONG)length, (BOOLEAN)async );
+}
+
+static NTSTATUS macrunner_notify_keys_slots( HANDLE key, ULONG count, OBJECT_ATTRIBUTES *attr,
+                                             HANDLE event, PIO_APC_ROUTINE apc, void *context,
+                                             IO_STATUS_BLOCK *io, ULONG filter,
+                                             ULONG_PTR subtree, void *buffer,
+                                             ULONG_PTR length, ULONG_PTR async )
+{
+    return NtNotifyChangeMultipleKeys( key, count, attr, event, apc, context, io, filter,
+                                       (BOOLEAN)subtree, buffer, (ULONG)length, (BOOLEAN)async );
+}
+#define NtNotifyChangeKey macrunner_notify_key_slots
+#define NtNotifyChangeMultipleKeys macrunner_notify_keys_slots
+#endif
+
 static void * const syscalls[] =
 {
 #define SYSCALL_ENTRY(id,name,args) name,
     ALL_SYSCALLS
 #undef SYSCALL_ENTRY
 };
+
+#if defined(__APPLE__) && defined(__aarch64__)
+#undef NtNotifyChangeKey
+#undef NtNotifyChangeMultipleKeys
+#endif
 
 static BYTE syscall_args[ARRAY_SIZE(syscalls)] =
 {
@@ -196,6 +231,7 @@ const char **dll_paths = NULL;
 const char **system_dll_paths = NULL;
 const char *user_name = NULL;
 SECTION_IMAGE_INFORMATION main_image_info = { NULL };
+BOOL macrunner_hb_x64_loader = FALSE;
 
 /* die on a fatal error; use only during initialization */
 static void fatal_error( const char *err, ... )
@@ -255,7 +291,7 @@ static char *remove_tail( const char *str, const char *tail )
 
     if (len < tail_len) return NULL;
     if (strcmp( str + len - tail_len, tail )) return NULL;
-    ret = malloc( len - tail_len + 1 );
+    if (!(ret = malloc( len - tail_len + 1 ))) fatal_error( "out of memory building loader path\n" );
     memcpy( ret, str, len - tail_len );
     ret[len - tail_len] = 0;
     return ret;
@@ -265,13 +301,22 @@ static char *remove_tail( const char *str, const char *tail )
 static char *build_path( const char *dir, const char *name )
 {
     size_t len = strlen( dir );
-    char *ret = malloc( len + strlen( name ) + 2 );
+    size_t name_len = strlen( name );
+    char *ret;
+
+    if (len)
+    {
+        if (name[0] == '/') name++;
+        name_len = strlen( name );
+    }
+    if (name_len > ~(size_t)0 - 2 || len > ~(size_t)0 - name_len - 2)
+        fatal_error( "loader path too long\n" );
+    if (!(ret = malloc( len + name_len + 2 ))) fatal_error( "out of memory building loader path\n" );
 
     if (len)
     {
         memcpy( ret, dir, len );
         if (ret[len - 1] != '/') ret[len++] = '/';
-        if (name[0] == '/') name++;
     }
     strcpy( ret + len, name );
     return ret;
@@ -282,6 +327,7 @@ static char *build_relative_path( const char *base, const char *from, const char
 {
     const char *start;
     char *ret;
+    size_t base_len, start_len, alloc_size;
     unsigned int dotdots = 0;
 
     for (;;)
@@ -304,7 +350,14 @@ static char *build_relative_path( const char *base, const char *from, const char
         break;
     }
 
-    ret = malloc( strlen(base) + 3 * dotdots + strlen(start) + 2 );
+    base_len = strlen( base );
+    start_len = strlen( start );
+    if (start_len > ~(size_t)0 - 2 || base_len > ~(size_t)0 - start_len - 2 ||
+        dotdots > (~(size_t)0 - base_len - start_len - 2) / 3)
+        fatal_error( "loader path too long\n" );
+    alloc_size = base_len + 3 * dotdots + start_len + 2;
+    if (!(ret = malloc( alloc_size )))
+        fatal_error( "out of memory building loader path\n" );
     strcpy( ret, base );
     while (dotdots--) strcat( ret, "/.." );
 
@@ -350,6 +403,180 @@ static const char *get_pe_dir( WORD machine )
     }
 }
 
+static BOOL macrunner_hb_x64_loader_enabled(void)
+{
+    const char *enabled = getenv( "MACRUNNER_HB_X64_LOADER" );
+
+    return enabled && enabled[0] && enabled[0] != '0' && strcasecmp( enabled, "false" );
+}
+
+static BOOL macrunner_hb_unicode_basename_matches_ascii( const UNICODE_STRING *path, const char *name )
+{
+    unsigned int i, base = 0, len;
+    size_t name_len = strlen( name );
+
+    if (!path || !path->Buffer) return FALSE;
+    len = path->Length / sizeof(WCHAR);
+    for (i = 0; i < len; i++)
+        if (path->Buffer[i] == '/' || path->Buffer[i] == '\\') base = i + 1;
+    if (len - base != name_len) return FALSE;
+
+    for (i = 0; i < name_len; i++)
+    {
+        WCHAR a = path->Buffer[base + i];
+        char b = name[i];
+
+        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+        if (a > 127 || (char)a != b) return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL macrunner_hb_ansi_name_matches_ascii( const ANSI_STRING *string, const char *name )
+{
+    size_t len = strlen( name );
+
+    return string && string->Buffer && string->Length == len && !strncasecmp( string->Buffer, name, len );
+}
+
+static BOOL macrunner_hb_builtin_name_matches( const UNICODE_STRING *nt_name, const ANSI_STRING *exp_name,
+                                               const char *name )
+{
+    return macrunner_hb_ansi_name_matches_ascii( exp_name, name ) ||
+           macrunner_hb_unicode_basename_matches_ascii( nt_name, name );
+}
+
+static BOOL macrunner_hb_is_wow64_host_builtin( const UNICODE_STRING *nt_name, const ANSI_STRING *exp_name )
+{
+    return macrunner_hb_builtin_name_matches( nt_name, exp_name, "wow64.dll" ) ||
+           macrunner_hb_builtin_name_matches( nt_name, exp_name, "wow64win.dll" ) ||
+           macrunner_hb_builtin_name_matches( nt_name, exp_name, "wow64cpu.dll" ) ||
+           macrunner_hb_builtin_name_matches( nt_name, exp_name, "xtajit.dll" ) ||
+           macrunner_hb_builtin_name_matches( nt_name, exp_name, "xtajit64.dll" ) ||
+           macrunner_hb_builtin_name_matches( nt_name, exp_name, "win32u.dll" );
+}
+
+/***********************************************************************
+ *  MACRUNNER_CPU_BACKEND — процессный выбор транслятора (лейн FEX-N3, 07.09.2026)
+ *
+ * Значения:
+ *   hb   (или переменная не задана) — прежнее поведение: CPU-модули xtajit/xtajit64
+ *        несут HyperBridge, перехваты загрузчика HB работают как раньше;
+ *   fex  — CPU-модули берутся из overlay (PE + нативный спутник одной парой),
+ *        перехваты HyperBridge в ЗАГРУЗЧИКЕ выключаются принудительно, даже если
+ *        MACRUNNER_HB_X64_LOADER=1 в окружении;
+ *   none — ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: загрузка любого CPU-модуля отвергается
+ *        (STATUS_DLL_NOT_FOUND). Нужен, чтобы доказать, что smoke зависит от
+ *        backend-а, а не проходит сам по себе на HB.
+ *
+ * Любое другое значение — fatal_error: тихий откат на HB это ровно тот класс
+ * ошибки («гейт выключен, а мерили как включённый»), ради которого правило писано.
+ *
+ * Читается ОДИН раз из macrunner_hb_init_flags(), то есть до инициализации CPU:
+ * оба вызова (loader.c ~3193 в unix-старте и ~3482 в __wine_main) стоят раньше,
+ * чем грузится ntdll.dll и тем более чем wow64 берёт CPU-модуль.
+ */
+enum macrunner_cpu_backend
+{
+    MACRUNNER_CPU_BACKEND_HB = 0,
+    MACRUNNER_CPU_BACKEND_FEX,
+    MACRUNNER_CPU_BACKEND_NONE,
+};
+
+static enum macrunner_cpu_backend macrunner_cpu_backend = MACRUNNER_CPU_BACKEND_HB;
+static BOOL macrunner_cpu_backend_seen;
+
+/* Читается из signal_arm64.c: у него СВОЯ копия macrunner_hb_x64_loader_enabled()
+ * (signal_arm64.c:2081), поэтому гашение флага в этом файле до него НЕ доходит.
+ * Единая точка правды — эта функция. */
+BOOL macrunner_cpu_backend_disables_hb_semantics(void)
+{
+    return macrunner_cpu_backend != MACRUNNER_CPU_BACKEND_HB;
+}
+
+static const char *macrunner_cpu_backend_name( enum macrunner_cpu_backend backend )
+{
+    switch (backend)
+    {
+    case MACRUNNER_CPU_BACKEND_FEX:  return "fex";
+    case MACRUNNER_CPU_BACKEND_NONE: return "none";
+    default:                         return "hb";
+    }
+}
+
+/* имена CPU-модулей задаются реестром HKLM\Software\Microsoft\Wow64\<арх>
+ * (loader/wine.inf.in:396,398) и разбираются в dlls/wow64/syscall.c:1430 */
+static BOOL macrunner_is_cpu_backend_module( const UNICODE_STRING *nt_name, const ANSI_STRING *exp_name )
+{
+    return macrunner_hb_builtin_name_matches( nt_name, exp_name, "xtajit.dll" ) ||
+           macrunner_hb_builtin_name_matches( nt_name, exp_name, "xtajit64.dll" );
+}
+
+/* ★★★ ШАГ-2 08.09.2026 — СПУТНИК FEX ОБЯЗАН НАЗЫВАТЬСЯ ИНАЧЕ, ЧЕМ СПУТНИК HyperBridge.
+ *
+ * ИЗМЕРЕНО (рука fex-i386 до правки, reports/SHAG2-lab/runs/arhiv, pid 59678):
+ *     macrunner-fex-unixlib-abi: путь=<overlay>/aarch64-unix/xtajit.so знак=НЕТ
+ *     macrunner-fex-init: шаг=7 UnixLib::Init НЕТ   -> exit=187 (0xBB)
+ * То есть dlopen звали с НАШИМ путём, а знака в полученном образе не было.  Причина —
+ * у обоих спутников ОДИН install_name:
+ *     dist/lib/wine/aarch64-unix/xtajit.so   @rpath/xtajit.so  UUID 67AE71B2…  знака нет
+ *     overlay/aarch64-unix/xtajit.so         @rpath/xtajit.so  UUID 2FF87898…  знак есть
+ * dyld отдаёт уже загруженный образ с совпавшим install_name, и путь в журнале об этом
+ * молчит.  N2d закрыл ТИХУЮ работу с чужой таблицей знаком; здесь закрыта сама коллизия.
+ *
+ * Имена взяты из таблицы раскладки Астры (20260908-ASTRA-WINE-FEX-BUILD-PLAN.md): это
+ * ВНУТРЕННИЕ имена модулей FEX у upstream, поэтому совпасть с чем-то в дисте они не могут.
+ * `.def` при этом НЕ переименовывается — имя PE-файла и внутреннее имя остаются прежними,
+ * меняется ТОЛЬКО имя нативного спутника.
+ *
+ * Возврат NULL = имя не наше, спутник ищется прежним способом. */
+static const char *macrunner_fex_unix_name( const char *dll_name )
+{
+    if (!dll_name) return NULL;
+    if (!strcmp( dll_name, "xtajit.dll" ))   return "libwow64fex.so";
+    if (!strcmp( dll_name, "xtajit64.dll" )) return "libarm64ecfex.so";
+    return NULL;
+}
+
+static void macrunner_cpu_backend_init(void)
+{
+    const char *value = getenv( "MACRUNNER_CPU_BACKEND" );
+
+    if (!value || !value[0] || !strcasecmp( value, "hb" ))
+        macrunner_cpu_backend = MACRUNNER_CPU_BACKEND_HB;
+    else if (!strcasecmp( value, "fex" ))
+        macrunner_cpu_backend = MACRUNNER_CPU_BACKEND_FEX;
+    else if (!strcasecmp( value, "none" ))
+        macrunner_cpu_backend = MACRUNNER_CPU_BACKEND_NONE;
+    else
+        fatal_error( "macrunner-cpu-backend: неизвестное значение MACRUNNER_CPU_BACKEND=%s "
+                     "(допустимы hb, fex, none)\n", value );
+
+    macrunner_cpu_backend_seen = TRUE;
+
+    if (macrunner_cpu_backend != MACRUNNER_CPU_BACKEND_HB)
+    {
+        /* перехваты HyperBridge в загрузчике: гасим до того, как их кто-то прочтёт */
+        macrunner_hb_x64_loader = FALSE;
+    }
+
+    /* Безусловная печать: прибор обязан давать ненулевое на ОБЕИХ руках, иначе
+     * его молчание нельзя отличить от «не дошло». */
+    fprintf( stderr, "macrunner-cpu-backend: selected=%s env=%s hb_x64_loader=%d\n",
+             macrunner_cpu_backend_name( macrunner_cpu_backend ),
+             value ? value : "(unset)", macrunner_hb_x64_loader ? 1 : 0 );
+}
+
+static void macrunner_hb_init_flags(void)
+{
+    macrunner_hb_init_environment();
+    hb_memory_init_environment();
+    hb_runtime_init_environment();
+    macrunner_hb_x64_loader = macrunner_hb_x64_loader_enabled();
+    macrunner_cpu_backend_init();
+}
+
 static WORD get_alt_machine( WORD machine )
 {
     switch (machine)
@@ -366,14 +593,17 @@ static WORD get_alt_machine( WORD machine )
 __attribute__((visibility("default")))
 void prepend_dll_path(const char *path)
 {
-    unsigned int i, count;
+    size_t i, count;
     const char **new_dll_paths;
     size_t path_len = strlen(path);
 
     for (count = 0; dll_paths[count]; count++)
         ;
 
-    new_dll_paths = calloc(count + 2, sizeof(char *));
+    if (count > ~(size_t)0 / sizeof(*new_dll_paths) - 2)
+        fatal_error( "too many DLL search paths\n" );
+    if (!(new_dll_paths = calloc(count + 2, sizeof(*new_dll_paths))))
+        fatal_error( "out of memory setting DLL search path\n" );
     new_dll_paths[0] = path;
     for (i = 0; dll_paths[i]; i++)
         new_dll_paths[i + 1] = dll_paths[i];
@@ -387,19 +617,27 @@ void prepend_dll_path(const char *path)
 static void set_dll_path(void)
 {
     char *p, *path = getenv( "WINEDLLPATH" );
-    int i, count = 0;
+    size_t i, count = 0;
 
     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
 
-    dll_paths = malloc( (count + 2) * sizeof(*dll_paths) );
+    if (count > ~(size_t)0 / sizeof(*dll_paths) - 2)
+        fatal_error( "too many DLL search paths\n" );
+    if (!(dll_paths = malloc( (count + 2) * sizeof(*dll_paths) )))
+        fatal_error( "out of memory setting DLL search path\n" );
     count = 0;
 
     if (!build_dir) dll_paths[count++] = dll_dir;
 
     if (path)
     {
-        path = strdup(path);
-        for (p = strtok( path, ":" ); p; p = strtok( NULL, ":" )) dll_paths[count++] = strdup( p );
+        if (!(path = strdup(path))) fatal_error( "out of memory setting DLL search path\n" );
+        for (p = strtok( path, ":" ); p; p = strtok( NULL, ":" ))
+        {
+            if (!(dll_paths[count] = strdup( p )))
+                fatal_error( "out of memory setting DLL search path\n" );
+            count++;
+        }
         free( path );
     }
 
@@ -411,18 +649,27 @@ static void set_dll_path(void)
 static void set_system_dll_path(void)
 {
     const char *p, *path = SYSTEMDLLPATH;
-    int count = 0;
+    size_t count = 0;
 
     if (path && *path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
 
-    system_dll_paths = malloc( (count + 1) * sizeof(*system_dll_paths) );
+    if (count > ~(size_t)0 / sizeof(*system_dll_paths) - 1)
+        fatal_error( "too many system DLL search paths\n" );
+    if (!(system_dll_paths = malloc( (count + 1) * sizeof(*system_dll_paths) )))
+        fatal_error( "out of memory setting system DLL search path\n" );
     count = 0;
 
     if (path && *path)
     {
-        char *path_copy = strdup(path);
+        char *path_copy;
+
+        if (!(path_copy = strdup(path))) fatal_error( "out of memory setting system DLL search path\n" );
         for (p = strtok( path_copy, ":" ); p; p = strtok( NULL, ":" ))
-            system_dll_paths[count++] = strdup( p );
+        {
+            if (!(system_dll_paths[count] = strdup( p )))
+                fatal_error( "out of memory setting system DLL search path\n" );
+            count++;
+        }
         free( path_copy );
     }
     system_dll_paths[count] = NULL;
@@ -447,8 +694,8 @@ static void set_home_dir(void)
     }
     if ((p = strrchr( name, '/' ))) name = p + 1;
     if ((p = strrchr( name, '\\' ))) name = p + 1;
-    home_dir = strdup( home );
-    user_name = strdup( name );
+    if (home && !(home_dir = strdup( home ))) fatal_error( "out of memory setting home directory\n" );
+    if (!(user_name = strdup( name ))) fatal_error( "out of memory setting user name\n" );
 }
 
 
@@ -461,7 +708,7 @@ static void set_config_dir(void)
     {
         if (prefix[0] != '/')
             fatal_error( "invalid directory %s in WINEPREFIX: not an absolute path\n", prefix );
-        config_dir = dir = strdup( prefix );
+        if (!(config_dir = dir = strdup( prefix ))) fatal_error( "out of memory setting WINEPREFIX\n" );
         for (p = dir + strlen(dir) - 1; p > dir && *p == '/'; p--) *p = 0;
     }
     else
@@ -474,6 +721,7 @@ static void set_config_dir(void)
 
 static void init_paths(void)
 {
+    char *wow64_path;
     Dl_info info;
 
     if (!dladdr( init_paths, &info ) || !(ntdll_dir = realpath_dirname( info.dli_fname )))
@@ -482,7 +730,9 @@ static void init_paths(void)
     if ((build_dir = remove_tail( ntdll_dir, "/dlls/ntdll" )))
     {
         wineloader = build_path( build_dir, "loader/wine" );
-        alt_build_dir = realpath_dirname( build_path( build_dir, "loader-wow64" ));
+        wow64_path = build_path( build_dir, "loader-wow64" );
+        alt_build_dir = realpath_dirname( wow64_path );
+        free( wow64_path );
     }
     else
     {
@@ -520,9 +770,10 @@ char *get_alternate_wineloader( WORD machine )
     }
 
     if (!build_dir)
-        asprintf( &ret, "%s%s/wine", dll_dir, get_so_dir( machine ));
-    else if (alt_build_dir)
-        asprintf( &ret, "%s/loader/wine", alt_build_dir );
+    {
+        if (asprintf( &ret, "%s%s/wine", dll_dir, get_so_dir( machine )) < 0) return NULL;
+    }
+    else if (alt_build_dir && asprintf( &ret, "%s/loader/wine", alt_build_dir ) < 0) return NULL;
 
     return ret;
 }
@@ -540,7 +791,7 @@ static char *extract_exe_name(const char *exe_path)
     char *exe_name, *exe_path_copy, *p, *ret;
     size_t exe_name_len;
 
-    exe_path_copy = strdup(exe_path);
+    if (!(exe_path_copy = strdup(exe_path))) return NULL;
     exe_name = exe_path_copy;
 
     if ((p = strrchr(exe_name, '\\'))) exe_name = p + 1;
@@ -568,9 +819,11 @@ static char *extract_exe_name(const char *exe_path)
  */
 static char *create_tempdir(const char *wineloader_path)
 {
-    char *str, *ntdll, *p, *tempdir = malloc(MAX_PATH);
+    char *str = NULL, *ntdll = NULL, *p, *tempdir = malloc(MAX_PATH);
     struct stat st;
-    size_t n;
+    size_t n, wineloader_len;
+
+    if (!tempdir) return NULL;
 
     if (!confstr(_CS_DARWIN_USER_TEMP_DIR, tempdir, MAX_PATH))
         goto fail;
@@ -578,28 +831,36 @@ static char *create_tempdir(const char *wineloader_path)
     if (stat(wineloader_path, &st))
         goto fail;
 
-    if (!asprintf(&str, "/winetemp-%llu-%llu-%lu-%lu/", st.st_ino, st.st_size, st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec))
+    if (asprintf(&str, "/winetemp-%llu-%llu-%lu-%lu/", st.st_ino, st.st_size, st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec) < 0)
         goto fail;
 
     n = strlcat(tempdir, str, MAX_PATH);
     free(str);
+    str = NULL;
     if (n >= MAX_PATH)
         goto fail;
 
     /* mkdir may fail if the directory already exists but that's ok */
     mkdir(tempdir, 0700);
 
-    ntdll = malloc( strlen(wineloader_path) + sizeof("/ntdll.so") );
+    wineloader_len = strlen( wineloader_path );
+    if (wineloader_len > ~(size_t)0 - sizeof("/ntdll.so"))
+        goto fail;
+    if (!(ntdll = malloc( wineloader_len + sizeof("/ntdll.so") )))
+        goto fail;
     strcpy( ntdll, wineloader_path );
     if ((p = strrchr( ntdll, '/' ))) *p = 0;
     strcat( ntdll, "/ntdll.so" );
-    asprintf( &str, "%s/ntdll.so", tempdir );
+    if (asprintf( &str, "%s/ntdll.so", tempdir ) < 0)
+        goto fail;
     symlink( ntdll, str );
     free( str );
     free( ntdll);
     return tempdir;
 
 fail:
+    free(str);
+    free(ntdll);
     free(tempdir);
     return NULL;
 }
@@ -654,7 +915,8 @@ static void replace_wineloader_path_with_link(char **wineloader_path, const char
 static void preloader_exec( char **argv, const char *image_path )
 {
 #ifdef HAVE_WINE_PRELOADER
-    asprintf( &argv[0], "%s-preloader", argv[1] );
+    if (asprintf( &argv[0], "%s-preloader", argv[1] ) < 0)
+        fatal_error( "out of memory executing wine preloader\n" );
 #ifdef __APPLE__
     {
         posix_spawnattr_t attr;
@@ -695,7 +957,7 @@ static NTSTATUS loader_exec( char **argv, WORD machine, const char *image_path )
 
     if (((argv[1] = get_alternate_wineloader( machine )))) preloader_exec( argv, image_path );
 
-    argv[1] = strdup( wineloader );
+    if (!(argv[1] = strdup( wineloader ))) return STATUS_NO_MEMORY;
     preloader_exec( argv, image_path );
     return STATUS_INVALID_IMAGE_FORMAT;
 }
@@ -749,8 +1011,20 @@ static int exec_wineserver( pid_t *pid, char **argv )
 
     if ((path = getenv( "PATH" )))
     {
-        for (path = strtok( strdup( path ), ":" ); path; path = strtok( NULL, ":" ))
-            if (!build_path_and_exec( pid, path, "wineserver", argv )) return 0;
+        char *path_copy;
+
+        if ((path_copy = strdup( path )))
+        {
+            for (path = strtok( path_copy, ":" ); path; path = strtok( NULL, ":" ))
+            {
+                if (!build_path_and_exec( pid, path, "wineserver", argv ))
+                {
+                    free( path_copy );
+                    return 0;
+                }
+            }
+            free( path_copy );
+        }
     }
     return build_path_and_exec( pid, BINDIR, "wineserver", argv );
 }
@@ -855,32 +1129,225 @@ static inline void fixup_rva_ptrs( void *array, BYTE *base, unsigned int count )
     for ( ; count; count--, src++, dst++) *dst = *src ? *src - base : 0;
 }
 
+static BOOL builtin_ptr_array_fits_image( BYTE *base, DWORD image_size, void *array, unsigned int count )
+{
+    BYTE **ptr = array;
+    ULONG_PTR image_base = (ULONG_PTR)base;
+
+    for ( ; count; count--, ptr++ )
+    {
+        ULONG_PTR addr = (ULONG_PTR)*ptr;
+
+        if (!addr) continue;
+        if (addr < image_base || addr - image_base >= image_size) return FALSE;
+    }
+    return TRUE;
+}
+
 /* fixup an array of RVAs by adding the specified delta */
-static inline void fixup_rva_dwords( DWORD *ptr, int delta, unsigned int count )
+static inline BOOL fixup_rva_dwords( DWORD *ptr, int delta, unsigned int count )
 {
-    for ( ; count; count--, ptr++) if (*ptr) *ptr += delta;
+    for ( ; count; count--, ptr++)
+    {
+        UINT_PTR value = *ptr;
+
+        if (!value) continue;
+        if (delta >= 0)
+        {
+            if (value > UINT_MAX - (UINT_PTR)delta) return FALSE;
+            value += (UINT_PTR)delta;
+        }
+        else
+        {
+            UINT_PTR abs_delta = (UINT_PTR)(-(delta + 1)) + 1;
+
+            if (value < abs_delta) return FALSE;
+            value -= abs_delta;
+        }
+        *ptr = (DWORD)value;
+    }
+    return TRUE;
 }
 
 
-/* fixup an array of name/ordinal RVAs by adding the specified delta */
-static inline void fixup_rva_names( UINT_PTR *ptr, int delta )
+static BOOL resource_ptr_fits( const BYTE *root, size_t size, const void *ptr, size_t len )
 {
-    for ( ; *ptr; ptr++) if (!(*ptr & IMAGE_ORDINAL_FLAG)) *ptr += delta;
+    ULONG_PTR base = (ULONG_PTR)root, addr = (ULONG_PTR)ptr;
+
+    if (addr < base || addr - base > size) return FALSE;
+    return len <= size - (addr - base);
 }
 
+static BOOL resource_offset_ptr( BYTE *root, size_t size, DWORD offset, size_t len, void **ptr )
+{
+    if (offset > size || len > size - offset) return FALSE;
+    *ptr = root + offset;
+    return TRUE;
+}
+
+static BOOL resource_name_fits( IMAGE_RESOURCE_DIRECTORY_ENTRY *entry, BYTE *root, size_t size )
+{
+    IMAGE_RESOURCE_DIR_STRING_U *str;
+
+    if (!entry->NameIsString) return TRUE;
+    if (!resource_offset_ptr( root, size, entry->NameOffset,
+                              FIELD_OFFSET( IMAGE_RESOURCE_DIR_STRING_U, NameString ), (void **)&str ))
+        return FALSE;
+    return resource_ptr_fits( root, size, str->NameString, (size_t)str->Length * sizeof(WCHAR) );
+}
+
+static BOOL fixup_resource_data_entry( IMAGE_RESOURCE_DATA_ENTRY *data, DWORD image_size, int delta )
+{
+    UINT_PTR value = data->OffsetToData;
+
+    if (value)
+    {
+        if (delta >= 0)
+        {
+            if (value > ~(UINT_PTR)0 - (UINT_PTR)delta) return FALSE;
+            value += delta;
+        }
+        else
+        {
+            UINT_PTR neg_delta = 0 - (UINT_PTR)delta;
+            if (value < neg_delta) return FALSE;
+            value -= neg_delta;
+        }
+        if (value > ~(DWORD)0) return FALSE;
+        data->OffsetToData = value;
+    }
+    return data->OffsetToData < image_size && data->Size <= image_size - data->OffsetToData;
+}
 
 /* fixup RVAs in the resource directory */
-static void fixup_so_resources( IMAGE_RESOURCE_DIRECTORY *dir, BYTE *root, int delta )
+static BOOL fixup_so_resources( IMAGE_RESOURCE_DIRECTORY *dir, BYTE *root, size_t size, DWORD image_size,
+                                int delta, unsigned int level )
 {
-    IMAGE_RESOURCE_DIRECTORY_ENTRY *entry = (IMAGE_RESOURCE_DIRECTORY_ENTRY *)(dir + 1);
+    IMAGE_RESOURCE_DIRECTORY_ENTRY *entry;
     unsigned int i;
+    DWORD count;
 
-    for (i = 0; i < dir->NumberOfNamedEntries + dir->NumberOfIdEntries; i++, entry++)
+    if (level > 16 || !resource_ptr_fits( root, size, dir, sizeof(*dir) )) return FALSE;
+    count = dir->NumberOfNamedEntries + dir->NumberOfIdEntries;
+    entry = (IMAGE_RESOURCE_DIRECTORY_ENTRY *)(dir + 1);
+    if (!resource_ptr_fits( root, size, entry, count * sizeof(*entry) )) return FALSE;
+    for (i = 0; i < count; i++, entry++)
     {
-        void *ptr = root + entry->OffsetToDirectory;
-        if (entry->DataIsDirectory) fixup_so_resources( ptr, root, delta );
-        else fixup_rva_dwords( &((IMAGE_RESOURCE_DATA_ENTRY *)ptr)->OffsetToData, delta, 1 );
+        DWORD offset = entry->OffsetToDirectory;
+        void *ptr;
+
+        if (!resource_name_fits( entry, root, size )) return FALSE;
+        if (offset >= size) return FALSE;
+        ptr = root + offset;
+        if (entry->DataIsDirectory)
+        {
+            if (!fixup_so_resources( ptr, root, size, image_size, delta, level + 1 )) return FALSE;
+        }
+        else
+        {
+            if (!resource_ptr_fits( root, size, ptr, sizeof(IMAGE_RESOURCE_DATA_ENTRY) )) return FALSE;
+            if (!fixup_resource_data_entry( ptr, image_size, delta )) return FALSE;
+        }
     }
+    return TRUE;
+}
+
+static BOOL builtin_rva_array_fits_image( DWORD image_size, DWORD rva, DWORD count, size_t elem_size )
+{
+    if (!count) return TRUE;
+    if (!rva || image_size < elem_size || rva > image_size - elem_size) return FALSE;
+    return count <= (image_size - rva) / elem_size;
+}
+
+static BOOL builtin_rva_string_fits_image( BYTE *base, DWORD image_size, DWORD rva )
+{
+    if (!rva || rva >= image_size) return FALSE;
+    return memchr( base + rva, 0, image_size - rva ) != NULL;
+}
+
+static BOOL fixup_rva_strings( BYTE *base, DWORD image_size, DWORD *ptr, int delta, DWORD count )
+{
+    UINT_PTR value;
+
+    for ( ; count; count--, ptr++ )
+    {
+        if (!*ptr) return FALSE;
+        value = *ptr;
+        if (delta >= 0)
+        {
+            if (value > ~(UINT_PTR)0 - (UINT_PTR)delta) return FALSE;
+            value += delta;
+        }
+        else
+        {
+            UINT_PTR neg_delta = 0 - (UINT_PTR)delta;
+            if (value < neg_delta) return FALSE;
+            value -= neg_delta;
+        }
+        if (value > ~(DWORD)0 || !builtin_rva_string_fits_image( base, image_size, value ))
+            return FALSE;
+        *ptr = value;
+    }
+    return TRUE;
+}
+
+static BOOL builtin_import_by_name_fits_image( BYTE *base, DWORD image_size, DWORD rva )
+{
+    DWORD name_rva;
+
+    if (!builtin_rva_array_fits_image( image_size, rva, 1,
+                                       FIELD_OFFSET( IMAGE_IMPORT_BY_NAME, Name ) + 1 ))
+        return FALSE;
+    if (rva > ~(DWORD)0 - FIELD_OFFSET( IMAGE_IMPORT_BY_NAME, Name )) return FALSE;
+    name_rva = rva + FIELD_OFFSET( IMAGE_IMPORT_BY_NAME, Name );
+    return builtin_rva_string_fits_image( base, image_size, name_rva );
+}
+
+/* fixup an array of name/ordinal RVAs by adding the specified delta */
+static BOOL fixup_rva_names( BYTE *base, DWORD image_size, UINT_PTR *ptr, int delta )
+{
+    UINT_PTR value;
+
+    for ( ; *ptr; ptr++)
+    {
+        if (*ptr & IMAGE_ORDINAL_FLAG) continue;
+
+        value = *ptr;
+        if (delta >= 0)
+        {
+            if (value > ~(UINT_PTR)0 - (UINT_PTR)delta) return FALSE;
+            value += delta;
+        }
+        else
+        {
+            UINT_PTR neg_delta = 0 - (UINT_PTR)delta;
+            if (value < neg_delta) return FALSE;
+            value -= neg_delta;
+        }
+        if (value > ~(DWORD)0 || !builtin_import_by_name_fits_image( base, image_size, value ))
+            return FALSE;
+        *ptr = value;
+    }
+    return TRUE;
+}
+
+static BOOL builtin_thunk_array_fits_image( BYTE *base, DWORD image_size, DWORD rva )
+{
+    UINT_PTR *ptr;
+    DWORD count, i;
+
+    if (!builtin_rva_array_fits_image( image_size, rva, 1, sizeof(*ptr) )) return FALSE;
+    ptr = (UINT_PTR *)(base + rva);
+    count = (image_size - rva) / sizeof(*ptr);
+    for (i = 0; i < count; i++) if (!ptr[i]) return TRUE;
+    return FALSE;
+}
+
+static IMAGE_DATA_DIRECTORY *builtin_get_data_dir( IMAGE_NT_HEADERS *nt, DWORD dir )
+{
+    if (dir >= IMAGE_NUMBEROF_DIRECTORY_ENTRIES) return NULL;
+    if (dir >= nt->OptionalHeader.NumberOfRvaAndSizes) return NULL;
+    return &nt->OptionalHeader.DataDirectory[dir];
 }
 
 /***********************************************************************
@@ -926,15 +1393,22 @@ static NTSTATUS map_so_dll( const IMAGE_NT_HEADERS *nt_descr, HMODULE module )
     IMAGE_SECTION_HEADER *sec;
     BYTE *addr = (BYTE *)module;
     DWORD code_start, code_end, data_start, data_end;
-    DWORD align_mask = nt_descr->OptionalHeader.SectionAlignment - 1;
+    DWORD alignment = nt_descr->OptionalHeader.SectionAlignment;
+    DWORD align_mask;
+    ULONGLONG header_end;
+    INT_PTR delta_ptr;
+    ULONGLONG end;
     int delta, nb_sections = 2;  /* code + data */
     unsigned int i;
 
-    code_start = (sizeof(IMAGE_DOS_HEADER)
-                  + sizeof(builtin_signature)
-                  + sizeof(IMAGE_NT_HEADERS)
-                  + nb_sections * sizeof(IMAGE_SECTION_HEADER)
-                  + align_mask) & ~align_mask;
+    if (!alignment || (alignment & (alignment - 1))) return STATUS_INVALID_IMAGE_FORMAT;
+    align_mask = alignment - 1;
+    header_end = sizeof(IMAGE_DOS_HEADER)
+                 + sizeof(builtin_signature)
+                 + sizeof(IMAGE_NT_HEADERS)
+                 + nb_sections * sizeof(IMAGE_SECTION_HEADER);
+    if (header_end > UINT_MAX - align_mask) return STATUS_INVALID_IMAGE_FORMAT;
+    code_start = (header_end + align_mask) & ~align_mask;
 
     if (anon_mmap_fixed( addr, code_start, PROT_READ | PROT_WRITE, 0 ) != addr) return STATUS_NO_MEMORY;
 
@@ -956,23 +1430,36 @@ static NTSTATUS map_so_dll( const IMAGE_NT_HEADERS *nt_descr, HMODULE module )
     memcpy( dos + 1, builtin_signature, sizeof(builtin_signature) );
 
     *nt = *nt_descr;
+    macrunner_hb_register_x64_original_exec_sections( addr, nt_descr );
 
-    delta      = (const BYTE *)nt_descr - addr;
+    delta_ptr = (INT_PTR)nt_descr - (INT_PTR)addr;
+    if (delta_ptr < 0 || delta_ptr > INT_MAX) return STATUS_INVALID_IMAGE_FORMAT;
+    delta      = delta_ptr;
     data_start = delta & ~align_mask;
 #ifdef __APPLE__
     {
         Dl_info dli;
+        BYTE *data_segment;
         unsigned long data_size;
         /* need the mach_header, not the PE header, to give to getsegmentdata(3) */
-        dladdr(addr, &dli);
-        code_end   = getsegmentdata(dli.dli_fbase, "__DATA", &data_size) - addr;
-        data_end   = (code_end + data_size + align_mask) & ~align_mask;
+        if (!dladdr(addr, &dli)) return STATUS_INVALID_IMAGE_FORMAT;
+        data_segment = getsegmentdata(dli.dli_fbase, "__DATA", &data_size);
+        if (!data_segment || (ULONG_PTR)data_segment < (ULONG_PTR)addr) return STATUS_INVALID_IMAGE_FORMAT;
+        end = (ULONGLONG)((ULONG_PTR)data_segment - (ULONG_PTR)addr) + data_size + align_mask;
+        if (end > UINT_MAX) return STATUS_INVALID_IMAGE_FORMAT;
+        code_end   = (ULONG_PTR)data_segment - (ULONG_PTR)addr;
+        data_end   = end & ~align_mask;
     }
 #else
     code_end   = data_start;
-    data_end   = (nt->OptionalHeader.SizeOfImage + delta + align_mask) & ~align_mask;
+    end = (ULONGLONG)nt->OptionalHeader.SizeOfImage + delta + align_mask;
+    if (end > UINT_MAX) return STATUS_INVALID_IMAGE_FORMAT;
+    data_end   = end & ~align_mask;
 #endif
+    if (code_end < code_start || data_end < data_start) return STATUS_INVALID_IMAGE_FORMAT;
 
+    if (!builtin_ptr_array_fits_image( addr, data_end, &nt->OptionalHeader.AddressOfEntryPoint, 1 ))
+        return STATUS_INVALID_IMAGE_FORMAT;
     fixup_rva_ptrs( &nt->OptionalHeader.AddressOfEntryPoint, addr, 1 );
 
     nt->FileHeader.NumberOfSections                = nb_sections;
@@ -985,6 +1472,8 @@ static NTSTATUS map_so_dll( const IMAGE_NT_HEADERS *nt_descr, HMODULE module )
     nt->OptionalHeader.SizeOfUninitializedData     = 0;
     nt->OptionalHeader.SizeOfImage                 = data_end;
     nt->OptionalHeader.ImageBase                   = (ULONG_PTR)addr;
+    nt->OptionalHeader.NumberOfRvaAndSizes         = min( nt->OptionalHeader.NumberOfRvaAndSizes,
+                                                          IMAGE_NUMBEROF_DIRECTORY_ENTRIES );
 
     /* build the code section */
 
@@ -1008,70 +1497,158 @@ static NTSTATUS map_so_dll( const IMAGE_NT_HEADERS *nt_descr, HMODULE module )
     sec++;
 
     for (i = 0; i < nt->OptionalHeader.NumberOfRvaAndSizes; i++)
-        fixup_rva_dwords( &nt->OptionalHeader.DataDirectory[i].VirtualAddress, delta, 1 );
+        if (!fixup_rva_dwords( &nt->OptionalHeader.DataDirectory[i].VirtualAddress, delta, 1 ))
+            return STATUS_INVALID_IMAGE_FORMAT;
 
     /* build the import directory */
 
-    dir = &nt->OptionalHeader.DataDirectory[IMAGE_FILE_IMPORT_DIRECTORY];
-    if (dir->Size)
+    dir = builtin_get_data_dir( nt, IMAGE_FILE_IMPORT_DIRECTORY );
+    if (dir && dir->Size)
     {
-        IMAGE_IMPORT_DESCRIPTOR *imports = (IMAGE_IMPORT_DESCRIPTOR *)(addr + dir->VirtualAddress);
+        IMAGE_IMPORT_DESCRIPTOR *imports;
+        DWORD count;
 
-        while (imports->Name)
+        if (dir->VirtualAddress >= nt->OptionalHeader.SizeOfImage ||
+            dir->Size > nt->OptionalHeader.SizeOfImage - dir->VirtualAddress ||
+            dir->Size < sizeof(*imports))
+            return STATUS_INVALID_IMAGE_FORMAT;
+        imports = (IMAGE_IMPORT_DESCRIPTOR *)(addr + dir->VirtualAddress);
+        count = dir->Size / sizeof(*imports);
+
+        for (i = 0; i < count && imports[i].Name; i++)
         {
-            fixup_rva_dwords( &imports->OriginalFirstThunk, delta, 1 );
-            fixup_rva_dwords( &imports->Name, delta, 1 );
-            fixup_rva_dwords( &imports->FirstThunk, delta, 1 );
-            if (imports->OriginalFirstThunk)
-                fixup_rva_names( (UINT_PTR *)(addr + imports->OriginalFirstThunk), delta );
-            if (imports->FirstThunk)
-                fixup_rva_names( (UINT_PTR *)(addr + imports->FirstThunk), delta );
-            imports++;
+            if (!fixup_rva_dwords( &imports[i].OriginalFirstThunk, delta, 1 ) ||
+                !fixup_rva_dwords( &imports[i].Name, delta, 1 ) ||
+                !fixup_rva_dwords( &imports[i].FirstThunk, delta, 1 ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (!builtin_rva_string_fits_image( addr, nt->OptionalHeader.SizeOfImage, imports[i].Name ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (imports[i].OriginalFirstThunk &&
+                !builtin_thunk_array_fits_image( addr, nt->OptionalHeader.SizeOfImage,
+                                                 imports[i].OriginalFirstThunk ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (imports[i].FirstThunk &&
+                !builtin_thunk_array_fits_image( addr, nt->OptionalHeader.SizeOfImage,
+                                                 imports[i].FirstThunk ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (imports[i].OriginalFirstThunk)
+            {
+                if (!fixup_rva_names( addr, nt->OptionalHeader.SizeOfImage,
+                                      (UINT_PTR *)(addr + imports[i].OriginalFirstThunk), delta ))
+                    return STATUS_INVALID_IMAGE_FORMAT;
+            }
+            if (imports[i].FirstThunk)
+            {
+                if (!fixup_rva_names( addr, nt->OptionalHeader.SizeOfImage,
+                                      (UINT_PTR *)(addr + imports[i].FirstThunk), delta ))
+                    return STATUS_INVALID_IMAGE_FORMAT;
+            }
         }
+        if (i == count) return STATUS_INVALID_IMAGE_FORMAT;
     }
 
     /* build the resource directory */
 
-    dir = &nt->OptionalHeader.DataDirectory[IMAGE_FILE_RESOURCE_DIRECTORY];
-    if (dir->Size)
+    dir = builtin_get_data_dir( nt, IMAGE_FILE_RESOURCE_DIRECTORY );
+    if (dir && dir->Size)
     {
-        void *ptr = addr + dir->VirtualAddress;
-        fixup_so_resources( ptr, ptr, delta );
+        void *ptr;
+
+        if (dir->VirtualAddress >= nt->OptionalHeader.SizeOfImage ||
+            dir->Size > nt->OptionalHeader.SizeOfImage - dir->VirtualAddress)
+            return STATUS_INVALID_IMAGE_FORMAT;
+        ptr = addr + dir->VirtualAddress;
+        if (!fixup_so_resources( ptr, ptr, dir->Size, nt->OptionalHeader.SizeOfImage, delta, 0 ))
+            return STATUS_INVALID_IMAGE_FORMAT;
     }
 
     /* build the export directory */
 
-    dir = &nt->OptionalHeader.DataDirectory[IMAGE_FILE_EXPORT_DIRECTORY];
-    if (dir->Size)
+    dir = builtin_get_data_dir( nt, IMAGE_FILE_EXPORT_DIRECTORY );
+    if (dir && dir->Size)
     {
-        IMAGE_EXPORT_DIRECTORY *exports = (IMAGE_EXPORT_DIRECTORY *)(addr + dir->VirtualAddress);
+        IMAGE_EXPORT_DIRECTORY *exports;
 
-        fixup_rva_dwords( &exports->Name, delta, 1 );
-        fixup_rva_dwords( &exports->AddressOfFunctions, delta, 1 );
-        fixup_rva_dwords( &exports->AddressOfNames, delta, 1 );
-        fixup_rva_dwords( &exports->AddressOfNameOrdinals, delta, 1 );
-        fixup_rva_dwords( (DWORD *)(addr + exports->AddressOfNames), delta, exports->NumberOfNames );
+        if (dir->Size < sizeof(*exports) || dir->VirtualAddress >= nt->OptionalHeader.SizeOfImage ||
+            dir->Size > nt->OptionalHeader.SizeOfImage - dir->VirtualAddress ||
+            !builtin_rva_array_fits_image( nt->OptionalHeader.SizeOfImage, dir->VirtualAddress,
+                                           1, sizeof(*exports) ))
+            return STATUS_INVALID_IMAGE_FORMAT;
+        exports = (IMAGE_EXPORT_DIRECTORY *)(addr + dir->VirtualAddress);
+        if (!fixup_rva_strings( addr, nt->OptionalHeader.SizeOfImage, &exports->Name, delta, 1 ))
+            return STATUS_INVALID_IMAGE_FORMAT;
+        if (!fixup_rva_dwords( &exports->AddressOfFunctions, delta, 1 ) ||
+            !fixup_rva_dwords( &exports->AddressOfNames, delta, 1 ) ||
+            !fixup_rva_dwords( &exports->AddressOfNameOrdinals, delta, 1 ))
+            return STATUS_INVALID_IMAGE_FORMAT;
+        if (!builtin_rva_array_fits_image( nt->OptionalHeader.SizeOfImage, exports->AddressOfNames,
+                                           exports->NumberOfNames, sizeof(DWORD) ) ||
+            !builtin_rva_array_fits_image( nt->OptionalHeader.SizeOfImage, exports->AddressOfNameOrdinals,
+                                           exports->NumberOfNames, sizeof(WORD) ) ||
+            !builtin_rva_array_fits_image( nt->OptionalHeader.SizeOfImage, exports->AddressOfFunctions,
+                                           exports->NumberOfFunctions, sizeof(UINT_PTR) ))
+            return STATUS_INVALID_IMAGE_FORMAT;
+        if (!fixup_rva_strings( addr, nt->OptionalHeader.SizeOfImage,
+                                (DWORD *)(addr + exports->AddressOfNames), delta, exports->NumberOfNames ))
+            return STATUS_INVALID_IMAGE_FORMAT;
+        if (!builtin_ptr_array_fits_image( addr, nt->OptionalHeader.SizeOfImage,
+                                           addr + exports->AddressOfFunctions, exports->NumberOfFunctions ))
+            return STATUS_INVALID_IMAGE_FORMAT;
         fixup_rva_ptrs( addr + exports->AddressOfFunctions, addr, exports->NumberOfFunctions );
     }
 
     /* build the delay import directory */
 
-    dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
-    if (dir->Size)
+    dir = builtin_get_data_dir( nt, IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT );
+    if (dir && dir->Size)
     {
-        IMAGE_DELAYLOAD_DESCRIPTOR *imports = (IMAGE_DELAYLOAD_DESCRIPTOR *)(addr + dir->VirtualAddress);
+        IMAGE_DELAYLOAD_DESCRIPTOR *imports;
+        DWORD count;
 
-        while (imports->DllNameRVA)
+        if (dir->VirtualAddress >= nt->OptionalHeader.SizeOfImage ||
+            dir->Size > nt->OptionalHeader.SizeOfImage - dir->VirtualAddress ||
+            dir->Size < sizeof(*imports))
+            return STATUS_INVALID_IMAGE_FORMAT;
+        imports = (IMAGE_DELAYLOAD_DESCRIPTOR *)(addr + dir->VirtualAddress);
+        count = dir->Size / sizeof(*imports);
+
+        for (i = 0; i < count && imports[i].DllNameRVA; i++)
         {
-            fixup_rva_dwords( &imports->DllNameRVA, delta, 1 );
-            fixup_rva_dwords( &imports->ModuleHandleRVA, delta, 1 );
-            fixup_rva_dwords( &imports->ImportAddressTableRVA, delta, 1 );
-            fixup_rva_dwords( &imports->ImportNameTableRVA, delta, 1 );
-            fixup_rva_dwords( &imports->BoundImportAddressTableRVA, delta, 1 );
-            fixup_rva_dwords( &imports->UnloadInformationTableRVA, delta, 1 );
-            fixup_rva_names( (UINT_PTR *)(addr + imports->ImportNameTableRVA), delta );
-            imports++;
+            if (!fixup_rva_dwords( &imports[i].DllNameRVA, delta, 1 ) ||
+                !fixup_rva_dwords( &imports[i].ModuleHandleRVA, delta, 1 ) ||
+                !fixup_rva_dwords( &imports[i].ImportAddressTableRVA, delta, 1 ) ||
+                !fixup_rva_dwords( &imports[i].ImportNameTableRVA, delta, 1 ) ||
+                !fixup_rva_dwords( &imports[i].BoundImportAddressTableRVA, delta, 1 ) ||
+                !fixup_rva_dwords( &imports[i].UnloadInformationTableRVA, delta, 1 ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (!builtin_rva_string_fits_image( addr, nt->OptionalHeader.SizeOfImage,
+                                                imports[i].DllNameRVA ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (!builtin_rva_array_fits_image( nt->OptionalHeader.SizeOfImage,
+                                               imports[i].ModuleHandleRVA, 1, sizeof(UINT_PTR) ) ||
+                !builtin_thunk_array_fits_image( addr, nt->OptionalHeader.SizeOfImage,
+                                                 imports[i].ImportAddressTableRVA ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (imports[i].ImportNameTableRVA &&
+                !builtin_thunk_array_fits_image( addr, nt->OptionalHeader.SizeOfImage,
+                                                 imports[i].ImportNameTableRVA ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (imports[i].BoundImportAddressTableRVA &&
+                !builtin_thunk_array_fits_image( addr, nt->OptionalHeader.SizeOfImage,
+                                                 imports[i].BoundImportAddressTableRVA ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (imports[i].UnloadInformationTableRVA &&
+                !builtin_thunk_array_fits_image( addr, nt->OptionalHeader.SizeOfImage,
+                                                 imports[i].UnloadInformationTableRVA ))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            if (imports[i].ImportNameTableRVA)
+            {
+                if (!fixup_rva_names( addr, nt->OptionalHeader.SizeOfImage,
+                                      (UINT_PTR *)(addr + imports[i].ImportNameTableRVA), delta ))
+                    return STATUS_INVALID_IMAGE_FORMAT;
+            }
         }
+        if (i == count) return STATUS_INVALID_IMAGE_FORMAT;
     }
 
     return STATUS_SUCCESS;
@@ -1085,6 +1662,8 @@ static NTSTATUS dlopen_dll( const char *so_name, UNICODE_STRING *nt_name, void *
 {
     void *module, *handle;
     const IMAGE_NT_HEADERS *nt;
+    ULONGLONG image_base;
+    NTSTATUS status;
 
     handle = dlopen( so_name, RTLD_NOW );
     if (!handle)
@@ -1096,10 +1675,17 @@ static NTSTATUS dlopen_dll( const char *so_name, UNICODE_STRING *nt_name, void *
     if (!(nt = dlsym( handle, "__wine_spec_nt_header" )))
     {
         ERR( "invalid .so library %s, too old?\n", debugstr_a(so_name));
+        dlclose( handle );
         return STATUS_INVALID_IMAGE_FORMAT;
     }
 
-    module = (HMODULE)((nt->OptionalHeader.ImageBase + 0xffff) & ~0xffff);
+    image_base = nt->OptionalHeader.ImageBase;
+    if (image_base > (ULONGLONG)(ULONG_PTR)~0 - 0xffff)
+    {
+        dlclose( handle );
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+    module = (HMODULE)((ULONG_PTR)(image_base + 0xffff) & ~(ULONG_PTR)0xffff);
     if (get_builtin_so_handle( module ))  /* already loaded */
     {
         fill_builtin_image_info( module, image_info );
@@ -1108,10 +1694,10 @@ static NTSTATUS dlopen_dll( const char *so_name, UNICODE_STRING *nt_name, void *
         return STATUS_SUCCESS;
     }
 
-    if (map_so_dll( nt, module ))
+    if ((status = map_so_dll( nt, module )))
     {
         dlclose( handle );
-        return STATUS_NO_MEMORY;
+        return status;
     }
 
     fill_builtin_image_info( module, image_info );
@@ -1364,10 +1950,24 @@ static NTSTATUS pe_module_loaded( void *args )
     }
     return STATUS_SUCCESS;
 }
-#elif defined(__x86_64__)
+#else
 static NTSTATUS pe_module_loaded( void *args ) { return STATUS_NOT_IMPLEMENTED; }
 #endif
 
+extern NTSTATUS macrunner_hb_register_import_thunk( void *args );
+extern NTSTATUS macrunner_hb_x64_dll_entry( void *args );
+extern NTSTATUS macrunner_hb_x64_thread_entry( void *args );
+extern NTSTATUS macrunner_hb_x64_import_context( void *args );
+extern NTSTATUS macrunner_guest_peb_observe( void *args );
+
+/* The native process owner is fixed before PE initialization. Guest child
+ * environments may omit or replace runner configuration; they are not authority. */
+static NTSTATUS macrunner_cpu_backend_query( void *args )
+{
+    if (!macrunner_cpu_backend_seen) return STATUS_UNSUCCESSFUL;
+    *(UINT *)args = macrunner_cpu_backend == MACRUNNER_CPU_BACKEND_HB;
+    return STATUS_SUCCESS;
+}
 
 static const unixlib_entry_t unix_call_funcs[] =
 {
@@ -1379,9 +1979,13 @@ static const unixlib_entry_t unix_call_funcs[] =
     unixcall_wine_server_handle_to_fd,
     unixcall_wine_spawnvp,
     system_time_precise,
-#if defined(__x86_64__)
+    macrunner_hb_register_import_thunk,
+    macrunner_hb_x64_dll_entry,
+    macrunner_hb_x64_thread_entry,
+    macrunner_hb_x64_import_context,
     pe_module_loaded,
-#endif
+    macrunner_guest_peb_observe,
+    macrunner_cpu_backend_query,
 };
 
 
@@ -1400,9 +2004,11 @@ static void hacks_init(void)
 
 static NTSTATUS wow64_load_so_dll( void *args ) { return STATUS_INVALID_IMAGE_FORMAT; }
 static NTSTATUS wow64_unwind_builtin_dll( void *args ) { return STATUS_UNSUCCESSFUL; }
-#if defined(__x86_64__)
+static NTSTATUS wow64_macrunner_hb_register_import_thunk( void *args ) { return STATUS_NOT_IMPLEMENTED; }
+static NTSTATUS wow64_macrunner_hb_x64_dll_entry( void *args ) { return STATUS_NOT_IMPLEMENTED; }
+static NTSTATUS wow64_macrunner_hb_x64_thread_entry( void *args ) { return STATUS_NOT_IMPLEMENTED; }
+static NTSTATUS wow64_macrunner_hb_x64_import_context( void *args ) { return STATUS_NOT_IMPLEMENTED; }
 static NTSTATUS wow64_pe_module_loaded( void *args ) { return STATUS_NOT_IMPLEMENTED; }
-#endif
 
 const unixlib_entry_t unix_call_wow64_funcs[] =
 {
@@ -1414,9 +2020,13 @@ const unixlib_entry_t unix_call_wow64_funcs[] =
     wow64_wine_server_handle_to_fd,
     wow64_wine_spawnvp,
     system_time_precise,
-#if defined(__x86_64__)
+    wow64_macrunner_hb_register_import_thunk,
+    wow64_macrunner_hb_x64_dll_entry,
+    wow64_macrunner_hb_x64_thread_entry,
+    wow64_macrunner_hb_x64_import_context,
     wow64_pe_module_loaded,
-#endif
+    macrunner_guest_peb_observe,
+    macrunner_cpu_backend_query,
 };
 
 #endif  /* _WIN64 */
@@ -1515,8 +2125,21 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, ANSI_STRING *exp_name
     OBJECT_ATTRIBUTES attr;
     NTSTATUS status = STATUS_DLL_NOT_FOUND;
     BOOL found_image = FALSE;
+    /* лейн FEX-N3: CPU-модуль опознаём ОДИН раз, чтобы не платить за это на каждом builtin */
+    BOOL macrunner_is_cpu = macrunner_is_cpu_backend_module( nt_name, exp_name );
+    char *macrunner_cpu_pe_path = NULL;
+    char *macrunner_cpu_unix_path = NULL;   /* ШАГ-2: спутник FEX под СВОИМ именем */
 
     InitializeObjectAttributes( &attr, nt_name, 0, 0, NULL );
+
+    /* ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ MACRUNNER_CPU_BACKEND=none: CPU-модуль не выдаём ВООБЩЕ.
+     * Нужен, чтобы smoke не мог «пройти сам» на прежнем backend-е. */
+    if (macrunner_is_cpu && macrunner_cpu_backend == MACRUNNER_CPU_BACKEND_NONE)
+    {
+        fprintf( stderr, "macrunner-cpu-backend-load: backend=none REFUSED name=%s\n",
+                 debugstr_us(nt_name) );
+        return STATUS_DLL_NOT_FOUND;
+    }
 
     if (!exp_name || !exp_name->Length)
     {
@@ -1569,6 +2192,22 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, ANSI_STRING *exp_name
 
     TRACE( "looking for %s for file %s\n", debugstr_a(file + pos + 1), debugstr_us(nt_name) );
 
+#if defined(__APPLE__)
+    /* MacRunner DXMT-routing diagnostic (env-gated): the x64-guest's DXGI/D3D11 calls dispatch to the
+     * native ARM64 twin, which loaded as WINE's (not DXMT's) -> wined3d -> no Metal device. Log every
+     * find_builtin_dll resolution of a graphics frontend to see the machine/pe_dir/Fix-A outcome. */
+    if (getenv( "MACRUNNER_DIAG_DXMT" ))
+    {
+        const char *gname = file + pos + 1;
+        if (!strcmp(gname,"d3d11.dll") || !strcmp(gname,"dxgi.dll") ||
+            !strcmp(gname,"d3d10core.dll") || !strcmp(gname,"d3d9.dll"))
+            fprintf( stderr, "macrunner-diag-dxmt-entry: name=%s search_machine=0x%x load_machine=0x%x "
+                     "pe_dir=%s prefer_native=%d dxmt_root=%s\n",
+                     gname, search_machine, load_machine, pe_dir, prefer_native,
+                     getenv("MACRUNNER_DXMT_ROOT") ? getenv("MACRUNNER_DXMT_ROOT") : "(null)" );
+    }
+#endif
+
     if (build_dir)
     {
         /* try as a dll */
@@ -1592,6 +2231,120 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, ANSI_STRING *exp_name
         if (status != STATUS_DLL_NOT_FOUND) goto done;
     }
 
+    /* MacRunner HyperBridge: DXMT graphics frontends (d3d11/dxgi/d3d10core/d3d9) carry
+     * the "Wine builtin DLL" marker, so load_builtin() resolves them as builtins and
+     * find_builtin_dll otherwise picks wine's OWN d3d11/dxgi twins from dll_dir (searched
+     * before WINEDLLPATH) -> wined3d -> wined3d_create()==NULL on macOS ->
+     * DXGI_ERROR_UNSUPPORTED (0x887a0004). When MACRUNNER_DXMT_ROOT points at a dual-arch
+     * overlay (<arch>-windows/<dll>), search it FIRST but ONLY for these exact graphics
+     * names, so core DLLs (kernel32 etc.) and native-builtin dependency resolution are
+     * untouched. The overlay is also in WINEDLLPATH, so dll_path_maxlen already covers its
+     * length; the strlen guard keeps the file buffer safe if it ever is not. winemetal is
+     * deliberately excluded: wine has no winemetal twin (no shadowing) and its unixlib lives
+     * in <root>/aarch64-unix, which only the normal so_dir search resolves. */
+    {
+        const char *dxmt_root = getenv( "MACRUNNER_DXMT_ROOT" );
+        const char *name = file + pos + 1; /* lowercased basename, NUL-terminated */
+        if (dxmt_root && dxmt_root[0] && strlen( dxmt_root ) <= dll_path_maxlen &&
+            (!strcmp( name, "d3d11.dll" ) || !strcmp( name, "dxgi.dll" ) ||
+             !strcmp( name, "d3d10core.dll" ) || !strcmp( name, "d3d9.dll" )))
+        {
+            /* <root>/<arch>-windows/<name> */
+            ptr = prepend( prepend( file + pos, pe_dir, strlen(pe_dir) ), dxmt_root, strlen(dxmt_root) );
+            status = open_builtin_pe_file( ptr, &attr, module, size_ptr, image_info, limit_low,
+                                           limit_high, load_machine, prefer_native, offset );
+#if defined(__APPLE__)
+            if (getenv( "MACRUNNER_DIAG_DXMT" ))
+                fprintf( stderr, "macrunner-diag-dxmt: name=%s pe_dir=%s try1=%s status1=0x%x\n",
+                         name, pe_dir, ptr, (unsigned int)status );
+#endif
+            if (NT_SUCCESS(status)) goto done;
+            /* <root>/<name> (overlay set directly to a machine dir) */
+            ptr = prepend( file + pos, dxmt_root, strlen(dxmt_root) );
+            status = open_builtin_pe_file( ptr, &attr, module, size_ptr, image_info, limit_low,
+                                           limit_high, load_machine, prefer_native, offset );
+#if defined(__APPLE__)
+            if (getenv( "MACRUNNER_DIAG_DXMT" ))
+                fprintf( stderr, "macrunner-diag-dxmt: name=%s try2=%s status2=0x%x\n",
+                         name, ptr, (unsigned int)status );
+#endif
+            if (NT_SUCCESS(status)) goto done;
+            status = STATUS_DLL_NOT_FOUND; /* not in overlay -> fall through to normal search */
+        }
+    }
+
+    /* ★ лейн FEX-N3 2026-09-07 — CPU-модуль берётся из overlay ОДНОЙ СОГЛАСОВАННОЙ ПАРОЙ.
+     *
+     * Почему одного WINEDLLPATH НЕДОСТАТОЧНО: set_dll_path (loader.c:573) кладёт dll_dir
+     * ПЕРВЫМ и только потом элементы WINEDLLPATH, а цикл ниже берёт первое совпадение.
+     * Значит xtajit.dll из самого диста победил бы overlay и прогон молча ушёл бы на
+     * HyperBridge — ровно тот тихий откат, ради которого заведён MACRUNNER_CPU_BACKEND.
+     * (Тем же способом решена задача для DXMT — блок MACRUNNER_DXMT_ROOT выше.)
+     *
+     * Затрагиваются РОВНО два имени CPU-модуля; всё остальное ищется по-прежнему.
+     * PE берётся из <root>/<arch>-windows, спутник — из <root>/<arch>-unix, то есть пара
+     * приходит из ОДНОГО корня, а несовпадение basename даёт отказ загрузки (см. done:).
+     * Корень обязан быть и в WINEDLLPATH — тогда dll_path_maxlen покрывает его длину;
+     * если нет, отказываем громко, а не портим буфер. */
+    if (macrunner_is_cpu)
+    {
+        const char *fex_root = getenv( "MACRUNNER_FEX_OVERLAY" );
+
+        if (fex_root && fex_root[0])
+        {
+            if (strlen( fex_root ) > dll_path_maxlen)
+            {
+                fprintf( stderr, "macrunner-cpu-backend-load: overlay=%s ОТВЕРГНУТ — длина %zu > "
+                         "dll_path_maxlen %zu; добавь корень в WINEDLLPATH\n",
+                         fex_root, strlen( fex_root ), dll_path_maxlen );
+                return STATUS_DLL_NOT_FOUND;
+            }
+            /* ★ ШАГ-2: каталог PE берём как обычно из search_machine, но обе половины FEX —
+             * ARM64/ARM64EC и лежат в каталоге ТЕКУЩЕЙ машины.  Вспомогательные процессы
+             * (native ARM64) спрашивают xtajit64 с pe_dir=x86_64-windows, и прежде это
+             * лечили КОПИЕЙ провайдера в overlay/x86_64-windows — раскладка Астры такую
+             * копию прямо запрещает.  Вместо копии — вторая попытка по current_machine. */
+            {
+                const char *fex_pe_dir[2];
+                unsigned int try_i;
+
+                fex_pe_dir[0] = pe_dir;
+                fex_pe_dir[1] = get_pe_dir( current_machine );
+                status = STATUS_DLL_NOT_FOUND;
+                for (try_i = 0; try_i < 2; try_i++)
+                {
+                    if (try_i && !strcmp( fex_pe_dir[0], fex_pe_dir[1] )) break;
+                    ptr = prepend( prepend( file + pos, fex_pe_dir[try_i], strlen(fex_pe_dir[try_i]) ),
+                                   fex_root, strlen(fex_root) );
+                    status = open_builtin_pe_file( ptr, &attr, module, size_ptr, image_info, limit_low,
+                                                   limit_high, load_machine, prefer_native, offset );
+                    fprintf( stderr, "macrunner-cpu-backend-load: overlay try%u pe=%s status=0x%08x\n",
+                             try_i, ptr, (unsigned int)status );
+                    if (NT_SUCCESS(status)) break;
+                }
+            }
+            if (NT_SUCCESS(status))
+            {
+                const char *soname = macrunner_fex_unix_name( file + pos + 1 );
+
+                macrunner_cpu_pe_path = strdup( ptr );
+                /* спутник ищем в so_dir ТОГО ЖЕ корня, не рядом с PE */
+                if (soname)
+                {
+                    size_t need = strlen(fex_root) + strlen(so_dir) + 1 + strlen(soname) + 1;
+                    if ((macrunner_cpu_unix_path = malloc( need )))
+                        snprintf( macrunner_cpu_unix_path, need, "%s%s/%s", fex_root, so_dir, soname );
+                }
+                ptr = prepend( prepend( file + pos, so_dir, strlen(so_dir) ), fex_root, strlen(fex_root) );
+                goto done;
+            }
+            /* overlay задан, но пары в нём нет — это ошибка раскладки, а не повод
+             * тихо взять CPU-модуль из диста */
+            status = STATUS_DLL_NOT_FOUND;
+            goto done;
+        }
+    }
+
     for (i = 0; dll_paths[i]; i++)
     {
         ptr = file + pos;
@@ -1599,6 +2352,11 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, ANSI_STRING *exp_name
         ptr = prepend( ptr, dll_paths[i], strlen(dll_paths[i]) );
         status = open_builtin_pe_file( ptr, &attr, module, size_ptr, image_info, limit_low, limit_high,
                                        load_machine, prefer_native, offset );
+        if (macrunner_is_cpu && NT_SUCCESS(status))
+        {
+            free( macrunner_cpu_pe_path );
+            macrunner_cpu_pe_path = strdup( ptr );
+        }
         /* use so dir for unix lib */
         ptr = file + pos;
         ptr = prepend( ptr, so_dir, strlen(so_dir) );
@@ -1628,8 +2386,40 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, ANSI_STRING *exp_name
     if (NT_SUCCESS(status) && ext)
     {
         strcpy( ext, ".so" );
-        load_builtin_unixlib( *module, ptr );
+        /* ШАГ-2: у модуля процессора на пути FEX спутник назван по-своему (см.
+         * macrunner_fex_unix_name) — иначе dyld отдаёт одноимённый спутник HyperBridge. */
+        load_builtin_unixlib( *module, macrunner_cpu_unix_path ? macrunner_cpu_unix_path : ptr );
     }
+    /* ★ лейн FEX-N3: БЕЗУСЛОВНЫЙ прибор личности CPU-модуля. Печатает на ЛЮБОМ backend-е,
+     * иначе его молчание неотличимо от «сюда не дошли». Плюс жёсткая проверка ПАРЫ:
+     * upstream FEX ИГНОРИРУЕТ результат FEX::Windows::UnixLib::Init (Module.cpp:538) —
+     * без спутника он молча живёт с нулевым диспетчером и каждый Call даёт
+     * STATUS_NOT_SUPPORTED. Такое расхождение обязано быть ОТКАЗОМ ЗАГРУЗКИ. */
+    if (macrunner_is_cpu)
+    {
+        struct stat st;
+        const char *unix_path = (NT_SUCCESS(status) && ext)
+                                ? (macrunner_cpu_unix_path ? macrunner_cpu_unix_path : ptr) : NULL;
+        int unix_present = (unix_path && !stat( unix_path, &st ));
+
+        fprintf( stderr, "macrunner-cpu-backend-load: backend=%s name=%s status=0x%08x "
+                 "pe=%s unix=%s unix_present=%d\n",
+                 macrunner_cpu_backend_name( macrunner_cpu_backend ), debugstr_us(nt_name),
+                 (unsigned int)status, macrunner_cpu_pe_path ? macrunner_cpu_pe_path : "(none)",
+                 unix_path ? unix_path : "(none)", unix_present );
+
+        if (NT_SUCCESS(status) && macrunner_cpu_pe_path && !unix_present)
+        {
+            fprintf( stderr, "macrunner-cpu-backend-load: PAIR MISMATCH — спутник %s отсутствует "
+                     "рядом с %s, загрузка CPU-модуля ОТВЕРГНУТА\n",
+                     unix_path ? unix_path : "(none)", macrunner_cpu_pe_path );
+            NtUnmapViewOfSection( NtCurrentProcess(), *module );
+            *module = NULL;
+            status = STATUS_DLL_NOT_FOUND;
+        }
+        free( macrunner_cpu_pe_path );
+    }
+    free( macrunner_cpu_unix_path );
     free( file );
     return status;
 }
@@ -1649,6 +2439,7 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
     NTSTATUS status;
     USHORT search_machine = image_info->machine;
     enum loadorder loadorder = get_load_order( nt_name );
+    BOOL force_current_machine_builtin = FALSE;
 
     if (loadorder == LO_DISABLED) return STATUS_DLL_NOT_FOUND;
 
@@ -1667,6 +2458,57 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
     if (is_arm64ec() && image_info->is_hybrid && search_machine == IMAGE_FILE_MACHINE_AMD64)
         search_machine = current_machine;
 
+#if defined(__APPLE__)
+    {
+        static int lb_diag_n;
+        if (getenv( "MACRUNNER_DIAG_DXMT" ) && image_info->is_hybrid && lb_diag_n++ < 60)
+            fprintf( stderr, "macrunner-diag-loadbuiltin: nt=%s image_mach=0x%x search_mach=0x%x req_mach=0x%x "
+                     "is_hybrid=%d is_arm64ec=%d wine_builtin=%d loadorder=%d main_mach=0x%x\n",
+                     debugstr_us(nt_name),
+                     image_info->machine, search_machine, machine, image_info->is_hybrid, is_arm64ec(),
+                     image_info->wine_builtin, loadorder, main_image_info.Machine );
+    }
+#endif
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (macrunner_hb_x64_loader &&
+        current_machine == IMAGE_FILE_MACHINE_ARM64 &&
+        image_info->machine == IMAGE_FILE_MACHINE_AMD64 &&
+        macrunner_hb_builtin_name_matches( nt_name, exp_name, "xtajit64.dll" ))
+    {
+        fprintf( stderr, "MacRunner x64-on-ARM64 using current-machine xtajit64 builtin for %s\n",
+               debugstr_us(nt_name) );
+        search_machine = current_machine;
+        machine = current_machine;
+        force_current_machine_builtin = TRUE;
+    }
+    else if (macrunner_hb_x64_loader &&
+        current_machine == IMAGE_FILE_MACHINE_ARM64 &&
+        main_image_info.Machine == IMAGE_FILE_MACHINE_ARM64 &&
+        image_info->machine == IMAGE_FILE_MACHINE_AMD64 &&
+        (!machine || machine == current_machine))
+    {
+        fprintf( stderr, "MacRunner native ARM64 helper using current-machine builtin for wrong-arch prefix image %s\n",
+               debugstr_us(nt_name) );
+        search_machine = current_machine;
+        machine = current_machine;
+        force_current_machine_builtin = TRUE;
+    }
+
+    if (macrunner_hb_x64_loader &&
+        current_machine == IMAGE_FILE_MACHINE_ARM64 &&
+        main_image_info.Machine == IMAGE_FILE_MACHINE_I386 &&
+        image_info->machine == IMAGE_FILE_MACHINE_AMD64 &&
+        !macrunner_hb_is_wow64_host_builtin( nt_name, exp_name ))
+    {
+        fprintf( stderr, "MacRunner HyperBridge PE32 builtin using i386 lane for wrong-arch prefix image %s\n",
+               debugstr_us(nt_name) );
+        search_machine = IMAGE_FILE_MACHINE_I386;
+        machine = IMAGE_FILE_MACHINE_I386;
+        force_current_machine_builtin = TRUE;
+    }
+#endif
+
     switch (loadorder)
     {
     case LO_NATIVE:
@@ -1679,7 +2521,29 @@ NTSTATUS load_builtin( const struct pe_image_info *image_info, UNICODE_STRING *n
         status = find_builtin_dll( nt_name, exp_name, module, size, info, limit_low, limit_high,
                                    search_machine, machine, (loadorder == LO_DEFAULT), offset );
         if (status == STATUS_DLL_NOT_FOUND || status == STATUS_NOT_SUPPORTED)
+        {
+            if (force_current_machine_builtin) return status;
+            /* ★★★ ШАГ-2 08.09.2026 — ОТКАТ НА ОБРАЗ ИЗ ПРЕФИКСА ДЛЯ МОДУЛЯ ПРОЦЕССОРА ЗАПРЕЩЁН.
+             *
+             * STATUS_IMAGE_ALREADY_LOADED означает «оставь тот файл, что уже открыт», а
+             * открыт при этом файл ПРЕФИКСА — `drive_c/windows/system32/xtajit*.dll`, куда
+             * sync-prefix-from-dist.sh кладёт копию HyperBridge.  То есть отказ загрузки
+             * НАШЕГО провайдера тихо превращался в загрузку ЧУЖОГО, минуя find_builtin_dll
+             * вместе со всеми его проверками пары и знака.  N3 (§3) видел это как
+             * `BTCpuProcessInit(HB)=1` на всех трёх отрицательных контролях и назвал дырой.
+             *
+             * При выбранном не-HB трансляторе отказ обязан быть ГРОМКИМ. */
+            if (macrunner_is_cpu_backend_module( nt_name, exp_name ) &&
+                macrunner_cpu_backend != MACRUNNER_CPU_BACKEND_HB)
+            {
+                fprintf( stderr, "macrunner-cpu-backend-load: ОТКАТ НА ПРЕФИКС ЗАПРЕЩЁН "
+                         "backend=%s name=%s status=0x%08x\n",
+                         macrunner_cpu_backend_name( macrunner_cpu_backend ),
+                         debugstr_us(nt_name), (unsigned int)status );
+                return status;
+            }
             return STATUS_IMAGE_ALREADY_LOADED;
+        }
         return status;
     }
 }
@@ -1701,10 +2565,68 @@ static const WCHAR *get_machine_wow64_dir( WORD machine )
     switch (machine)
     {
     case IMAGE_FILE_MACHINE_TARGET_HOST: return system32;
+    case IMAGE_FILE_MACHINE_AMD64:
+        if (macrunner_hb_x64_guest_process())
+            return system32;
+        return NULL;
     case IMAGE_FILE_MACHINE_I386:        return syswow64;
     case IMAGE_FILE_MACHINE_ARMNT:       return sysarm32;
     default: return NULL;
     }
+}
+
+static BOOL macrunner_hb_same_basename( const UNICODE_STRING *path, const WCHAR *name )
+{
+    unsigned int i, base = 0, len = path->Length / sizeof(WCHAR);
+    unsigned int name_len = wcslen( name );
+
+    for (i = 0; i < len; i++)
+        if (path->Buffer[i] == '/' || path->Buffer[i] == '\\') base = i + 1;
+
+    return len - base == name_len && !wcsnicmp( path->Buffer + base, name, name_len );
+}
+
+static BOOL macrunner_hb_is_system_helper_path( const UNICODE_STRING *path, BOOL allow_windows_dir )
+{
+    static const WCHAR windows[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\',0};
+    const WCHAR *system32 = get_machine_wow64_dir( IMAGE_FILE_MACHINE_TARGET_HOST );
+    unsigned int i, base = 0, len = path->Length / sizeof(WCHAR);
+    unsigned int system32_len = wcslen( system32 );
+    unsigned int windows_len = wcslen( windows );
+
+    for (i = 0; i < len; i++)
+        if (path->Buffer[i] == '/' || path->Buffer[i] == '\\') base = i + 1;
+
+    if (base == system32_len && !wcsnicmp( path->Buffer, system32, system32_len )) return TRUE;
+    return allow_windows_dir && base == windows_len && !wcsnicmp( path->Buffer, windows, windows_len );
+}
+
+BOOL macrunner_hb_prefer_native_helper_exe( const UNICODE_STRING *path )
+{
+    static const WCHAR wineboot[] = {'w','i','n','e','b','o','o','t','.','e','x','e',0};
+    static const WCHAR services[] = {'s','e','r','v','i','c','e','s','.','e','x','e',0};
+    static const WCHAR explorer[] = {'e','x','p','l','o','r','e','r','.','e','x','e',0};
+    static const WCHAR rpcss[] = {'r','p','c','s','s','.','e','x','e',0};
+    static const WCHAR plugplay[] = {'p','l','u','g','p','l','a','y','.','e','x','e',0};
+    static const WCHAR winedevice[] = {'w','i','n','e','d','e','v','i','c','e','.','e','x','e',0};
+    static const WCHAR svchost[] = {'s','v','c','h','o','s','t','.','e','x','e',0};
+    BOOL explorer_path;
+
+    if (!path || !path->Buffer || !path->Length) return FALSE;
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64) return FALSE;
+    if (!macrunner_hb_x64_loader_enabled()) return FALSE;
+
+    explorer_path = macrunner_hb_same_basename( path, explorer );
+    if (!explorer_path &&
+        !macrunner_hb_same_basename( path, wineboot ) &&
+        !macrunner_hb_same_basename( path, services ) &&
+        !macrunner_hb_same_basename( path, plugplay ) &&
+        !macrunner_hb_same_basename( path, winedevice ) &&
+        !macrunner_hb_same_basename( path, svchost ) &&
+        !macrunner_hb_same_basename( path, rpcss ))
+        return FALSE;
+
+    return macrunner_hb_is_system_helper_path( path, explorer_path );
 }
 
 
@@ -1787,6 +2709,15 @@ NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine, void **mod
     SIZE_T size;
     USHORT search_machine;
 
+    if (macrunner_hb_prefer_native_helper_exe( nt_name ))
+    {
+        fprintf( stderr, "MacRunner loading native helper builtin for %s\n", debugstr_us(nt_name) );
+        status = find_builtin_dll( nt_name, NULL, module, &size, &main_image_info, 0, 0,
+                                   current_machine, current_machine, FALSE, 0 );
+        if (status == STATUS_IMAGE_NOT_AT_BASE) status = virtual_relocate_module( *module );
+        if (status != STATUS_DLL_NOT_FOUND && status != STATUS_NOT_SUPPORTED) return status;
+    }
+
     status = open_main_image( nt_name, module, &main_image_info, loadorder, load_machine );
     if (status != STATUS_DLL_NOT_FOUND) return status;
 
@@ -1810,6 +2741,7 @@ NTSTATUS load_start_exe( UNICODE_STRING *nt_name, void **module )
     SIZE_T size;
     WCHAR *image = malloc( sizeof("\\??\\C:\\windows\\system32\\start.exe") * sizeof(WCHAR) );
 
+    if (!image) return STATUS_NO_MEMORY;
     wcscpy( image, get_machine_wow64_dir( current_machine ));
     wcscat( image, startW );
     init_unicode_string( nt_name, image );
@@ -1822,27 +2754,75 @@ NTSTATUS load_start_exe( UNICODE_STRING *nt_name, void **module )
     return status;
 }
 
-static ULONG_PTR find_ordinal_export( HMODULE module, const IMAGE_EXPORT_DIRECTORY *exports, DWORD ordinal )
+static BOOL module_rva_array_fits_image( ULONG image_size, ULONG rva, ULONG count, size_t elem_size )
 {
-    const DWORD *functions = (const DWORD *)((BYTE *)module + exports->AddressOfFunctions);
-
-    if (ordinal >= exports->NumberOfFunctions) return 0;
-    if (!functions[ordinal]) return 0;
-    return (ULONG_PTR)module + functions[ordinal];
+    if (!count) return TRUE;
+    if (!rva || image_size < elem_size || rva > image_size - elem_size) return FALSE;
+    return count <= (image_size - rva) / elem_size;
 }
 
-static ULONG_PTR find_named_export( HMODULE module, const IMAGE_EXPORT_DIRECTORY *exports,
-                                    const char *name )
+static void *module_rva_ptr( HMODULE module, ULONG image_size, ULONG rva, SIZE_T size )
 {
-    const WORD *ordinals = (const WORD *)((BYTE *)module + exports->AddressOfNameOrdinals);
-    const DWORD *names = (const DWORD *)((BYTE *)module + exports->AddressOfNames);
-    int min = 0, max = exports->NumberOfNames - 1;
+    ULONG_PTR base = (ULONG_PTR)module;
 
+    if (image_size > ~(ULONG_PTR)0 - base) return NULL;
+    if (rva > image_size || size > image_size - rva) return NULL;
+    return (void *)(base + rva);
+}
+
+static BOOL module_string_fits_image( HMODULE module, ULONG image_size, ULONG rva )
+{
+    char *str = module_rva_ptr( module, image_size, rva, 1 );
+
+    if (!str) return FALSE;
+    return memchr( str, 0, image_size - rva ) != NULL;
+}
+
+static ULONG_PTR find_ordinal_export( HMODULE module, ULONG image_size,
+                                      const IMAGE_EXPORT_DIRECTORY *exports, DWORD ordinal )
+{
+    const DWORD *functions;
+
+    if (!module_rva_array_fits_image( image_size, exports->AddressOfFunctions,
+                                      exports->NumberOfFunctions, sizeof(*functions) ))
+        return 0;
+    if (ordinal >= exports->NumberOfFunctions) return 0;
+    functions = module_rva_ptr( module, image_size, exports->AddressOfFunctions,
+                                exports->NumberOfFunctions * sizeof(*functions) );
+    if (!functions) return 0;
+    if (!functions[ordinal] || functions[ordinal] >= image_size) return 0;
+    return (ULONG_PTR)module_rva_ptr( module, image_size, functions[ordinal], 1 );
+}
+
+static ULONG_PTR find_named_export( HMODULE module, ULONG image_size,
+                                    const IMAGE_EXPORT_DIRECTORY *exports, const char *name )
+{
+    const WORD *ordinals;
+    const DWORD *names;
+    int min = 0, max;
+
+    if (!exports->NumberOfNames || exports->NumberOfNames > INT_MAX) return 0;
+    if (!module_rva_array_fits_image( image_size, exports->AddressOfNameOrdinals,
+                                      exports->NumberOfNames, sizeof(*ordinals) ))
+        return 0;
+    if (!module_rva_array_fits_image( image_size, exports->AddressOfNames,
+                                      exports->NumberOfNames, sizeof(*names) ))
+        return 0;
+    ordinals = module_rva_ptr( module, image_size, exports->AddressOfNameOrdinals,
+                               exports->NumberOfNames * sizeof(*ordinals) );
+    names = module_rva_ptr( module, image_size, exports->AddressOfNames,
+                            exports->NumberOfNames * sizeof(*names) );
+    if (!ordinals || !names) return 0;
+    max = exports->NumberOfNames - 1;
     while (min <= max)
     {
         int res, pos = (min + max) / 2;
-        char *ename = (char *)module + names[pos];
-        if (!(res = strcmp( ename, name ))) return find_ordinal_export( module, exports, ordinals[pos] );
+        char *ename;
+        if (!module_string_fits_image( module, image_size, names[pos] )) return 0;
+        ename = module_rva_ptr( module, image_size, names[pos], 1 );
+        if (!ename) return 0;
+        if (!(res = strcmp( ename, name )))
+            return find_ordinal_export( module, image_size, exports, ordinals[pos] );
         if (res > 0) max = pos - 1;
         else min = pos + 1;
     }
@@ -1854,20 +2834,50 @@ static inline void *get_rva( void *module, ULONG_PTR addr )
     return (BYTE *)module + addr;
 }
 
+static ULONG get_module_image_size( HMODULE module )
+{
+    const IMAGE_NT_HEADERS *nt = get_rva( module, ((IMAGE_DOS_HEADER *)module)->e_lfanew );
+
+    if (nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        return ((const IMAGE_NT_HEADERS64 *)nt)->OptionalHeader.SizeOfImage;
+    if (nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+        return ((const IMAGE_NT_HEADERS32 *)nt)->OptionalHeader.SizeOfImage;
+    return 0;
+}
+
 static const void *get_module_data_dir( HMODULE module, ULONG dir, ULONG *size )
 {
     const IMAGE_NT_HEADERS *nt = get_rva( module, ((IMAGE_DOS_HEADER *)module)->e_lfanew );
     const IMAGE_DATA_DIRECTORY *data;
+    ULONG image_size;
 
+    if (dir >= IMAGE_NUMBEROF_DIRECTORY_ENTRIES) return NULL;
     if (nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    {
+        const IMAGE_OPTIONAL_HEADER64 *opt = &((const IMAGE_NT_HEADERS64 *)nt)->OptionalHeader;
+        if (dir >= opt->NumberOfRvaAndSizes) return NULL;
+        if (nt->FileHeader.SizeOfOptionalHeader <
+            offsetof( IMAGE_OPTIONAL_HEADER64, DataDirectory ) + (dir + 1) * sizeof(IMAGE_DATA_DIRECTORY))
+            return NULL;
+        image_size = opt->SizeOfImage;
         data = &((const IMAGE_NT_HEADERS64 *)nt)->OptionalHeader.DataDirectory[dir];
+    }
     else if (nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+    {
+        const IMAGE_OPTIONAL_HEADER32 *opt = &((const IMAGE_NT_HEADERS32 *)nt)->OptionalHeader;
+        if (dir >= opt->NumberOfRvaAndSizes) return NULL;
+        if (nt->FileHeader.SizeOfOptionalHeader <
+            offsetof( IMAGE_OPTIONAL_HEADER32, DataDirectory ) + (dir + 1) * sizeof(IMAGE_DATA_DIRECTORY))
+            return NULL;
+        image_size = opt->SizeOfImage;
         data = &((const IMAGE_NT_HEADERS32 *)nt)->OptionalHeader.DataDirectory[dir];
+    }
     else
         return NULL;
     if (!data->VirtualAddress || !data->Size) return NULL;
+    if (data->VirtualAddress >= image_size || data->Size > image_size - data->VirtualAddress) return NULL;
     if (size) *size = data->Size;
-    return get_rva( module, data->VirtualAddress );
+    return module_rva_ptr( module, image_size, data->VirtualAddress, data->Size );
 }
 
 /***********************************************************************
@@ -1880,13 +2890,19 @@ static void load_ntdll_functions( HMODULE module )
     void **p__wine_unix_call_dispatcher_arm64ec = NULL;
     unixlib_handle_t *p__wine_unixlib_handle;
     const IMAGE_EXPORT_DIRECTORY *exports;
+    ULONG image_size, exports_size;
 
-    exports = get_module_data_dir( module, IMAGE_DIRECTORY_ENTRY_EXPORT, NULL );
-    assert( exports );
+    image_size = get_module_image_size( module );
+    exports = get_module_data_dir( module, IMAGE_DIRECTORY_ENTRY_EXPORT, &exports_size );
+    assert( image_size && exports && exports_size >= sizeof(*exports) );
+    if (!image_size || !exports || exports_size < sizeof(*exports))
+        fatal_error( "invalid ntdll export directory\n" );
 
 #define GET_FUNC(name) \
-    if (!(p##name = (void *)find_named_export( module, exports, #name ))) \
-        ERR( "%s not found\n", #name )
+    do { \
+        if (!(p##name = (void *)find_named_export( module, image_size, exports, #name ))) \
+            fatal_error( "ntdll export %s not found\n", #name ); \
+    } while (0)
 
     GET_FUNC( DbgUiRemoteBreakin );
     GET_FUNC( KiRaiseUserExceptionDispatcher );
@@ -1915,6 +2931,28 @@ static void load_ntdll_functions( HMODULE module )
     }
     else *p__wine_unix_call_dispatcher = __wine_unix_call_dispatcher;
 #undef GET_FUNC
+
+    /* MacRunner 2026-08-03 — hand the PE side a lock-free guest-image lookup.  Resolved WITHOUT
+     * GET_FUNC on purpose: GET_FUNC calls fatal_error, and a diagnostic aid must never be able to
+     * kill the process at startup just because a stale PE ntdll lacks the export. */
+    {
+        void **p = (void *)find_named_export( module, image_size, exports,
+                                              "macrunner_hb_guest_image_lookup" );
+        if (p) *p = macrunner_hb_guest_image_for_pc;
+    }
+    {
+        void **p = (void *)find_named_export( module, image_size, exports,
+                                              "macrunner_hb_guest_ctx_lookup" );
+        if (p) *p = macrunner_hb_guest_ctx_for_tid;
+    }
+    /* итерация 143 (лейн УСТАНОВЩИКИ): перечень известных стеков потока — мостовой и
+     * отложенный исходный. Тем же необязательным способом: старый PE-ntdll без экспорта
+     * просто не получит его и будет вести себя как раньше. */
+    {
+        void **p = (void *)find_named_export( module, image_size, exports,
+                                              "macrunner_hb_known_stack_lookup" );
+        if (p) *p = macrunner_hb_known_stack_for_sp;
+    }
 }
 
 
@@ -1924,29 +2962,44 @@ static void load_ntdll_functions( HMODULE module )
 static void load_ntdll_wow64_functions( HMODULE module )
 {
     const IMAGE_EXPORT_DIRECTORY *exports;
+    ULONG image_size, exports_size;
 
-    exports = get_module_data_dir( module, IMAGE_FILE_EXPORT_DIRECTORY, NULL );
-    assert( exports );
+    image_size = get_module_image_size( module );
+    exports = get_module_data_dir( module, IMAGE_FILE_EXPORT_DIRECTORY, &exports_size );
+    assert( image_size && exports && exports_size >= sizeof(*exports) );
+    if (!image_size || !exports || exports_size < sizeof(*exports))
+        fatal_error( "invalid wow64 ntdll export directory\n" );
 
     pLdrSystemDllInitBlock->ntdll_handle = (ULONG_PTR)module;
 
-#define GET_FUNC(name) pLdrSystemDllInitBlock->p##name = find_named_export( module, exports, #name )
+#define GET_FUNC(name) \
+    do { \
+        if (!(pLdrSystemDllInitBlock->p##name = find_named_export( module, image_size, exports, #name ))) \
+            fatal_error( "wow64 ntdll export %s not found\n", #name ); \
+    } while (0)
+#define GET_OPTIONAL_FUNC(name) \
+    pLdrSystemDllInitBlock->p##name = find_named_export( module, image_size, exports, #name )
     GET_FUNC( KiUserApcDispatcher );
     GET_FUNC( KiUserCallbackDispatcher );
     GET_FUNC( KiUserExceptionDispatcher );
     GET_FUNC( LdrInitializeThunk );
     GET_FUNC( LdrSystemDllInitBlock );
     GET_FUNC( RtlUserThreadStart );
-    GET_FUNC( RtlpFreezeTimeBias );
-    GET_FUNC( RtlpQueryProcessDebugInformationRemote );
+    GET_OPTIONAL_FUNC( RtlpFreezeTimeBias );
+    GET_OPTIONAL_FUNC( RtlpQueryProcessDebugInformationRemote );
+#undef GET_OPTIONAL_FUNC
 #undef GET_FUNC
 
-    p__wine_ctrl_routine = (void *)find_named_export( module, exports, "__wine_ctrl_routine" );
+    if (!(p__wine_ctrl_routine = (void *)find_named_export( module, image_size, exports,
+                                                            "__wine_ctrl_routine" )))
+        fatal_error( "wow64 ntdll export __wine_ctrl_routine not found\n" );
 
 #ifdef _WIN64
     {
-        unixlib_handle_t *p__wine_unixlib_handle = (void *)find_named_export( module, exports,
+        unixlib_handle_t *p__wine_unixlib_handle = (void *)find_named_export( module, image_size, exports,
                                                                               "__wine_unixlib_handle" );
+        if (!p__wine_unixlib_handle)
+            fatal_error( "wow64 ntdll export __wine_unixlib_handle not found\n" );
         *p__wine_unixlib_handle = (UINT_PTR)unix_call_wow64_funcs;
     }
 #endif
@@ -1978,6 +3031,26 @@ ULONG_PTR redirect_arm64ec_rva( void *base, ULONG_PTR rva, const IMAGE_ARM64EC_M
 }
 
 
+static BOOL module_ptr_fits_image( HMODULE module, ULONG image_size, const void *ptr, size_t size )
+{
+    ULONG_PTR base = (ULONG_PTR)module, addr = (ULONG_PTR)ptr;
+
+    if (addr < base || image_size < size) return FALSE;
+    return addr - base <= image_size - size;
+}
+
+static void *redirect_arm64ec_proc( HMODULE module, ULONG image_size, void *proc,
+                                    const IMAGE_ARM64EC_METADATA *metadata )
+{
+    ULONG_PTR base = (ULONG_PTR)module, addr = (ULONG_PTR)proc;
+    ULONG_PTR target;
+
+    if (addr < base || addr - base >= image_size) return NULL;
+    target = redirect_arm64ec_rva( module, addr - base, metadata );
+    if (target >= image_size) return NULL;
+    return module_rva_ptr( module, image_size, target, 1 );
+}
+
 /***********************************************************************
  *           redirect_ntdll_functions
  *
@@ -1987,11 +3060,24 @@ static void redirect_ntdll_functions( HMODULE module )
 {
     const IMAGE_LOAD_CONFIG_DIRECTORY *loadcfg;
     const IMAGE_ARM64EC_METADATA *metadata;
+    ULONG image_size, loadcfg_size;
 
-    if (!(loadcfg = get_module_data_dir( module, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, NULL ))) return;
-    if (!(metadata = (void *)loadcfg->CHPEMetadataPointer)) return;
-#define REDIRECT(name) \
-    p##name = get_rva( module, redirect_arm64ec_rva( module, (char *)p##name - (char *)module, metadata ))
+    if (!(image_size = get_module_image_size( module ))) return;
+    if (!(loadcfg = get_module_data_dir( module, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &loadcfg_size ))) return;
+    if (loadcfg_size < offsetof( IMAGE_LOAD_CONFIG_DIRECTORY, CHPEMetadataPointer ) +
+                       sizeof(loadcfg->CHPEMetadataPointer)) return;
+    if (!(metadata = (void *)(ULONG_PTR)loadcfg->CHPEMetadataPointer)) return;
+    if (!module_ptr_fits_image( module, image_size, metadata, sizeof(*metadata) )) return;
+    if (metadata->RedirectionMetadataCount > INT_MAX) return;
+    if (!module_rva_array_fits_image( image_size, metadata->RedirectionMetadata,
+                                      metadata->RedirectionMetadataCount,
+                                      sizeof(IMAGE_ARM64EC_REDIRECTION_ENTRY) ))
+        return;
+#define REDIRECT(name) do { \
+    void *redirected = redirect_arm64ec_proc( module, image_size, p##name, metadata ); \
+    if (!redirected) return; \
+    p##name = redirected; \
+} while (0)
     REDIRECT( DbgUiRemoteBreakin );
     REDIRECT( KiRaiseUserExceptionDispatcher );
     REDIRECT( KiUserExceptionDispatcher );
@@ -2011,8 +3097,8 @@ static void load_ntdll(void)
 {
     static WCHAR path[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\',
                            's','y','s','t','e','m','3','2','\\','n','t','d','l','l','.','d','l','l',0};
-    const char *pe_dir = get_pe_dir( current_machine );
     USHORT machine = current_machine;
+    const char *pe_dir;
     unsigned int status;
     SECTION_IMAGE_INFORMATION info;
     OBJECT_ATTRIBUTES attr;
@@ -2024,15 +3110,56 @@ static void load_ntdll(void)
     init_unicode_string( &str, path );
     InitializeObjectAttributes( &attr, &str, 0, 0, NULL );
 
-    if (build_dir) asprintf( &name, "%s%s/ntdll.dll", ntdll_dir, pe_dir );
-    else asprintf( &name, "%s%s/ntdll.dll", dll_dir, pe_dir );
+    /* MacRunner, лейн ШАГ-1, 08.09.2026 — ОТКУДА БЕРЁТСЯ ntdll В РЕЖИМЕ ARM64EC.
+     *
+     * Было: `machine = main_image_info.Machine` (AMD64), и тот же `machine` шёл в
+     * get_pe_dir() -> каталог "/x86_64-windows". Там лежит ЧИСТЫЙ x86-64 ntdll.dll
+     * (build/Makefile:361834, `-b x86_64-w64-mingw32`), в котором экспорта
+     * `__wine_unix_call_dispatcher_arm64ec` нет и быть не может: ntdll.spec:1757
+     * объявляет его `-arch=arm64ec`. Отсюда отказ GET_FUNC (loader.c:2786).
+     *
+     * Гибрид ARM64X, несущий вид EC вместе с этим экспортом, собирается ОДИН и лежит в
+     * "/aarch64-windows" (build/Makefile:361743, `-b arm64ec-w64-mingw32 -marm64x`).
+     * Ровно так же поступает и обычная загрузка встроенных модулей: load_builtin()
+     * при is_arm64ec() переводит поиск AMD64-гибрида на current_machine (см. выше в
+     * этом файле). load_ntdll() строит путь сам и этого перевода не делал.
+     *
+     * Разделяем два разных смысла:
+     *   pe_dir  — ГДЕ лежит файл: гибрид, то есть каталог current_machine;
+     *   machine — ЧЕМ его считать при отображении: AMD64, и это обязательно, потому что
+     *             перевод ARM64X -> вид EC в map_image_into_view (virtual.c:5542-5545)
+     *             включается ИМЕННО по machine == AMD64. С ARM64 файл отобразился бы
+     *             в родном виде, и экспорта EC в нём снова не оказалось бы.
+     */
+    if (is_arm64ec())
+    {
+        machine = main_image_info.Machine;
+        pe_dir = get_pe_dir( current_machine );
+    }
+    else pe_dir = get_pe_dir( machine );
 
-    if (is_arm64ec()) machine = main_image_info.Machine;
+    if (build_dir)
+    {
+        if (asprintf( &name, "%s%s/ntdll.dll", ntdll_dir, pe_dir ) < 0)
+            fatal_error( "out of memory building ntdll path\n" );
+    }
+    else if (asprintf( &name, "%s%s/ntdll.dll", dll_dir, pe_dir ) < 0)
+        fatal_error( "out of memory building ntdll path\n" );
+
+    /* БЕЗУСЛОВНЫЙ зонд: печатается ВСЕГДА, до попытки открытия. Нужен потому, что отказ
+     * "ntdll export ... not found" не называет ФАЙЛ, и три захода подряд разбирали не тот.
+     * Имя маркера латиницей — `strings -a` не находит кириллические (проверено 07.09). */
+    fprintf( stderr, "macrunner-load-ntdll: arm64ec=%d cur_machine=%#x main_machine=%#x "
+                     "map_machine=%#x file=%s\n",
+             is_arm64ec(), current_machine, main_image_info.Machine, machine, name );
+    fflush( stderr );
+
     status = open_builtin_pe_file( name, &attr, &module, &size, &info, 0, 0, machine, FALSE, 0 );
     if (status == STATUS_DLL_NOT_FOUND)
     {
         free( name );
-        asprintf( &name, "%s/ntdll.dll%c.so", ntdll_dir, 0 );
+        if (asprintf( &name, "%s/ntdll.dll%c.so", ntdll_dir, 0 ) < 0)
+            fatal_error( "out of memory building ntdll path\n" );
         status = open_builtin_so_file( name, &attr, &module, &info, machine, 0, FALSE );
     }
     if (status == STATUS_IMAGE_NOT_AT_BASE) status = virtual_relocate_module( module );
@@ -2052,6 +3179,7 @@ static void load_apiset_dll(void)
                            's','y','s','t','e','m','3','2','\\',
                            'a','p','i','s','e','t','s','c','h','e','m','a','.','d','l','l',0};
     const char *pe_dir = get_pe_dir( current_machine );
+    const IMAGE_DOS_HEADER *dos;
     const IMAGE_NT_HEADERS *nt;
     const IMAGE_SECTION_HEADER *sec;
     API_SET_NAMESPACE *map;
@@ -2067,8 +3195,13 @@ static void load_apiset_dll(void)
     init_unicode_string( &str, path );
     InitializeObjectAttributes( &attr, &str, 0, 0, NULL );
 
-    if (build_dir) asprintf( &name, "%s/dlls/apisetschema%s/apisetschema.dll", build_dir, pe_dir );
-    else asprintf( &name, "%s%s/apisetschema.dll", dll_dir, pe_dir );
+    if (build_dir)
+    {
+        if (asprintf( &name, "%s/dlls/apisetschema%s/apisetschema.dll", build_dir, pe_dir ) < 0)
+            fatal_error( "out of memory building apisetschema path\n" );
+    }
+    else if (asprintf( &name, "%s%s/apisetschema.dll", dll_dir, pe_dir ) < 0)
+        fatal_error( "out of memory building apisetschema path\n" );
     status = open_unix_file( &handle, name, GENERIC_READ | SYNCHRONIZE, &attr, 0,
                              FILE_SHARE_READ | FILE_SHARE_DELETE, FILE_OPEN,
                              FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0 );
@@ -2087,17 +3220,49 @@ static void load_apiset_dll(void)
     }
     if (!status)
     {
-        nt = get_rva( ptr, ((IMAGE_DOS_HEADER *)ptr)->e_lfanew );
-        sec = IMAGE_FIRST_SECTION( nt );
+        SIZE_T nt_offset, optional_offset, section_offset;
+
+        dos = ptr;
+        if (size < sizeof(*dos) || dos->e_magic != IMAGE_DOS_SIGNATURE ||
+            (nt_offset = dos->e_lfanew) > size - offsetof( IMAGE_NT_HEADERS, OptionalHeader ))
+        {
+            status = STATUS_INVALID_IMAGE_FORMAT;
+            goto done;
+        }
+        nt = get_rva( ptr, nt_offset );
+        optional_offset = nt_offset + offsetof( IMAGE_NT_HEADERS, OptionalHeader );
+        if (nt->Signature != IMAGE_NT_SIGNATURE ||
+            nt->FileHeader.SizeOfOptionalHeader > size - optional_offset)
+        {
+            status = STATUS_INVALID_IMAGE_FORMAT;
+            goto done;
+        }
+        section_offset = optional_offset + nt->FileHeader.SizeOfOptionalHeader;
+        sec = (const IMAGE_SECTION_HEADER *)((const char *)ptr + section_offset);
+        if (section_offset > size ||
+            nt->FileHeader.NumberOfSections > (size - section_offset) / sizeof(*sec))
+        {
+            status = STATUS_INVALID_IMAGE_FORMAT;
+            goto done;
+        }
+        status = STATUS_APISET_NOT_PRESENT;
 
         for (i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++)
         {
+            SIZE_T raw, raw_size, section_size;
+
             if (memcmp( (char *)sec->Name, ".apiset", 8 )) continue;
-            map = (API_SET_NAMESPACE *)((char *)ptr + sec->PointerToRawData);
-            if (sec->PointerToRawData < size &&
-                size - sec->PointerToRawData >= sec->Misc.VirtualSize &&
-                map->Version == 6 &&
-                map->Size <= sec->Misc.VirtualSize)
+            raw = sec->PointerToRawData;
+            raw_size = sec->SizeOfRawData;
+            section_size = sec->Misc.VirtualSize;
+            if (!section_size || raw_size < section_size) section_size = raw_size;
+            if (raw >= size || raw_size > size - raw || section_size < sizeof(*map))
+            {
+                status = STATUS_INVALID_IMAGE_FORMAT;
+                break;
+            }
+            map = (API_SET_NAMESPACE *)((char *)ptr + raw);
+            if (map->Version == 6 && map->Size >= sizeof(*map) && map->Size <= section_size)
             {
                 peb->ApiSetMap = map;
                 if (wow_peb) wow_peb->ApiSetMap = PtrToUlong(map);
@@ -2106,8 +3271,8 @@ static void load_apiset_dll(void)
             }
             break;
         }
+done:
         NtUnmapViewOfSection( NtCurrentProcess(), ptr );
-        status = STATUS_APISET_NOT_PRESENT;
     }
     ERR( "failed to load apiset: %x\n", status );
 }
@@ -2130,7 +3295,8 @@ static void load_wow64_ntdll( USHORT machine )
     if (machine == current_machine) return;
     if (!(wow64_dir = get_machine_wow64_dir( machine ))) return;
 
-    path = malloc( sizeof("\\??\\C:\\windows\\system32\\ntdll.dll") * sizeof(WCHAR) );
+    if (!(path = malloc( sizeof("\\??\\C:\\windows\\system32\\ntdll.dll") * sizeof(WCHAR) )))
+        fatal_error( "out of memory loading wow64 ntdll.dll\n" );
     wcscpy( path, wow64_dir );
     wcscat( path, ntdllW );
     init_unicode_string( &nt_name, path );
@@ -2190,7 +3356,8 @@ static void hook(void *to_hook, const void *replace)
     ULONG_PTR intval = (UINT_PTR)to_hook;
 
     intval -= (intval % 4096);
-    mprotect((void *)intval, 0x2000, PROT_EXEC | PROT_READ | PROT_WRITE);
+    if (mprotect( (void *)intval, 0x2000, PROT_EXEC | PROT_READ | PROT_WRITE ))
+        fatal_error( "failed to make hook target %p writable: %s\n", to_hook, strerror(errno) );
 
     /* The offset is from the end of the jmp instruction (6 bytes) to the start of the destination. */
     offset = offsetof(struct hooked_function, dst) - offsetof(struct hooked_function, jmp) - 0x6;
@@ -2248,12 +3415,16 @@ static void start_main_thread(void)
         void *cxcompatdb = NULL;
         char *name = NULL;
 
-        asprintf( &name, "%s/cxcompatdb.so", ntdll_dir );
+        if (asprintf( &name, "%s/cxcompatdb.so", ntdll_dir ) < 0)
+            fatal_error( "out of memory loading cxcompatdb.so\n" );
         if (name)
         {
-            cxcompatdb = dlopen( name, RTLD_LOCAL | RTLD_LAZY );
-            if (!cxcompatdb)
-                WARN( "error loading cxcompatdb.so: %s\n", dlerror() );
+            if (!access( name, R_OK ))
+            {
+                cxcompatdb = dlopen( name, RTLD_LOCAL | RTLD_LAZY );
+                if (!cxcompatdb)
+                    WARN( "error loading cxcompatdb.so: %s\n", dlerror() );
+            }
             free(name);
         }
     }
@@ -2289,6 +3460,7 @@ static jstring wine_init_jni( JNIEnv *env, jobject obj, jobjectArray cmdline, jo
     }
 
     argv = malloc( (argc + 1) * sizeof(*argv) + length );
+    if (!argv) return (*env)->NewStringUTF( env, "out of memory" );
     str = (char *)(argv + argc + 1);
     for (i = 0; i < argc; i++)
     {
@@ -2345,6 +3517,7 @@ static jstring wine_init_jni( JNIEnv *env, jobject obj, jobjectArray cmdline, jo
     main_argc = argc;
     main_argv = argv;
 
+    macrunner_hb_init_flags();
     init_paths();
     virtual_init();
     init_environment();
@@ -2493,10 +3666,18 @@ static int pre_exec(void)
 {
     if (build_dir)
     {
-        char *path = getenv( "DYLD_LIBRARY_PATH" );
-        if (path) asprintf( &path, "%s/dlls/ntdll:%s/dlls/win32u:%s", build_dir, build_dir, path );
-        else asprintf( &path, "%s/dlls/ntdll:%s/dlls/win32u", build_dir, build_dir );
+        char *path;
+        const char *old_path = getenv( "DYLD_LIBRARY_PATH" );
+
+        if (old_path)
+        {
+            if (asprintf( &path, "%s/dlls/ntdll:%s/dlls/win32u:%s", build_dir, build_dir, old_path ) < 0)
+                fatal_error( "out of memory setting DYLD_LIBRARY_PATH\n" );
+        }
+        else if (asprintf( &path, "%s/dlls/ntdll:%s/dlls/win32u", build_dir, build_dir ) < 0)
+            fatal_error( "out of memory setting DYLD_LIBRARY_PATH\n" );
         setenv( "DYLD_LIBRARY_PATH", path, 1 );
+        free( path );
         return 1;
     }
 #ifdef HAVE_WINE_PRELOADER
@@ -2524,24 +3705,32 @@ static void reexec_loader( int argc, char *argv[], char *extra_arg )
 {
     WORD machine = current_machine;
     char **new_argv;
+    size_t extra_count = extra_arg ? 3 : 2;
 
     /* have to exec if we have a preloader, or an argument, or if we are the initial wrapper */
     if (!pre_exec() && !extra_arg && dlsym( RTLD_DEFAULT, "wine_main_preload_info" )) return;
 
+    if (argc < 0 || (size_t)argc > ~(size_t)0 / sizeof(*new_argv) - extra_count)
+        fatal_error( "too many arguments re-executing wine loader\n" );
+
     if (extra_arg)
     {
-        new_argv = malloc( (argc + 3) * sizeof(*argv) );
-        memcpy( new_argv + 3, argv + 1, argc * sizeof(*argv) );
+        if (!(new_argv = malloc( ((size_t)argc + extra_count) * sizeof(*new_argv) )))
+            fatal_error( "out of memory re-executing wine loader\n" );
+        memcpy( new_argv + 3, argv + 1, (size_t)argc * sizeof(*argv) );
         new_argv[2] = extra_arg;
     }
     else
     {
-        new_argv = malloc( (argc + 2) * sizeof(*argv) );
-        memcpy( new_argv + 2, argv + 1, argc * sizeof(*argv) );
+        if (!(new_argv = malloc( ((size_t)argc + extra_count) * sizeof(*new_argv) )))
+            fatal_error( "out of memory re-executing wine loader\n" );
+        memcpy( new_argv + 2, argv + 1, (size_t)argc * sizeof(*argv) );
     }
 
     /* default to 32-bit loader to support 32-bit prefixes */
-    if (machine == IMAGE_FILE_MACHINE_AMD64) machine = IMAGE_FILE_MACHINE_I386;
+    if (current_machine != IMAGE_FILE_MACHINE_ARM64 &&
+        machine == IMAGE_FILE_MACHINE_AMD64)
+        machine = IMAGE_FILE_MACHINE_I386;
 
     loader_exec( new_argv, machine, argv[0] );
     fatal_error( "could not exec the wine loader\n" );
@@ -2570,15 +3759,17 @@ static void check_command_line( int argc, char *argv[] )
 
         if (build_dir)
         {
-            asprintf( &exe, "%s/programs/%s%s/%s.exe", build_dir, basename, pe_dir, basename );
+            if (asprintf( &exe, "%s/programs/%s%s/%s.exe", build_dir, basename, pe_dir, basename ) < 0)
+                fatal_error( "out of memory checking builtin executable\n" );
             if (!access( exe, R_OK )) reexec_loader( argc, argv, basename );
             free( exe );
         }
         else
         {
-            for (int i = 0; dll_paths[i]; i++)
+            for (size_t i = 0; dll_paths[i]; i++)
             {
-                asprintf( &exe, "%s%s/%s.exe", dll_paths[i], pe_dir, basename );
+                if (asprintf( &exe, "%s%s/%s.exe", dll_paths[i], pe_dir, basename ) < 0)
+                    fatal_error( "out of memory checking builtin executable\n" );
                 if (!access( exe, R_OK )) reexec_loader( argc, argv, basename );
                 free( exe );
             }
@@ -2615,6 +3806,7 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
     main_argc = argc;
     main_argv = argv;
 
+    macrunner_hb_init_flags();
     init_paths();
     if (!getenv( "WINELOADERNOEXEC" ) || argc <= 1) check_command_line( argc, argv );
     unsetenv( "WINELOADERNOEXEC" );

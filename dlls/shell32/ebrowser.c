@@ -342,8 +342,8 @@ static HRESULT create_new_shellview(ExplorerBrowserImpl *This, IShellItem *psi)
 {
     IShellBrowser *psb = &This->IShellBrowser_iface;
     IShellFolder *psf;
-    IShellView *psv;
-    HWND hwnd_new;
+    IShellView *psv = NULL;
+    HWND hwnd_new = NULL;
     HRESULT hr;
 
     TRACE("%p, %p\n", This, psi);
@@ -390,7 +390,7 @@ static HRESULT create_new_shellview(ExplorerBrowserImpl *This, IShellItem *psi)
 
 static void get_interfaces_from_site(ExplorerBrowserImpl *This)
 {
-    IServiceProvider *psp;
+    IServiceProvider *psp = NULL;
     HRESULT hr;
 
     /* Calling this with This->punk_site set to NULL should properly
@@ -1174,7 +1174,7 @@ static HRESULT WINAPI IExplorerBrowser_fnBrowseToIDList(IExplorerBrowser *iface,
     /* Only browse if the new pidl differs from the old */
     if(!ILIsEqual(This->current_pidl, absolute_pidl))
     {
-        IShellItem *psi;
+        IShellItem *psi = NULL;
         hr = SHCreateItemFromIDList(absolute_pidl, &IID_IShellItem, (void**)&psi);
         if(SUCCEEDED(hr))
         {
@@ -1221,7 +1221,7 @@ static HRESULT WINAPI IExplorerBrowser_fnBrowseToObject(IExplorerBrowser *iface,
                                                         IUnknown *punk, UINT uFlags)
 {
     ExplorerBrowserImpl *This = impl_from_IExplorerBrowser(iface);
-    LPITEMIDLIST pidl;
+    LPITEMIDLIST pidl = NULL;
     HRESULT hr;
     TRACE("%p (%p, 0x%x)\n", This, punk, uFlags);
 
@@ -1437,7 +1437,7 @@ static HRESULT WINAPI IShellBrowser_fnSendControlMsg(IShellBrowser *iface,
                                                      LRESULT *pret)
 {
     ExplorerBrowserImpl *This = impl_from_IShellBrowser(iface);
-    FIXME("stub, %p (%d, %d, %Ix, %Ix, %p)\n", This, id, uMsg, wParam, lParam, pret);
+    (void)This;
 
     return E_NOTIMPL;
 }

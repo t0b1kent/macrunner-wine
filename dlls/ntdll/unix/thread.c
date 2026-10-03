@@ -78,6 +78,14 @@
 #include "unix_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(thread);
+
+/* ★ ШАГ-4 (08.09.2026) — след записи области CHPE, читается сигнальным обработчиком
+ * (unix/signal_arm64.c).  Кольцо на 8 записей: потоков в минимальном госте единицы,
+ * а обработчику нужен ответ «этот TEB сюда заходил или нет». */
+void *macrunner_shag4_cpu_teb[8];
+void *macrunner_shag4_cpu_area[8];
+unsigned macrunner_shag4_cpu_n;
+
 WINE_DECLARE_DEBUG_CHANNEL(seh);
 WINE_DECLARE_DEBUG_CHANNEL(syscall);
 WINE_DECLARE_DEBUG_CHANNEL(threadname);
@@ -85,6 +93,29 @@ WINE_DECLARE_DEBUG_CHANNEL(threadname);
 pthread_key_t teb_key = 0;
 
 static LONG nb_threads = 1;
+
+static BOOL trace_ui_thread_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_WAIT") != NULL;
+    return enabled;
+}
+
+static BOOL trace_present_follow_thread_lifecycle_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *value = getenv("MACRUNNER_HB_PRESENT_FOLLOW_PROBE");
+        enabled = value && value[0] && value[0] != '0';
+    }
+    return enabled;
+}
 
 static inline int get_unix_exit_code( NTSTATUS status )
 {
@@ -203,6 +234,7 @@ static unsigned int get_server_context_flags( const void *context, USHORT machin
     case IMAGE_FILE_MACHINE_ARM64:
         flags = ((const ARM64_NT_CONTEXT *)context)->ContextFlags & ~CONTEXT_ARM64;
         if (flags & CONTEXT_ARM64_CONTROL) ret |= SERVER_CTX_CONTROL;
+        if (flags & CONTEXT_ARM64_X18) ret |= SERVER_CTX_TLS;
         if (flags & CONTEXT_ARM64_INTEGER) ret |= SERVER_CTX_INTEGER;
         if (flags & CONTEXT_ARM64_FLOATING_POINT) ret |= SERVER_CTX_FLOATING_POINT;
         if (flags & CONTEXT_ARM64_DEBUG_REGISTERS) ret |= SERVER_CTX_DEBUG_REGISTERS;
@@ -448,6 +480,16 @@ static NTSTATUS context_to_server( struct context_data *to, USHORT to_machine, c
         {
             to->flags |= SERVER_CTX_FLOATING_POINT;
             memcpy( to->fp.x86_64_regs.fpregs, &from->FltSave, sizeof(to->fp.x86_64_regs.fpregs) );
+            /* MacRunner 04.09.2026 — перенесено из Wine 11.14 (dlls/ntdll/unix/thread.c:447);
+             * у нас дерево 11.0, где этой строки нет.
+             *
+             * ЧТО ЧИНИТ: в AMD64_CONTEXT поле MxCsr лежит ДВАЖДЫ — сверху (смещение 0x34) и
+             * внутри FltSave (XSAVE_FORMAT). Обратное преобразование ниже (context_from_server)
+             * уже поднимает FltSave.MxCsr в верхнее поле, а прямое копировало ТОЛЬКО FltSave.
+             * Направления были несимметричны: тот, кто прочитал контекст, поправил верхний
+             * MxCsr и записал обратно, терял правку молча. MxCsr задаёт режим округления SSE
+             * и подавление денормалей, то есть теряется не признак, а арифметика гостя x86_64. */
+            ((XSAVE_FORMAT *)to->fp.x86_64_regs.fpregs)->MxCsr = from->MxCsr;
         }
         if (flags & CONTEXT_AMD64_DEBUG_REGISTERS)
         {
@@ -597,7 +639,13 @@ static NTSTATUS context_to_server( struct context_data *to, USHORT to_machine, c
         if (flags & CONTEXT_ARM64_INTEGER)
         {
             to->flags |= SERVER_CTX_INTEGER;
-            for (i = 0; i <= 28; i++) to->integer.arm64_regs.x[i] = from->X[i];
+            /* x18 ПРОПУСКАЕМ: он идёт своим признаком ниже (см. SERVER_CTX_TLS) */
+            for (i = 0; i <= 28; i++) if (i != 18) to->integer.arm64_regs.x[i] = from->X[i];
+        }
+        if (flags & CONTEXT_ARM64_X18)
+        {
+            to->flags |= SERVER_CTX_TLS;
+            to->integer.arm64_regs.x[18] = from->X[18];
         }
         if (flags & CONTEXT_ARM64_FLOATING_POINT)
         {
@@ -1018,7 +1066,13 @@ static NTSTATUS context_from_server( void *dst, const struct context_data *from,
         if ((from->flags & SERVER_CTX_INTEGER) && (to_flags & CONTEXT_ARM64_INTEGER))
         {
             to->ContextFlags |= CONTEXT_ARM64_INTEGER;
-            for (i = 0; i <= 28; i++) to->X[i] = from->integer.arm64_regs.x[i];
+            /* x18 берём только если сервер его прислал — см. SERVER_CTX_TLS */
+            for (i = 0; i <= 28; i++) if (i != 18) to->X[i] = from->integer.arm64_regs.x[i];
+        }
+        if (from->flags & SERVER_CTX_TLS)
+        {
+            to->ContextFlags |= CONTEXT_ARM64_X18;
+            to->X[18] = from->integer.arm64_regs.x[18];
         }
         if ((from->flags & SERVER_CTX_FLOATING_POINT) && (to_flags & CONTEXT_ARM64_FLOATING_POINT))
         {
@@ -1102,8 +1156,27 @@ static void contexts_from_server( CONTEXT *context, struct context_data server_c
 /***********************************************************************
  *           pthread_exit_wrapper
  */
+extern void macrunner_hb_post_run_x64_termination_observe( const char *stage,
+                                                            const char *site, int status,
+                                                            const void *caller, HANDLE target,
+                                                            BOOL self, BOOL remote,
+                                                            NTSTATUS result, BOOL result_valid );
+
 static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
 {
+    macrunner_hb_post_run_x64_termination_observe(
+        "ultimate", "pthread_exit_wrapper", status,
+        __builtin_extract_return_addr( __builtin_return_address( 0 ) ),
+        NULL, FALSE, FALSE, 0, FALSE );
+
+    if (trace_present_follow_thread_lifecycle_enabled())
+    {
+        fprintf( stderr,
+                 "macrunner-hb-present-thread-lifecycle: stage=pthread-exit pid=%d tid=%lx status=0x%x\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), status );
+        fflush( stderr );
+    }
+
     close( ntdll_get_thread_data()->alert_fd );
     close( ntdll_get_thread_data()->wait_fd[0] );
     close( ntdll_get_thread_data()->wait_fd[1] );
@@ -1123,6 +1196,37 @@ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
 }
 
 
+static BOOL macrunner_hb_event_lifecycle_probe_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *env = getenv( "MACRUNNER_HB_EVENT_LIFECYCLE_PROBE" );
+        enabled = (env && env[0] && strcmp( env, "0" )) ? 1 : 0;
+    }
+    return enabled;
+}
+
+static void macrunner_hb_event_lifecycle_thread_probe( const char *op, NTSTATUS status,
+                                                       HANDLE handle, DWORD target_tid,
+                                                       const void *start, const void *param,
+                                                       ULONG flags, LONG value, const void *caller )
+{
+    static LONG count;
+
+    if (!macrunner_hb_event_lifecycle_probe_enabled()) return;
+    if (InterlockedIncrement( &count ) > 512) return;
+
+    fprintf( stderr,
+             "macrunner-hb-event-lifecycle-thread: op=%s pid=%d tid=%04lx status=%08lx "
+             "handle=%p target_tid=%04lx start=%p param=%p flags=%08lx value=%ld caller=%p\n",
+             op, getpid(), (unsigned long)GetCurrentThreadId(), (unsigned long)status,
+             handle, (unsigned long)target_tid, start, param, (unsigned long)flags,
+             (long)value, caller );
+    fflush( stderr );
+}
+
 /***********************************************************************
  *           start_thread
  *
@@ -1133,11 +1237,39 @@ static void start_thread( TEB *teb )
     struct ntdll_thread_data *thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
     BOOL suspend;
 
+    {   /* ★★★★★★ 31.08 — СТОРОЖ НА КАЖДОМ ПОТОКЕ.
+         *
+         * Сторожевые регистры ARM — ПОТОКОВЫЕ: взведённый на одном потоке не видит записей
+         * с другого. Мы взводили его только там, где зовут NtWaitForSingleObject, и в
+         * упавшем процессе он не поймал НИ ОДНОЙ записи (звали=7, взвели=0, записей=0),
+         * хотя отказ был. Если портит другой поток, тем прибором его не увидеть в принципе.
+         * Поэтому взводим при старте КАЖДОГО потока — цена один системный вызов на поток. */
+        extern void macrunner_hb_watch_arm( const char * );
+        macrunner_hb_watch_arm( "start_thread" );
+    }
+
+#ifdef __APPLE__
+    /* MacRunner 2026-06-21 experiment: the 10ms scene-load gate is wake-to-SCHEDULE latency
+     * (__ulock_wake is prompt but the woken thread isn't run for ~10ms = default-QoS timer
+     * coalescing). Raise to USER_INTERACTIVE so woken threads schedule promptly. Env-gated. */
+    {
+        extern int pthread_set_qos_class_self_np( unsigned int, int );
+        static int mr_hiqos = -1;
+        if (mr_hiqos < 0) { const char* v = getenv("MACRUNNER_HB_HIQOS");
+            /* по ЗНАЧЕНИЮ, не по наличию: =0 обязан ВЫКЛЮЧАТЬ (23.08) */
+            mr_hiqos = (v && v[0] && v[0] != '0') ? 1 : 0; }
+        if (mr_hiqos) pthread_set_qos_class_self_np( 0x21 /*QOS_CLASS_USER_INTERACTIVE*/, 0 );
+    }
+#endif
     thread_data->syscall_table = KeServiceDescriptorTable;
     thread_data->syscall_trace = TRACE_ON(syscall);
     thread_data->pthread_id = pthread_self();
     pthread_setspecific( teb_key, teb );
     server_init_thread( thread_data->start, &suspend );
+    macrunner_hb_event_lifecycle_thread_probe( "thread-server-init", STATUS_SUCCESS, NULL,
+                                               GetCurrentThreadId(), thread_data->start,
+                                               thread_data->param, 0, suspend,
+                                               __builtin_return_address(0) );
     signal_start_thread( thread_data->start, thread_data->param, suspend, teb );
 }
 
@@ -1214,22 +1346,70 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
     struct ntdll_thread_data *thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
     WOW_TEB *wow_teb = get_wow_teb( teb );
     INITIAL_TEB stack;
+    const char *trace_stack = getenv( "MACRUNNER_HB_TRACE_STACK_INIT" );
+    BOOL trace_stack_init = trace_stack && *trace_stack && *trace_stack != '0';
     NTSTATUS status;
+
+    if (trace_stack_init)
+        fprintf( stderr, "macrunner-hb-stack-init: enter wow=%u reserve=%#lx commit=%#lx limit=%#lx kernel_stack_size=%#lx\n",
+             !!wow_teb, (unsigned long)reserve_size, (unsigned long)commit_size,
+             (unsigned long)limit, (unsigned long)kernel_stack_size );
 
     /* kernel stack */
     if ((status = virtual_alloc_thread_stack( &stack, limit_4g, 0, kernel_stack_size, kernel_stack_size, FALSE )))
         return status;
     thread_data->kernel_stack = stack.DeallocationStack;
+    if (trace_stack_init)
+        fprintf( stderr, "macrunner-hb-stack-init: kernel dealloc=%p limit=%p base=%p\n",
+             stack.DeallocationStack, stack.StackLimit, stack.StackBase );
 
     if (wow_teb)
     {
         WOW64_CPURESERVED *cpu;
+        SIZE_T wow64_stack_size = 0x40000;
         SIZE_T cpusize = sizeof(WOW64_CPURESERVED) +
             ((get_machine_context_size( main_image_info.Machine ) + 7) & ~7) + sizeof(ULONG64);
 
+#if defined(__APPLE__) && defined(__aarch64__)
+        wow64_stack_size = kernel_stack_size;
+#endif
+
         /* 64-bit stack */
-        if ((status = virtual_alloc_thread_stack( &stack, limit_4g, 0, 0x40000, 0x40000, TRUE ))) return status;
+        if ((status = virtual_alloc_thread_stack( &stack, limit_4g, 0, wow64_stack_size, wow64_stack_size, TRUE )))
+            return status;
+        /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 207: печать переведена с ERR() на stderr.
+         * Гейт MACRUNNER_HB_TRACE_STACK_INIT выставлялся, а строк не было НИ ОДНОЙ — потому что
+         * канал ошибок wine до наших журналов не доходит (урок 02.08, `err:` нет ни в одном
+         * прогоне за всю историю). Прибор существовал и был нем. */
+        if (trace_stack_init)
+            fprintf( stderr, "macrunner-hb-stack-init: wow64 host reserve=%#lx dealloc=%p limit=%p base=%p\n",
+                     (unsigned long)wow64_stack_size, stack.DeallocationStack, stack.StackLimit, stack.StackBase );
         cpu = (WOW64_CPURESERVED *)(((ULONG_PTR)stack.StackBase - cpusize) & ~15);
+        /* ★★★★★ ИТЕРАЦИЯ 71 — ПОДПИСЬ СОВПАДАЕТ: 16-битная запись МАШИННОЙ КОНСТАНТЫ.
+         *
+         * Измерено 64-70: у i386-гостя поле `WowTebOffset` (TEB64+0x180C) один раз за
+         * прогон меняется 0x2000 -> 0xAA64 и навсегда; 0xAA64 = IMAGE_FILE_MACHINE_ARM64;
+         * старшая половина LONG осталась нулём, значит запись 16-битная. Даёт это любой
+         * i386-гость достаточной длины (i386 clock за 90 с), а не установщик.
+         *
+         * `cpu->Machine` — ровно 16-битная запись машины, и адрес `cpu` вычисляется
+         * АРИФМЕТИКОЙ от вершины только что выделенного стека. Если этот стек лёг рядом
+         * с чужим TEB, запись попадает в него. Событие редкое (создание потока) — это
+         * объясняет «один раз за прогон».
+         *
+         * Печатаем адрес, значение и попадание в диапазон TEB текущего потока. Потолок 40. */
+        {
+            static unsigned mr_cpu_n;
+            TEB *mr_teb = NtCurrentTeb();
+            ULONG_PTR mr_c = (ULONG_PTR)cpu, mr_t = (ULONG_PTR)mr_teb;
+            if (mr_cpu_n++ < 40)
+                fprintf( stderr, "macrunner-cpuresv: n=%u cpu=%p машина=%04x stackbase=%p "
+                         "cpusize=%lx teb=%p в_teb=%d накрывает_180c=%d\n",
+                         mr_cpu_n, cpu, (unsigned)main_image_info.Machine, stack.StackBase,
+                         (unsigned long)cpusize, mr_teb,
+                         (int)(mr_teb && mr_c >= mr_t && mr_c < mr_t + 0x2000),
+                         (int)(mr_teb && mr_c + 2 > mr_t + 0x180c && mr_c <= mr_t + 0x180c) );
+        }
         cpu->Machine = main_image_info.Machine;
 
 #ifdef _WIN64
@@ -1244,6 +1424,11 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
         wow_teb->Tib.StackBase = PtrToUlong( stack.StackBase );
         wow_teb->Tib.StackLimit = PtrToUlong( stack.StackLimit );
         wow_teb->DeallocationStack = PtrToUlong( stack.DeallocationStack );
+        if (trace_stack_init)
+            fprintf( stderr, "macrunner-hb-stack-init: return win64 teb=%p-%p dealloc=%p wow=%#x-%#x dealloc=%#x\n",
+                     teb->Tib.StackLimit, teb->Tib.StackBase, teb->DeallocationStack,
+                     (unsigned int)wow_teb->Tib.StackLimit, (unsigned int)wow_teb->Tib.StackBase,
+                     (unsigned int)wow_teb->DeallocationStack );
         return STATUS_SUCCESS;
 #else
         wow_teb->Tib.StackBase = wow_teb->TlsSlots[WOW64_TLS_CPURESERVED] = PtrToUlong( cpu );
@@ -1251,6 +1436,14 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
         wow_teb->DeallocationStack = PtrToUlong( stack.DeallocationStack );
 #endif
     }
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (wow_teb)
+    {
+        if (reserve_size < kernel_stack_size) reserve_size = kernel_stack_size;
+        if (commit_size < kernel_stack_size) commit_size = kernel_stack_size;
+    }
+#endif
 
 #ifdef __aarch64__
     if (is_arm64ec())
@@ -1267,6 +1460,27 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
         cpu_area->EmulatorStackBase  = (ULONG_PTR)stack.StackBase;
         cpu_area->EmulatorStackLimit = (ULONG_PTR)stack.StackLimit + page_size;
         teb->ChpeV2CpuAreaInfo = cpu_area;
+
+        /* ★ ШАГ-4 (08.09.2026) — КТО И ДЛЯ КАКОГО TEB ЗАВЁЛ ОБЛАСТЬ CHPE.
+         *
+         * Стена x64 (`enter_jit`, engine/fex/Source/Windows/ARM64EC/Module.S:32-36)
+         * пишет в `[x18+0x1788]`.  Различить «x18 не тот», «поле не по тому смещению»
+         * и «этот поток сюда не заходил» можно ТОЛЬКО сверив запись с отказом, поэтому
+         * запись именуется здесь, а сверка — в unix/signal_arm64.c (macrunner-shag4-ec).
+         * Печать безусловная: гейт превратил бы прибор в лотерею (CLAUDE.md). */
+        {
+            unsigned i = macrunner_shag4_cpu_n++ & 7u;
+
+            macrunner_shag4_cpu_teb[i] = teb;
+            macrunner_shag4_cpu_area[i] = cpu_area;
+            fprintf( stderr, "macrunner-shag4-cpuarea-set: pid=%d n=%u teb=%p cpu_area=%p "
+                     "chpe_off=%#x ctx=%p stackbase=%p stacklimit=%p\n",
+                     (int)getpid(), macrunner_shag4_cpu_n, teb, cpu_area,
+                     (unsigned)FIELD_OFFSET(TEB, ChpeV2CpuAreaInfo),
+                     cpu_area->ContextAmd64,
+                     (void *)(ULONG_PTR)cpu_area->EmulatorStackBase,
+                     (void *)(ULONG_PTR)cpu_area->EmulatorStackLimit );
+        }
     }
 #endif
 
@@ -1276,6 +1490,10 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
     teb->Tib.StackBase = stack.StackBase;
     teb->Tib.StackLimit = stack.StackLimit;
     teb->DeallocationStack = stack.DeallocationStack;
+    if (trace_stack_init)
+        fprintf( stderr, "macrunner-hb-stack-init: native reserve=%#lx commit=%#lx teb=%p-%p dealloc=%p\n",
+             (unsigned long)reserve_size, (unsigned long)commit_size,
+             teb->Tib.StackLimit, teb->Tib.StackBase, teb->DeallocationStack );
     return STATUS_SUCCESS;
 }
 
@@ -1389,6 +1607,11 @@ NTSTATUS WINAPI GPT_IMPORT(NtCreateThreadEx)( HANDLE *handle, ACCESS_MASK access
             client_id.UniqueThread  = ULongToHandle( result.create_thread.tid );
             if (attr_list) status = update_attr_list( attr_list, *handle, &client_id, teb );
         }
+        macrunner_hb_event_lifecycle_thread_probe( "create-thread-remote", status,
+                                                   status ? NULL : *handle,
+                                                   status ? 0 : result.create_thread.tid,
+                                                   start, param, flags, -1,
+                                                   __builtin_return_address(0) );
         return status;
     }
 
@@ -1474,6 +1697,9 @@ done:
         return status;
     }
     if (attr_list) status = update_attr_list( attr_list, *handle, &teb->ClientId, teb );
+    macrunner_hb_event_lifecycle_thread_probe( "create-thread", status,
+                                               status ? NULL : *handle, tid, start, param,
+                                               flags, -1, __builtin_return_address(0) );
     return status;
 }
 
@@ -1498,6 +1724,19 @@ GPT_ABI_WRAPPER( NtCreateThreadEx );
  */
 void abort_thread( int status )
 {
+    macrunner_hb_post_run_x64_termination_observe(
+        "enter", "abort_thread", status,
+        __builtin_extract_return_addr( __builtin_return_address( 0 ) ),
+        NULL, FALSE, FALSE, 0, FALSE );
+
+    if (trace_present_follow_thread_lifecycle_enabled())
+    {
+        fprintf( stderr,
+                 "macrunner-hb-present-thread-lifecycle: stage=abort-thread pid=%d tid=%lx status=0x%x\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), status );
+        fflush( stderr );
+    }
+
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
     if (InterlockedDecrement( &nb_threads ) <= 0) abort_process( status );
     pthread_exit_wrapper( status );
@@ -1520,6 +1759,26 @@ static DECLSPEC_NORETURN void exit_thread( int status )
 {
     static void *prev_teb;
     TEB *teb;
+
+    macrunner_hb_post_run_x64_termination_observe(
+        "enter", "exit_thread", status,
+        __builtin_extract_return_addr( __builtin_return_address( 0 ) ),
+        NULL, FALSE, FALSE, 0, FALSE );
+
+    if (trace_present_follow_thread_lifecycle_enabled())
+    {
+        fprintf( stderr,
+                 "macrunner-hb-present-thread-lifecycle: stage=exit-thread pid=%d tid=%lx status=0x%x\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), status );
+        fflush( stderr );
+    }
+
+    if (trace_ui_thread_enabled())
+    {
+        fprintf( stderr, "macrunner-ui-input: stage=ntdll_exit_thread pid=%d tid=%lx status=0x%x\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), status );
+        fflush( stderr );
+    }
 
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
 
@@ -1544,6 +1803,13 @@ static DECLSPEC_NORETURN void exit_thread( int status )
  */
 void exit_process( int status )
 {
+    if (trace_ui_thread_enabled() || getenv("MACRUNNER_TRACE_PROCESS_EXIT"))
+    {
+        fprintf( stderr, "macrunner-process-exit: stage=exit_process pid=%d tid=%lx status=0x%x unix=0x%x\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), status, get_unix_exit_code( status ) );
+        fflush( stderr );
+    }
+
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
     process_exit_wrapper( get_unix_exit_code( status ));
 }
@@ -1648,6 +1914,84 @@ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL 
         ERR_(seh)("Unhandled exception code %x flags %x addr %p\n",
                   rec->ExceptionCode, rec->ExceptionFlags, rec->ExceptionAddress );
 
+    if (getenv("MACRUNNER_TRACE_PROCESS_EXIT") || getenv("MACRUNNER_TRACE_UI_INPUT"))
+    {
+        fprintf( stderr, "macrunner-process-exit: stage=NtRaiseException_unhandled "
+                 "pid=%d tid=%lx first=%d code=0x%x flags=0x%x addr=%p "
+                 "params=%lu info0=%p info1=%p info2=%p info3=%p context=%p\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), first_chance,
+                 (unsigned int)rec->ExceptionCode, (unsigned int)rec->ExceptionFlags,
+                 rec->ExceptionAddress, (unsigned long)rec->NumberParameters,
+                 rec->NumberParameters > 0 ? (void *)(uintptr_t)rec->ExceptionInformation[0] : NULL,
+                 rec->NumberParameters > 1 ? (void *)(uintptr_t)rec->ExceptionInformation[1] : NULL,
+                 rec->NumberParameters > 2 ? (void *)(uintptr_t)rec->ExceptionInformation[2] : NULL,
+                 rec->NumberParameters > 3 ? (void *)(uintptr_t)rec->ExceptionInformation[3] : NULL,
+                 context );
+        /* MacRunner 2026-08-03 — name the guest call site of a jump to zero.
+         *
+         * The fault that kills these runs is an execute at address 0 (code=0xc0000005 addr=0x0
+         * info0=0x8, measured on LONGLIVE1), so ExceptionAddress IS the zero and says nothing about
+         * who jumped there.  The guest side does: guest_rip is where the emulated thread stands, and
+         * the qword at guest_rsp is the return address the `call` pushed — the call site itself.
+         * The read is guarded, because a wild rsp here would turn a diagnostic into a second fault;
+         * a miss prints zero, which is still an answer, and a returned guest_rip of 0 is told apart
+         * from "not found" by the guest_rsp beside it. */
+        {
+            UINT64 guest_rsp = 0;
+            UINT64 gpr6[6] = { 0 };
+            int guest_state = 0;
+            UINT64 guest_rip = macrunner_hb_guest_pc_for_tid( GetCurrentThreadId(), &guest_rsp, &guest_state, gpr6 );
+            ULONG_PTR ret_addr = 0;
+
+            if (guest_rsp && !(guest_rsp & 7) &&
+                virtual_check_buffer_for_read( (const void *)(ULONG_PTR)guest_rsp, sizeof(ret_addr) ))
+                memcpy( &ret_addr, (const void *)(ULONG_PTR)guest_rsp, sizeof(ret_addr) );
+
+            fprintf( stderr, "macrunner-process-exit: stage=guest-context tid=%lx "
+                     "state=%d guest_rip=0x%llx guest_rsp=0x%llx retaddr=0x%llx "
+                     "rax=0x%llx rcx=0x%llx r8=0x%llx r15=0x%llx rbx=0x%llx rdx=0x%llx\n",
+                     (unsigned long)GetCurrentThreadId(), guest_state,
+                     (unsigned long long)guest_rip, (unsigned long long)guest_rsp,
+                     (unsigned long long)ret_addr,
+                     (unsigned long long)gpr6[0], (unsigned long long)gpr6[1],
+                     (unsigned long long)gpr6[2], (unsigned long long)gpr6[3],
+                     (unsigned long long)gpr6[4], (unsigned long long)gpr6[5] );
+        }
+        if (rec->ExceptionCode == 0xe06d7363 && rec->NumberParameters > 1)
+        {
+            const void *obj = (const void *)(uintptr_t)rec->ExceptionInformation[1];
+            ULONG_PTR qwords[3] = { 0 };
+            unsigned int i;
+
+            if (virtual_check_buffer_for_read( obj, sizeof(qwords) ))
+            {
+                memcpy( qwords, obj, sizeof(qwords) );
+                fprintf( stderr, "macrunner-process-exit: stage=cpp_exception_object "
+                         "obj=%p q0=%p q1=%p q2=%p\n",
+                         obj, (void *)qwords[0], (void *)qwords[1], (void *)qwords[2] );
+                for (i = 0; i < 3; i++)
+                {
+                    const char *candidate = (const char *)qwords[i];
+                    char text[161];
+                    unsigned int j;
+
+                    if (!candidate || !virtual_check_buffer_for_read( candidate, 1 )) continue;
+                    memset( text, 0, sizeof(text) );
+                    for (j = 0; j < sizeof(text) - 1; j++)
+                    {
+                        if (!virtual_check_buffer_for_read( candidate + j, 1 )) break;
+                        text[j] = candidate[j];
+                        if (!text[j]) break;
+                        if ((unsigned char)text[j] < 32 || (unsigned char)text[j] > 126) text[j] = '.';
+                    }
+                    fprintf( stderr, "macrunner-process-exit: stage=cpp_exception_text "
+                             "slot=%u ptr=%p text=\"%s\"\n", i, candidate, text );
+                }
+            }
+        }
+        fflush( stderr );
+    }
+
     NtTerminateProcess( NtCurrentProcess(), rec->ExceptionCode );
     return STATUS_SUCCESS;
 }
@@ -1691,16 +2035,21 @@ NTSTATUS WINAPI NtOpenThread( HANDLE *handle, ACCESS_MASK access,
 NTSTATUS WINAPI NtSuspendThread( HANDLE handle, ULONG *count )
 {
     unsigned int ret;
+    ULONG previous_count = ~0u;
 
     SERVER_START_REQ( suspend_thread )
     {
         req->handle = wine_server_obj_handle( handle );
         if (!(ret = wine_server_call( req )))
         {
-            if (count) *count = reply->count;
+            previous_count = reply->count;
+            if (count) *count = previous_count;
         }
     }
     SERVER_END_REQ;
+    macrunner_hb_event_lifecycle_thread_probe( "suspend-thread", ret, handle, 0, NULL, NULL,
+                                               0, ret ? -1 : previous_count,
+                                               __builtin_return_address(0) );
     return ret;
 }
 
@@ -1711,16 +2060,21 @@ NTSTATUS WINAPI NtSuspendThread( HANDLE handle, ULONG *count )
 NTSTATUS WINAPI NtResumeThread( HANDLE handle, ULONG *count )
 {
     unsigned int ret;
+    ULONG previous_count = ~0u;
 
     SERVER_START_REQ( resume_thread )
     {
         req->handle = wine_server_obj_handle( handle );
         if (!(ret = wine_server_call( req )))
         {
-            if (count) *count = reply->count;
+            previous_count = reply->count;
+            if (count) *count = previous_count;
         }
     }
     SERVER_END_REQ;
+    macrunner_hb_event_lifecycle_thread_probe( "resume-thread", ret, handle, 0, NULL, NULL,
+                                               0, ret ? -1 : previous_count,
+                                               __builtin_return_address(0) );
     return ret;
 }
 
@@ -1750,8 +2104,30 @@ NTSTATUS WINAPI NtAlertThread( HANDLE handle )
  */
 NTSTATUS WINAPI NtTerminateThread( HANDLE handle, LONG exit_code )
 {
+    const void *caller = __builtin_extract_return_addr( __builtin_return_address( 0 ) );
     unsigned int ret;
     BOOL self;
+    BOOL self_hint = handle == NtCurrentThread();
+
+    macrunner_hb_post_run_x64_termination_observe(
+        "request-before-server", "NtTerminateThread", exit_code, caller, handle,
+        self_hint, !self_hint, 0, FALSE );
+
+    if (trace_present_follow_thread_lifecycle_enabled())
+    {
+        fprintf( stderr,
+                 "macrunner-hb-present-thread-lifecycle: stage=terminate-enter pid=%d tid=%lx handle=%p status=0x%x\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), handle, (unsigned int)exit_code );
+        fflush( stderr );
+    }
+
+    if (trace_ui_thread_enabled())
+    {
+        fprintf( stderr,
+                 "macrunner-ui-input: stage=NtTerminateThread_enter pid=%d tid=%lx handle=%p exit_code=0x%x\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), handle, exit_code );
+        fflush( stderr );
+    }
 
     SERVER_START_REQ( terminate_thread )
     {
@@ -1761,6 +2137,27 @@ NTSTATUS WINAPI NtTerminateThread( HANDLE handle, LONG exit_code )
         self = !ret && reply->self;
     }
     SERVER_END_REQ;
+
+    macrunner_hb_post_run_x64_termination_observe(
+        "result-after-server", "NtTerminateThread", exit_code, caller, handle,
+        self, !self, ret, TRUE );
+
+    if (trace_present_follow_thread_lifecycle_enabled())
+    {
+        fprintf( stderr,
+                 "macrunner-hb-present-thread-lifecycle: stage=terminate-result pid=%d tid=%lx handle=%p status=0x%x ret=0x%x self=%u\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), handle, (unsigned int)exit_code,
+                 ret, self );
+        fflush( stderr );
+    }
+
+    if (trace_ui_thread_enabled())
+    {
+        fprintf( stderr,
+                 "macrunner-ui-input: stage=NtTerminateThread_after_server pid=%d tid=%lx ret=0x%x self=%d\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), ret, self );
+        fflush( stderr );
+    }
 
     if (self)
     {
@@ -1920,8 +2317,25 @@ NTSTATUS get_thread_context( HANDLE handle, void *context, BOOL *self, USHORT ma
  */
 void ntdll_set_exception_jmp_buf( jmp_buf jmp )
 {
-    assert( !jmp || !ntdll_get_thread_data()->jmp_buf );
-    ntdll_get_thread_data()->jmp_buf = jmp;
+    struct ntdll_thread_data *data = ntdll_get_thread_data();
+
+    if (jmp)
+    {
+        if (data->jmp_buf)
+        {
+            if (data->jmp_buf_depth < ARRAY_SIZE(data->jmp_buf_stack))
+                data->jmp_buf_stack[data->jmp_buf_depth++] = data->jmp_buf;
+            else
+                WARN( "exception jmp_buf stack overflow, replacing nested handler\n" );
+        }
+        data->jmp_buf = jmp;
+    }
+    else if (data->jmp_buf_depth)
+    {
+        data->jmp_buf = data->jmp_buf_stack[--data->jmp_buf_depth];
+        data->jmp_buf_stack[data->jmp_buf_depth] = NULL;
+    }
+    else data->jmp_buf = NULL;
 }
 
 

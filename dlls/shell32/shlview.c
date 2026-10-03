@@ -37,6 +37,7 @@
  */
 
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -379,7 +380,7 @@ static BOOL ShellView_CreateList (IShellViewImpl * This)
 					shell32_hInstance,
 					NULL);
 
-	if(!This->hWndList)
+		if(!This->hWndList)
 	  return FALSE;
 
         This->ListViewSortInfo.bIsAscending = TRUE;
@@ -1387,7 +1388,7 @@ static LRESULT ShellView_OnNotify(IShellViewImpl * This, UINT CtlID, LPNMHDR lpn
 	    break;
 
 	  case LVN_GETDISPINFOA:
-          case LVN_GETDISPINFOW:
+	  case LVN_GETDISPINFOW:
 	    TRACE("-- LVN_GETDISPINFO %p\n",This);
 	    pidl = (LPITEMIDLIST)lpdi->item.lParam;
 

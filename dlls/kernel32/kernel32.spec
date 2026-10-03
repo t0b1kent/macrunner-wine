@@ -1280,7 +1280,7 @@
 @ stdcall -private -import RegUnLoadKeyA(long str)
 @ stdcall -private -import RegUnLoadKeyW(long wstr)
 @ stdcall RegisterApplicationRecoveryCallback(ptr ptr long long)
-@ stdcall RegisterApplicationRestart(wstr long)
+@ stdcall -import RegisterApplicationRestart(wstr long)
 @ stub RegisterConsoleIME
 @ stub RegisterConsoleOS2
 @ stub RegisterConsoleVDM
@@ -1584,8 +1584,8 @@
 @ stdcall -import UnlockFileEx(long long long long ptr)
 @ stdcall -import UnmapViewOfFile(ptr)
 @ stdcall -import UnmapViewOfFileEx(ptr long)
-# @ stub UnregisterApplicationRecoveryCallback
-@ stdcall UnregisterApplicationRestart()
+@ stdcall UnregisterApplicationRecoveryCallback()
+@ stdcall -import UnregisterApplicationRestart()
 # @ stub UnregisterConsoleIME
 @ stdcall UnregisterWait(long)
 @ stdcall -import UnregisterWaitEx(long long)

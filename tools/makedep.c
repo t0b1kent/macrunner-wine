@@ -2213,7 +2213,11 @@ static struct strarray add_unix_libraries( const struct makefile *make, struct s
             strarray_add( deps, lib );
             strarray_add( &ret, lib );
         }
-        else strarray_add( &ret, file );
+        else
+        {
+            strarray_add( &ret, file );
+            if (strendswith( file, ".a" ) || strendswith( file, ".dylib" )) strarray_add( deps, file );
+        }
     }
 
     strarray_addall( &ret, libs );
@@ -3339,6 +3343,7 @@ static void output_source_one_arch( struct makefile *make, struct incl_file *sou
     const char *obj_name, *var_cc, *var_cflags;
     struct compile_command *cmd;
     struct strarray cflags = empty_strarray;
+    unsigned int i;
 
     if (make->disabled[arch] && !(source->file->flags & FLAG_C_IMPLIB)) return;
 
@@ -3385,6 +3390,22 @@ static void output_source_one_arch( struct makefile *make, struct incl_file *sou
         var_cc     = arch_make_variable( "CC", arch );
         var_cflags = arch_make_variable( "CFLAGS", arch );
         strarray_addall( &cflags, make->extlib ? extra_cflags_extlib[arch] : extra_cflags[arch] );
+    }
+
+    /* LLVM-mingw i386 currently emits unresolved compiler-SEH table labels for
+     * Wine __TRY/__EXCEPT sites when USE_COMPILER_EXCEPTIONS is enabled
+     * (seen in comctl32 TREEVIEW_GetItemT, comctl32 LISTBOX_GetText, and
+     * crypt32 CRYPT_ReadSerializedElement). Keep the workaround scoped to
+     * generated i386 objects; other architectures keep compiler exceptions. */
+    if (arch && !strcmp( archs.str[arch], "i386" ))
+    {
+        for (i = 0; i < cflags.count; i++)
+        {
+            if (strcmp( cflags.str[i], "-DUSE_COMPILER_EXCEPTIONS" )) continue;
+            memmove( cflags.str + i, cflags.str + i + 1, (cflags.count - i - 1) * sizeof(cflags.str[0]) );
+            cflags.count--;
+            break;
+        }
     }
 
     if (!arch)

@@ -27,6 +27,8 @@
 #include <unistd.h>
 #include <poll.h>
 #include <limits.h>
+#include <pthread.h>
+#include <time.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -58,6 +60,60 @@ enum message_kind { SEND_MESSAGE, POST_MESSAGE };
 
 /* list of processes registered for rawinput in the input desktop */
 static struct list rawinput_processes = LIST_INIT(rawinput_processes);
+
+static BOOL return_route_observer_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *value = getenv( "MACRUNNER_HB_RETURN_ROUTE_OBSERVER" );
+        enabled = value && value[0] && value[0] != '0';
+    }
+    return enabled;
+}
+
+static unsigned int return_route_observer_limit(void)
+{
+    static unsigned int limit;
+
+    if (!limit)
+    {
+        const char *value = getenv( "MACRUNNER_HB_RETURN_ROUTE_OBSERVER_MAX" );
+        char *end;
+        unsigned long parsed = value ? strtoul( value, &end, 10 ) : 0;
+
+        limit = value && end != value && !*end && parsed && parsed <= 256 ? parsed : 64;
+    }
+    return limit;
+}
+
+static void return_route_observe_server( const char *stage, const struct thread *thread,
+                                         user_handle_t hwnd, const RAWKEYBOARD *keyboard,
+                                         unsigned int event_time )
+{
+    static unsigned int records;
+    struct timespec now;
+    uint64_t native_tid = 0;
+    unsigned int ordinal;
+
+    if (!return_route_observer_enabled() || keyboard->VKey != VK_RETURN) return;
+    ordinal = __atomic_add_fetch( &records, 1, __ATOMIC_RELAXED );
+    if (ordinal > return_route_observer_limit()) return;
+    pthread_threadid_np( NULL, &native_tid );
+    clock_gettime( CLOCK_MONOTONIC, &now );
+    fprintf( stderr,
+             "macrunner-return-route: stage=%s seq=%u pid=%d native_tid=%llu target_pid=%04x "
+             "target_wine_tid=%04x hwnd=%08x keycode=0x%x direction=%s flags=0x%x "
+             "event_time=%u monotonic_ns=%llu message=0x%x\n",
+             stage, ordinal, getpid(), (unsigned long long)native_tid,
+             thread ? thread->process->id : 0, thread ? thread->id : 0, hwnd,
+             keyboard->VKey, keyboard->Flags & RI_KEY_BREAK ? "up" : "down",
+             keyboard->Flags, event_time,
+             (unsigned long long)now.tv_sec * 1000000000ull + now.tv_nsec,
+             keyboard->Message );
+    fflush( stderr );
+}
 
 struct message_result
 {
@@ -1949,6 +2005,9 @@ static void queue_hardware_message( struct desktop *desktop, struct message *msg
         msg->unique_id = 0;  /* will be set once we return it to the app */
         list_add_tail( &input->msg_list, &msg->entry );
         set_queue_bits( thread->queue, msg_bit );
+        if (msg->msg == WM_INPUT && msg_data->rawinput.type == RIM_TYPEKEYBOARD)
+            return_route_observe_server( "server-raw-enqueue", thread, win,
+                                         (const RAWKEYBOARD *)(msg_data + 1), msg->time );
     }
     release_object( thread );
 }

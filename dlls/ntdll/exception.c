@@ -47,6 +47,8 @@ typedef struct
 
 static struct list vectored_exception_handlers = LIST_INIT(vectored_exception_handlers);
 static struct list vectored_continue_handlers  = LIST_INIT(vectored_continue_handlers);
+static LONG vectored_exception_handler_count;
+static LONG vectored_continue_handler_count;
 
 static RTL_CRITICAL_SECTION vectored_handlers_section;
 static RTL_CRITICAL_SECTION_DEBUG critsect_debug =
@@ -58,6 +60,224 @@ static RTL_CRITICAL_SECTION_DEBUG critsect_debug =
 static RTL_CRITICAL_SECTION vectored_handlers_section = { &critsect_debug, -1, 0, 0, 0, 0 };
 
 static PRTL_EXCEPTION_FILTER unhandled_exception_filter;
+
+struct macrunner_hb_exit_origin_exception
+{
+    EXCEPTION_RECORD record;
+    ULONG_PTR context_pc;
+    ULONG_PTR context_sp;
+    LONG vectored_disposition;
+    NTSTATUS seh_status;
+    const char *dispatch_stage;
+    ULONG sequence;
+    ULONG vectored_handlers;
+    ULONG seh_handlers;
+    ULONG seh_continue_execution;
+    ULONG seh_continue_search;
+    ULONG seh_nested;
+    ULONG seh_collided;
+    ULONG seh_invalid;
+    BOOL valid;
+};
+
+static struct macrunner_hb_exit_origin_exception macrunner_hb_exit_origin_exception;
+static LONG macrunner_hb_exit_origin_lines;
+
+BOOL macrunner_hb_exit_origin_probe_enabled(void)
+{
+    static const WCHAR nameW[] =
+        {'M','A','C','R','U','N','N','E','R','_','H','B','_','E','X','I','T','_',
+         'O','R','I','G','I','N','_','P','R','O','B','E',0};
+    static int enabled = -1;
+    WCHAR value[8];
+    UNICODE_STRING name, val;
+
+    if (enabled >= 0) return enabled;
+    RtlInitUnicodeString( &name, nameW );
+    val.Buffer = value;
+    val.Length = 0;
+    val.MaximumLength = sizeof(value);
+    enabled = RtlQueryEnvironmentVariable_U( NULL, &name, &val ) == STATUS_SUCCESS &&
+              value[0] && value[0] != '0';
+    return enabled;
+}
+
+static BOOL macrunner_hb_exit_origin_is_current(void)
+{
+    return macrunner_hb_exit_origin_probe_enabled() && GetCurrentThreadId() == 0x3c;
+}
+
+static BOOL macrunner_hb_exit_origin_take_line(void)
+{
+    return InterlockedIncrement( &macrunner_hb_exit_origin_lines ) <= 256;
+}
+
+static ULONG_PTR macrunner_hb_exit_origin_context_pc( const CONTEXT *context )
+{
+#if defined(__x86_64__) || defined(_M_AMD64)
+    return context->Rip;
+#elif defined(__arm64ec__) || defined(__aarch64__) || defined(_M_ARM64)
+    return context->Pc;
+#elif defined(__i386__)
+    return context->Eip;
+#else
+    return 0;
+#endif
+}
+
+static ULONG_PTR macrunner_hb_exit_origin_context_sp( const CONTEXT *context )
+{
+#if defined(__x86_64__) || defined(_M_AMD64)
+    return context->Rsp;
+#elif defined(__arm64ec__) || defined(__aarch64__) || defined(_M_ARM64)
+    return context->Sp;
+#elif defined(__i386__)
+    return context->Esp;
+#else
+    return 0;
+#endif
+}
+
+static const char *macrunner_hb_exit_origin_av_operation( const EXCEPTION_RECORD *rec )
+{
+    if (rec->ExceptionCode != STATUS_ACCESS_VIOLATION || !rec->NumberParameters) return "not-av";
+    switch (rec->ExceptionInformation[0])
+    {
+    case 0: return "read";
+    case 1: return "write";
+    case 8: return "execute";
+    default: return "unknown";
+    }
+}
+
+static void macrunner_hb_exit_origin_exception_begin( EXCEPTION_RECORD *rec, CONTEXT *context )
+{
+    struct macrunner_hb_exit_origin_exception *state = &macrunner_hb_exit_origin_exception;
+    ULONG sequence;
+
+    if (!macrunner_hb_exit_origin_is_current()) return;
+    sequence = state->sequence + 1;
+    RtlZeroMemory( state, sizeof(*state) );
+    state->sequence = sequence;
+    state->record = *rec;
+    state->context_pc = macrunner_hb_exit_origin_context_pc( context );
+    state->context_sp = macrunner_hb_exit_origin_context_sp( context );
+    state->vectored_disposition = EXCEPTION_CONTINUE_SEARCH;
+    state->seh_status = STATUS_UNHANDLED_EXCEPTION;
+    state->dispatch_stage = "entered";
+    state->valid = TRUE;
+    if (!macrunner_hb_exit_origin_take_line()) return;
+    MESSAGE( "macrunner-hb-exit-origin: phase=exception-enter sequence=%lu guest_tid=%04lx "
+             "code=0x%08lx flags=0x%08lx address=%p context_pc=%p context_sp=%p "
+             "parameters=%lu operation=%s fault_address=%p info2=%p\n",
+             state->sequence, GetCurrentThreadId(), rec->ExceptionCode, rec->ExceptionFlags,
+             rec->ExceptionAddress, (void *)state->context_pc, (void *)state->context_sp,
+             rec->NumberParameters, macrunner_hb_exit_origin_av_operation( rec ),
+             rec->NumberParameters > 1 ? (void *)rec->ExceptionInformation[1] : NULL,
+             rec->NumberParameters > 2 ? (void *)rec->ExceptionInformation[2] : NULL );
+}
+
+static void macrunner_hb_exit_origin_vectored_observe( void *handler, LONG disposition )
+{
+    struct macrunner_hb_exit_origin_exception *state = &macrunner_hb_exit_origin_exception;
+
+    if (!macrunner_hb_exit_origin_is_current() || !state->valid) return;
+    state->vectored_handlers++;
+    state->vectored_disposition = disposition;
+    if (!macrunner_hb_exit_origin_take_line()) return;
+    MESSAGE( "macrunner-hb-exit-origin: phase=vectored-handler sequence=%lu index=%lu "
+             "handler=%p disposition=%ld\n", state->sequence, state->vectored_handlers,
+             handler, disposition );
+}
+
+void macrunner_hb_exit_origin_seh_handler_observe( const char *kind, const void *handler,
+                                                    ULONG_PTR control_pc,
+                                                    ULONG_PTR establisher_frame,
+                                                    DWORD disposition )
+{
+    struct macrunner_hb_exit_origin_exception *state = &macrunner_hb_exit_origin_exception;
+
+    if (!macrunner_hb_exit_origin_is_current() || !state->valid) return;
+    state->seh_handlers++;
+    switch (disposition)
+    {
+    case ExceptionContinueExecution: state->seh_continue_execution++; break;
+    case ExceptionContinueSearch: state->seh_continue_search++; break;
+    case ExceptionNestedException: state->seh_nested++; break;
+    case ExceptionCollidedUnwind: state->seh_collided++; break;
+    default: state->seh_invalid++; break;
+    }
+    if (!macrunner_hb_exit_origin_take_line()) return;
+    MESSAGE( "macrunner-hb-exit-origin: phase=seh-handler sequence=%lu index=%lu kind=%s "
+             "handler=%p control_pc=%p establisher=%p disposition=%lu\n",
+             state->sequence, state->seh_handlers, kind ? kind : "unknown", handler,
+             (void *)control_pc, (void *)establisher_frame, disposition );
+}
+
+static void macrunner_hb_exit_origin_dispatch_summary( const char *stage, LONG vectored,
+                                                       NTSTATUS seh_status )
+{
+    struct macrunner_hb_exit_origin_exception *state = &macrunner_hb_exit_origin_exception;
+
+    if (!macrunner_hb_exit_origin_is_current() || !state->valid) return;
+    state->dispatch_stage = stage;
+    state->vectored_disposition = vectored;
+    state->seh_status = seh_status;
+    if (!macrunner_hb_exit_origin_take_line()) return;
+    MESSAGE( "macrunner-hb-exit-origin: phase=dispatch-summary sequence=%lu stage=%s "
+             "vectored_handlers=%lu vectored_disposition=%ld seh_status=0x%08lx "
+             "seh_handlers=%lu continue=%lu search=%lu nested=%lu collided=%lu invalid=%lu\n",
+             state->sequence, stage, state->vectored_handlers, vectored, seh_status,
+             state->seh_handlers, state->seh_continue_execution, state->seh_continue_search,
+             state->seh_nested, state->seh_collided, state->seh_invalid );
+}
+
+void macrunner_hb_exit_origin_probe_rtl_exit( ULONG status, const void *caller, ULONG last )
+{
+    struct macrunner_hb_exit_origin_exception *state = &macrunner_hb_exit_origin_exception;
+    LDR_DATA_TABLE_ENTRY *module = NULL;
+    ULONG_PTR module_rva = 0;
+
+    if (!macrunner_hb_exit_origin_is_current() ||
+        !macrunner_hb_exit_origin_take_line()) return;
+    if (!LdrFindEntryForAddress( caller, &module ) && module)
+        module_rva = (ULONG_PTR)caller - (ULONG_PTR)module->DllBase;
+    MESSAGE( "macrunner-hb-exit-origin: phase=rtl-exit guest_tid=%04lx status=0x%08lx "
+             "last=%lu caller=%p caller_module=%p caller_rva=0x%Ix caller_name=%s "
+             "record_valid=%u sequence=%lu dispatch_stage=%s code=0x%08lx flags=0x%08lx "
+             "exception_address=%p context_pc=%p context_sp=%p operation=%s fault_address=%p "
+             "vectored_handlers=%lu vectored_disposition=%ld seh_status=0x%08lx "
+             "seh_handlers=%lu continue=%lu search=%lu nested=%lu collided=%lu invalid=%lu\n",
+             GetCurrentThreadId(), status, last, caller, module ? module->DllBase : NULL,
+             module_rva, module ? debugstr_us( &module->BaseDllName ) : "unknown",
+             state->valid, state->sequence, state->dispatch_stage ? state->dispatch_stage : "none",
+             state->valid ? state->record.ExceptionCode : 0,
+             state->valid ? state->record.ExceptionFlags : 0,
+             state->valid ? state->record.ExceptionAddress : NULL,
+             (void *)state->context_pc, (void *)state->context_sp,
+             state->valid ? macrunner_hb_exit_origin_av_operation( &state->record ) : "none",
+             state->valid && state->record.NumberParameters > 1 ?
+                 (void *)state->record.ExceptionInformation[1] : NULL,
+             state->vectored_handlers, state->vectored_disposition, state->seh_status,
+             state->seh_handlers, state->seh_continue_execution, state->seh_continue_search,
+             state->seh_nested, state->seh_collided, state->seh_invalid );
+}
+
+static BOOL enter_vectored_handlers_section(void)
+{
+    LARGE_INTEGER delay;
+    unsigned int retry;
+
+    for (retry = 0; retry < 20; retry++)
+    {
+        if (RtlTryEnterCriticalSection( &vectored_handlers_section ))
+            return TRUE;
+        delay.QuadPart = -100000; /* 10 ms */
+        NtDelayExecution( FALSE, &delay );
+    }
+    WARN( "vectored_handlers_section wait timed out after 200 ms\n" );
+    return FALSE;
+}
 
 static const char *debugstr_exception_code( DWORD code )
 {
@@ -99,35 +319,44 @@ static const char *debugstr_exception_code( DWORD code )
 }
 
 
-static VECTORED_HANDLER *add_vectored_handler( struct list *handler_list, ULONG first,
-                                               PVECTORED_EXCEPTION_HANDLER func )
+static VECTORED_HANDLER *add_vectored_handler( struct list *handler_list, LONG *handler_count,
+                                               ULONG first, PVECTORED_EXCEPTION_HANDLER func )
 {
     VECTORED_HANDLER *handler = RtlAllocateHeap( GetProcessHeap(), 0, sizeof(*handler) );
     if (handler)
     {
         handler->func = RtlEncodePointer( func );
         handler->count = 1;
-        RtlEnterCriticalSection( &vectored_handlers_section );
+        if (!enter_vectored_handlers_section())
+        {
+            RtlFreeHeap( GetProcessHeap(), 0, handler );
+            return NULL;
+        }
         if (first) list_add_head( handler_list, &handler->entry );
         else list_add_tail( handler_list, &handler->entry );
+        InterlockedIncrement( handler_count );
         RtlLeaveCriticalSection( &vectored_handlers_section );
     }
     return handler;
 }
 
 
-static ULONG remove_vectored_handler( struct list *handler_list, VECTORED_HANDLER *handler )
+static ULONG remove_vectored_handler( struct list *handler_list, LONG *handler_count, VECTORED_HANDLER *handler )
 {
     struct list *ptr;
     ULONG ret = FALSE;
 
-    RtlEnterCriticalSection( &vectored_handlers_section );
+    if (!enter_vectored_handlers_section()) return FALSE;
     LIST_FOR_EACH( ptr, handler_list )
     {
         VECTORED_HANDLER *curr_handler = LIST_ENTRY( ptr, VECTORED_HANDLER, entry );
         if (curr_handler == handler)
         {
-            if (!--curr_handler->count) list_remove( ptr );
+            if (!--curr_handler->count)
+            {
+                list_remove( ptr );
+                InterlockedDecrement( handler_count );
+            }
             else handler = NULL;  /* don't free it yet */
             ret = TRUE;
             break;
@@ -155,7 +384,11 @@ static LONG call_vectored_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
     except_ptrs.ExceptionRecord = rec;
     except_ptrs.ContextRecord = context;
 
-    RtlEnterCriticalSection( &vectored_handlers_section );
+    /* Fast path for the common case: no vectored handlers registered. */
+    if (!InterlockedCompareExchange( &vectored_exception_handler_count, 0, 0 ))
+        return ret;
+
+    if (!enter_vectored_handlers_section()) return ret;
     ptr = list_head( &vectored_exception_handlers );
     while (ptr)
     {
@@ -170,8 +403,9 @@ static LONG call_vectored_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
                func, rec->ExceptionCode, rec->ExceptionFlags );
         ret = func( &except_ptrs );
         TRACE( "handler at %p returned %lx\n", func, ret );
+        macrunner_hb_exit_origin_vectored_observe( func, ret );
 
-        RtlEnterCriticalSection( &vectored_handlers_section );
+        if (!enter_vectored_handlers_section()) return ret;
         ptr = list_next( &vectored_exception_handlers, ptr );
         if (!--handler->count)  /* removed during execution */
         {
@@ -192,7 +426,10 @@ static LONG call_vectored_handlers( EXCEPTION_RECORD *rec, CONTEXT *context )
 NTSTATUS WINAPI dispatch_exception( EXCEPTION_RECORD *rec, CONTEXT *context )
 {
     NTSTATUS status;
+    LONG vectored_disposition;
     DWORD i;
+
+    macrunner_hb_exit_origin_exception_begin( rec, context );
 
     switch (rec->ExceptionCode)
     {
@@ -246,13 +483,227 @@ NTSTATUS WINAPI dispatch_exception( EXCEPTION_RECORD *rec, CONTEXT *context )
         TRACE( " info[%ld]=%p\n", i, (void *)rec->ExceptionInformation[i] );
     TRACE_CONTEXT( context );
 
-    if (call_vectored_handlers( rec, context ) == EXCEPTION_CONTINUE_EXECUTION)
-        NtContinue( context, FALSE );
+    {
+        static unsigned int first_chance_count;
+        if (first_chance_count++ < 48)
+            MESSAGE( "macrunner-hb-first-chance: code=%lx flags=%lx addr=%p info0=%Ix info1=%Ix\n",
+                 rec->ExceptionCode, rec->ExceptionFlags, rec->ExceptionAddress,
+                 rec->NumberParameters > 0 ? (ULONG_PTR)rec->ExceptionInformation[0] : 0,
+                 rec->NumberParameters > 1 ? (ULONG_PTR)rec->ExceptionInformation[1] : 0 );
+        /* ★★★★★★ MacRunner 2026-08-31 — КОНТЕКСТ, ПОКА x30 ЕЩЁ ЦЕЛ.
+         *
+         * Измерено: сигнал приходит, когда поток УЖЕ на негодном адресе (pc прерванного
+         * равен адресу отказа) — значит переход случился РАНЬШЕ, и запись доставки ни
+         * при чём, эта ветка закрыта. Первичное исключение — штатное 0x6ba (RPC не
+         * отвечает), возбуждается программно и проходит здесь. Печатаем pc/sp/lr именно
+         * в этот момент: сравнение с моментом отказа покажет, между какими двумя точками
+         * адрес возврата перестал быть кодом. */
+#ifdef __aarch64__
+        if (context)
+            MESSAGE( "macrunner-hb-first-chance-контекст: code=%lx pc=%p sp=%p lr=%p x19=%p x20=%p\n",
+                 rec->ExceptionCode, (void *)(ULONG_PTR)context->Pc,
+                 (void *)(ULONG_PTR)context->Sp, (void *)(ULONG_PTR)context->Lr,
+                 (void *)(ULONG_PTR)context->X19, (void *)(ULONG_PTR)context->X20 );
+#endif
+    }
 
-    if ((status = call_seh_handlers( rec, context )) == STATUS_SUCCESS)
-        NtContinue( context, FALSE );
+    /* MacRunner 2026-08-10, лейн ЛЕСТНИЦА: стена ступени 1 — c000001d по ХОЗЯЙСКОМУ адресу,
+     * не принадлежащему ни одному образу (image=0). «Нелегальная команда» без самой команды
+     * ничего не говорит, поэтому печатаем ЧЕТЫРЕ слова ARM64 по адресу отказа. Чтение через
+     * NtReadVirtualMemory, а не разыменованием: адрес может быть невалиден, и падать в
+     * обработчике исключений нельзя. Только для c000001d, первые восемь раз.
+     * Печать через MESSAGE: на PE-стороне ntdll нет stdio (fprintf не линкуется —
+     * ld.lld: undefined symbol __acrt_iob_func), а MESSAGE идёт в stderr безусловно. */
+    if (rec->ExceptionCode == STATUS_ILLEGAL_INSTRUCTION)
+    {
+        static unsigned int illegal_count;
+        if (illegal_count++ < 8)
+        {
+            ULONG words[4] = { 0 };
+            SIZE_T got = 0;
+            NTSTATUS st = NtReadVirtualMemory( GetCurrentProcess(), rec->ExceptionAddress,
+                                               words, sizeof(words), &got );
+            /* ВНИМАНИЕ: %Iu тут печатал мусор в поле адреса (сверено с соседней строкой
+             * dispatch_exception, где адрес верный). Ширины приводим руками. */
+            MESSAGE( "macrunner-hb-illegal-host-insn: n=%u addr=%p status=%08lx got=%lu "
+                     "w0=%08lx w1=%08lx w2=%08lx w3=%08lx\n",
+                     illegal_count, rec->ExceptionAddress, (ULONG)st, (unsigned long)got,
+                     (unsigned long)words[0], (unsigned long)words[1],
+                     (unsigned long)words[2], (unsigned long)words[3] );
 
-    if (status != STATUS_UNHANDLED_EXCEPTION) RtlRaiseStatus( status );
+            /* ★★★★★ ИТЕРАЦИЯ 158, лейн УСТАНОВЩИКИ — КТО СЮДА ПЕРЕШЁЛ.
+             *
+             * Пять инструментированных путей вызова на C дали ноль срабатываний
+             * (итерация 157), а кодогенератор в наших прогонах никуда по вычисленной
+             * цели не переходит: единственный такой переход — попадание в инлайн-кеш,
+             * а его гейт `MACRUNNER_HB_INDIRECT_IC` по умолчанию 0
+             * (`hb_arm64_codegen.c:2136`). Значит переход делает среда выполнения,
+             * и назвать её можно ровно одним числом — адресом возврата.
+             *
+             * Раскрутка после отказа здесь врёт (итерация 156: в цепочке оказался
+             * `__wine_dbg_output`, который эту цель звать не может), поэтому берём НЕ
+             * раскрутку, а регистры самого прерванного состояния: x30 — кто позвал,
+             * x16/x17 — обычные регистры косвенного перехода. Печать в ту же скобку,
+             * тот же потолок 8, нового гейта нет.
+             *
+             * Доступ через `context->X[n]`, а не по именам полей: union в winnt.h
+             * безымянный, и сборка по именам не прошла. Ограждение по
+             * `__aarch64__ && !__arm64ec__` — в сборке ARM64EC этот же файл собирается
+             * с AMD64-видом CONTEXT, где регистров X нет вовсе (поймано сборкой). */
+#if defined(__aarch64__) && !defined(__arm64ec__)
+            if (context)
+                MESSAGE( "macrunner-hb-illegal-host-who: n=%u lr=%p x16=%p x17=%p "
+                         "x8=%p x9=%p sp=%p pc=%p\n",
+                         illegal_count,
+                         (void *)(ULONG_PTR)context->X[30],
+                         (void *)(ULONG_PTR)context->X[16],
+                         (void *)(ULONG_PTR)context->X[17],
+                         (void *)(ULONG_PTR)context->X[8],
+                         (void *)(ULONG_PTR)context->X[9],
+                         (void *)(ULONG_PTR)context->Sp,
+                         (void *)(ULONG_PTR)context->Pc );
+            /* Итерация 159: банк x19-x23 выпущенного кода. `emit_blr(buf, 23)` берёт цель
+             * из x23 (`hb_arm64_codegen.c:8766,8787`), x19 — указатель контекста гостя,
+             * x20/x21/x22 — временные. Без x23 итерация 158 смогла сказать лишь «переход
+             * из арены JIT», но не какой именно. */
+            if (context)
+                MESSAGE( "macrunner-hb-illegal-host-bank: n=%u x19=%p x20=%p x21=%p "
+                         "x22=%p x23=%p x0=%p x1=%p x2=%p\n",
+                         illegal_count,
+                         (void *)(ULONG_PTR)context->X[19],
+                         (void *)(ULONG_PTR)context->X[20],
+                         (void *)(ULONG_PTR)context->X[21],
+                         (void *)(ULONG_PTR)context->X[22],
+                         (void *)(ULONG_PTR)context->X[23],
+                         (void *)(ULONG_PTR)context->X[0],
+                         (void *)(ULONG_PTR)context->X[1],
+                         (void *)(ULONG_PTR)context->X[2] );
+
+            /* ★★★★★ ИТЕРАЦИЯ 160 — ЧЬЯ ОБЛАСТЬ У АДРЕСА ВОЗВРАТА.
+             *
+             * Итерация 159 сузила: `lr` лежит в полосе ~4,2 ГБ, не принадлежит ни одному
+             * из 326 модулей карты `+loaddll`, не совпадает ни с ареной JIT (блоки прогона
+             * на ~43 ГБ), ни с областью переходников импорта (её база 0x6f0000000000).
+             * Смещение в странице во всех четырёх прогонах одно — 0x290. Перечислять
+             * кандидатов дальше бессмысленно: спрашиваем ядро.
+             *
+             * Рядом уже есть такой зонд для `pc` (`macrunner-hb-unsafe-vmprobe`), но он
+             * стоит в пути размотки и про `lr` не знает. Здесь тот же вопрос про адрес
+             * возврата, тем же способом. Нового гейта нет, потолок общий (первые 8). */
+            if (context)
+            {
+                MEMORY_BASIC_INFORMATION mbi;
+                SIZE_T len = 0;
+                void *lr = (void *)(ULONG_PTR)context->X[30];
+                NTSTATUS qs = NtQueryVirtualMemory( GetCurrentProcess(), lr,
+                                                    MemoryBasicInformation, &mbi, sizeof(mbi), &len );
+
+                if (!qs)
+                    MESSAGE( "macrunner-hb-illegal-host-lrmem: n=%u lr=%p alloc_base=%p base=%p "
+                             "size=%p state=%08lx protect=%08lx alloc_prot=%08lx type=%08lx\n",
+                             illegal_count, lr, mbi.AllocationBase, mbi.BaseAddress,
+                             (void *)mbi.RegionSize, (ULONG)mbi.State, (ULONG)mbi.Protect,
+                             (ULONG)mbi.AllocationProtect, (ULONG)mbi.Type );
+                else
+                    MESSAGE( "macrunner-hb-illegal-host-lrmem: n=%u lr=%p запрос отказал status=%08lx\n",
+                             illegal_count, lr, (ULONG)qs );
+            }
+#endif
+
+            /* MacRunner 2026-08-10, лейн ЛЕСТНИЦА: ИМЯ виновной хозяйской библиотеки.
+             * Wine эту память не учитывает (unsafe-vmprobe даёт MEM_FREE), поэтому ни
+             * образа, ни символа у нас нет. Но заголовок Mach-O выровнен по странице:
+             * идём НАЗАД постранично до магии 0xfeedfacf, затем читаем команды загрузки
+             * и берём имя из LC_ID_DYLIB (0x0d). Всё чтение — через NtReadVirtualMemory,
+             * поэтому промах по неотображённой странице безопасен. Потолок 4 МБ. */
+            {
+                ULONG_PTR base = (ULONG_PTR)rec->ExceptionAddress & ~(ULONG_PTR)0xfff;
+                ULONG_PTR limit = base > 0x400000 ? base - 0x400000 : 0;
+                ULONG magic = 0;
+                BOOL found = FALSE;
+
+                while (base > limit)
+                {
+                    got = 0;
+                    if (!NtReadVirtualMemory( GetCurrentProcess(), (void *)base, &magic,
+                                              sizeof(magic), &got ) &&
+                        got == sizeof(magic) && magic == 0xfeedfacf)
+                    {
+                        found = TRUE;
+                        break;
+                    }
+                    base -= 0x1000;
+                }
+                if (!found)
+                    MESSAGE( "macrunner-hb-illegal-host-image: заголовок Mach-O не найден "
+                             "в 4 МБ назад от %p\n", rec->ExceptionAddress );
+                else
+                {
+                    ULONG hdr[8] = { 0 };          /* mach_header_64 */
+                    ULONG_PTR lc = base + sizeof(hdr);
+                    ULONG i, ncmds = 0;
+                    char name[128];
+
+                    NtReadVirtualMemory( GetCurrentProcess(), (void *)base, hdr, sizeof(hdr), &got );
+                    ncmds = hdr[4];
+                    name[0] = 0;
+                    for (i = 0; i < ncmds && i < 256; i++)
+                    {
+                        ULONG cmd[2] = { 0 };      /* cmd, cmdsize */
+                        if (NtReadVirtualMemory( GetCurrentProcess(), (void *)lc, cmd,
+                                                 sizeof(cmd), &got ) || got != sizeof(cmd))
+                            break;
+                        if (!cmd[1]) break;
+                        if (cmd[0] == 0x0d)        /* LC_ID_DYLIB */
+                        {
+                            ULONG name_off = 0;
+                            if (!NtReadVirtualMemory( GetCurrentProcess(), (void *)(lc + 8),
+                                                      &name_off, sizeof(name_off), &got ) &&
+                                name_off < cmd[1])
+                            {
+                                SIZE_T n = sizeof(name) - 1;
+                                if (n > cmd[1] - name_off) n = cmd[1] - name_off;
+                                if (NtReadVirtualMemory( GetCurrentProcess(),
+                                                         (void *)(lc + name_off), name, n, &got ))
+                                    name[0] = 0;
+                                else name[got < sizeof(name) ? got : sizeof(name) - 1] = 0;
+                            }
+                            break;
+                        }
+                        lc += cmd[1];
+                    }
+                    MESSAGE( "macrunner-hb-illegal-host-image: base=%p смещение=%p ncmds=%lu "
+                             "имя=\"%s\"\n", (void *)base,
+                             (void *)((ULONG_PTR)rec->ExceptionAddress - base),
+                             (unsigned long)ncmds, name[0] ? name : "(нет LC_ID_DYLIB)" );
+                }
+            }
+        }
+    }
+
+    vectored_disposition = call_vectored_handlers( rec, context );
+    if (vectored_disposition == EXCEPTION_CONTINUE_EXECUTION)
+    {
+        macrunner_hb_exit_origin_dispatch_summary( "handled-vectored", vectored_disposition,
+                                                   STATUS_SUCCESS );
+        NtContinue( context, FALSE );
+    }
+
+    status = call_seh_handlers( rec, context );
+    if (status == STATUS_SUCCESS)
+    {
+        macrunner_hb_exit_origin_dispatch_summary( "handled-seh", vectored_disposition, status );
+        NtContinue( context, FALSE );
+    }
+
+    if (status != STATUS_UNHANDLED_EXCEPTION)
+    {
+        macrunner_hb_exit_origin_dispatch_summary( "invalid-disposition", vectored_disposition,
+                                                   status );
+        RtlRaiseStatus( status );
+    }
+    macrunner_hb_exit_origin_dispatch_summary( "unhandled-second-chance", vectored_disposition,
+                                               status );
     return NtRaiseException( rec, context, FALSE );
 }
 
@@ -269,7 +720,15 @@ EXCEPTION_DISPOSITION WINAPI user_callback_handler( EXCEPTION_RECORD *record, vo
 {
     if (!(record->ExceptionFlags & (EXCEPTION_UNWINDING | EXCEPTION_EXIT_UNWIND)))
     {
-        ERR( "ignoring exception %lx\n", record->ExceptionCode );
+        static unsigned int detail_count;
+        if (detail_count++ < 16)
+            ERR( "ignoring exception %lx addr=%p info0=%Ix info1=%Ix flags=%lx nparams=%lu\n",
+                 record->ExceptionCode, record->ExceptionAddress,
+                 record->NumberParameters > 0 ? (ULONG_PTR)record->ExceptionInformation[0] : 0,
+                 record->NumberParameters > 1 ? (ULONG_PTR)record->ExceptionInformation[1] : 0,
+                 record->ExceptionFlags, record->NumberParameters );
+        else
+            ERR( "ignoring exception %lx\n", record->ExceptionCode );
         RtlUnwind( frame, KiUserCallbackDispatcherReturn, record, ULongToPtr(record->ExceptionCode) );
     }
     return ExceptionContinueSearch;
@@ -311,11 +770,15 @@ NTSTATUS WINAPI dispatch_user_callback( void *args, ULONG len, ULONG id )
 void DECLSPEC_NORETURN raise_status( NTSTATUS status, EXCEPTION_RECORD *rec )
 {
     EXCEPTION_RECORD ExceptionRec;
+    static LONG macrunner_trace_count;
 
     ExceptionRec.ExceptionCode    = status;
     ExceptionRec.ExceptionFlags   = EXCEPTION_NONCONTINUABLE;
     ExceptionRec.ExceptionRecord  = rec;
     ExceptionRec.NumberParameters = 0;
+    if (macrunner_trace_count++ < 64)
+        MESSAGE( "macrunner-hb-raise-status: status=%08lx rec=%p rec_code=%08lx caller=%p\n",
+             status, rec, rec ? rec->ExceptionCode : 0, __builtin_return_address(0) );
     for (;;) RtlRaiseException( &ExceptionRec );  /* never returns */
 }
 
@@ -327,6 +790,27 @@ void DECLSPEC_NORETURN raise_status( NTSTATUS status, EXCEPTION_RECORD *rec )
  */
 void DECLSPEC_NORETURN WINAPI RtlRaiseStatus( NTSTATUS status )
 {
+    static LONG macrunner_trace_count;
+
+    if (macrunner_trace_count++ < 64)
+    {
+        /* ★ MacRunner 2026-08-28 — НАЗВАТЬ МОДУЛЬ, А НЕ ТОЛЬКО АДРЕС.
+         *
+         * Голый `caller=%p` заставляет искать владельца вручную, а карта модулей
+         * по записям импорта ВРЁТ: там `base` — это адрес страницы IAT импортёра,
+         * а не база модуля. На поиске виновника `c0000025` в Diablo это дало
+         * ложное «wow64win.dll + 0x1584FC», где на деле лежат строки, а не код.
+         * Спрашиваем загрузчик — он знает точно. */
+        void *ret = __builtin_return_address(0);
+        LDR_DATA_TABLE_ENTRY *mod = NULL;
+        if (!LdrFindEntryForAddress( ret, &mod ) && mod)
+            MESSAGE( "macrunner-hb-rtl-raise-status: status=%08lx caller=%p модуль=%s+0x%lx\n",
+                 status, ret, debugstr_w(mod->BaseDllName.Buffer),
+                 (ULONG_PTR)ret - (ULONG_PTR)mod->DllBase );
+        else
+            MESSAGE( "macrunner-hb-rtl-raise-status: status=%08lx caller=%p модуль=НЕ НАЙДЕН\n",
+                 status, ret );
+    }
     raise_status( status, NULL );
 }
 
@@ -348,7 +832,7 @@ NTSTATUS WINAPI KiRaiseUserExceptionDispatcher(void)
  */
 PVOID WINAPI RtlAddVectoredContinueHandler( ULONG first, PVECTORED_EXCEPTION_HANDLER func )
 {
-    return add_vectored_handler( &vectored_continue_handlers, first, func );
+    return add_vectored_handler( &vectored_continue_handlers, &vectored_continue_handler_count, first, func );
 }
 
 
@@ -357,7 +841,7 @@ PVOID WINAPI RtlAddVectoredContinueHandler( ULONG first, PVECTORED_EXCEPTION_HAN
  */
 ULONG WINAPI RtlRemoveVectoredContinueHandler( PVOID handler )
 {
-    return remove_vectored_handler( &vectored_continue_handlers, handler );
+    return remove_vectored_handler( &vectored_continue_handlers, &vectored_continue_handler_count, handler );
 }
 
 
@@ -366,7 +850,7 @@ ULONG WINAPI RtlRemoveVectoredContinueHandler( PVOID handler )
  */
 PVOID WINAPI DECLSPEC_HOTPATCH RtlAddVectoredExceptionHandler( ULONG first, PVECTORED_EXCEPTION_HANDLER func )
 {
-    return add_vectored_handler( &vectored_exception_handlers, first, func );
+    return add_vectored_handler( &vectored_exception_handlers, &vectored_exception_handler_count, first, func );
 }
 
 
@@ -375,7 +859,7 @@ PVOID WINAPI DECLSPEC_HOTPATCH RtlAddVectoredExceptionHandler( ULONG first, PVEC
  */
 ULONG WINAPI RtlRemoveVectoredExceptionHandler( PVOID handler )
 {
-    return remove_vectored_handler( &vectored_exception_handlers, handler );
+    return remove_vectored_handler( &vectored_exception_handlers, &vectored_exception_handler_count, handler );
 }
 
 

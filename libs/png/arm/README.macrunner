@@ -1,0 +1,15 @@
+These three source files are unmodified imports from libpng 1.6.51:
+https://github.com/pnggroup/libpng/tree/49363adcfaf098748d7a4c8c624ad8c45a8c3a86/arm
+
+The original libpng license and copyright headers are retained. This is the
+same version as the bundled scalar sources, not a libpng version upgrade.
+
+Wine's libpng Makefile now includes these files instead of forcing
+PNG_ARM_NEON_OPT=0. pngpriv.h selects the implementation from compiler target
+features. ARM64 and ARM64EC use NEON; x86_64 and i386 retain the scalar path.
+No operating-system feature override or game-specific image patch is required.
+
+Validation: tools/test-png-neon.cjs (scalar/NEON sanitizer round trips and
+independent transform oracle), tools/wic-png-corpus.c (Windows codec pixel
+digests), and original Factorio startup/capture series. See the engine change
+journal for scope, archive and performance limitations.

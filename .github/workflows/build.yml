@@ -1,0 +1,71 @@
+name: Build MacRunner Wine from public source
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'macrunner-*'
+
+permissions:
+  contents: read
+
+jobs:
+  wine:
+    runs-on: macos-15
+    timeout-minutes: 330
+    env:
+      BUILD_JOBS: '4'
+      CCACHE_DIR: ${{ runner.temp }}/wine-ccache
+    steps:
+      - name: Verify native ARM64 runner
+        shell: bash
+        run: |
+          uname -m
+          sysctl -n machdep.cpu.brand_string
+          if [ "$(uname -m)" != arm64 ]; then
+            echo '::error::MacRunner Wine requires native ARM64; this macos-15 assignment is not ARM64.'
+            exit 1
+          fi
+      - name: Checkout exact source revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install public dependencies and verified llvm-mingw 20260505
+        shell: bash
+        run: bash build-recipes/bootstrap.sh
+      - name: Record compiler and dependency versions
+        shell: bash
+        run: |
+          mkdir -p _build/reports
+          {
+            git rev-parse HEAD
+            uname -m
+            sysctl -n machdep.cpu.brand_string
+            sw_vers
+            xcodebuild -version
+            xcrun --show-sdk-version
+            clang --version
+            _toolchain/llvm-mingw-20260505-ucrt-macos-universal/bin/clang --version
+            brew list --versions
+          } > _build/reports/toolchain.txt
+      - name: Configure, compile and install from source
+        shell: bash
+        run: bash build-recipes/build-wine-arm64ec-spike.sh
+      - name: Compare available outputs with 1.0.7 even after a build failure
+        if: always()
+        shell: bash
+        run: '"$(brew --prefix)/bin/python3" build-recipes/compare-release.py _install _build/reports'
+      - name: Upload output SHA256, comparison, toolchain and build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macrunner-wine-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            _build/reports/
+            _build/configure.log
+            _build/config.log
+            _build/hyperbridge.log
+            _build/build.log
+            _build/install.log

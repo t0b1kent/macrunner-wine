@@ -258,8 +258,11 @@ HANIMATIONBUFFER WINAPI BeginBufferedAnimation(HWND hwnd, HDC hdcTarget, const R
                                                BP_ANIMATIONPARAMS *pAnimationParams, HDC *phdcFrom,
                                                HDC *phdcTo)
 {
-    FIXME("Stub (%p %p %p %u %p %p %p %p)\n", hwnd, hdcTarget, rcTarget, dwFormat,
+    TRACE("(%p %p %p %u %p %p %p %p)\n", hwnd, hdcTarget, rcTarget, dwFormat,
           pPaintParams, pAnimationParams, phdcFrom, phdcTo);
+
+    if (phdcFrom) *phdcFrom = NULL;
+    if (phdcTo) *phdcTo = NULL;
 
     return NULL;
 }
@@ -269,7 +272,7 @@ HANIMATIONBUFFER WINAPI BeginBufferedAnimation(HWND hwnd, HDC hdcTarget, const R
  */
 BOOL WINAPI BufferedPaintRenderAnimation(HWND hwnd, HDC hdcTarget)
 {
-    FIXME("Stub (%p %p)\n", hwnd, hdcTarget);
+    TRACE("(%p %p)\n", hwnd, hdcTarget);
 
     return FALSE;
 }
@@ -279,9 +282,9 @@ BOOL WINAPI BufferedPaintRenderAnimation(HWND hwnd, HDC hdcTarget)
  */
 HRESULT WINAPI BufferedPaintStopAllAnimations(HWND hwnd)
 {
-    FIXME("Stub (%p)\n", hwnd);
+    TRACE("(%p)\n", hwnd);
 
-    return E_NOTIMPL;
+    return S_OK;
 }
 
 /***********************************************************************
@@ -289,7 +292,7 @@ HRESULT WINAPI BufferedPaintStopAllAnimations(HWND hwnd)
  */
 HRESULT WINAPI EndBufferedAnimation(HANIMATIONBUFFER hbpAnimation, BOOL fUpdateTarget)
 {
-    FIXME("Stub (%p %u)\n", hbpAnimation, fUpdateTarget);
+    TRACE("(%p %u)\n", hbpAnimation, fUpdateTarget);
 
-    return E_NOTIMPL;
+    return E_INVALIDARG;
 }

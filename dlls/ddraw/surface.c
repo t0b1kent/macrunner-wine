@@ -219,6 +219,7 @@ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface,
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_QueryInterface(IDirectDrawSurface7 *iface, REFIID riid, void **obj)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_QueryInterface\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(riid), obj);
@@ -337,6 +338,7 @@ static HRESULT WINAPI ddraw_surface7_QueryInterface(IDirectDrawSurface7 *iface, 
 
 static HRESULT WINAPI ddraw_surface4_QueryInterface(IDirectDrawSurface4 *iface, REFIID riid, void **object)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_QueryInterface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(riid), object);
@@ -346,6 +348,7 @@ static HRESULT WINAPI ddraw_surface4_QueryInterface(IDirectDrawSurface4 *iface, 
 
 static HRESULT WINAPI ddraw_surface3_QueryInterface(IDirectDrawSurface3 *iface, REFIID riid, void **object)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_QueryInterface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(riid), object);
@@ -355,6 +358,7 @@ static HRESULT WINAPI ddraw_surface3_QueryInterface(IDirectDrawSurface3 *iface, 
 
 static HRESULT WINAPI ddraw_surface2_QueryInterface(IDirectDrawSurface2 *iface, REFIID riid, void **object)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_QueryInterface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(riid), object);
@@ -364,6 +368,7 @@ static HRESULT WINAPI ddraw_surface2_QueryInterface(IDirectDrawSurface2 *iface, 
 
 static HRESULT WINAPI ddraw_surface1_QueryInterface(IDirectDrawSurface *iface, REFIID riid, void **object)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_QueryInterface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(riid), object);
@@ -374,6 +379,7 @@ static HRESULT WINAPI ddraw_surface1_QueryInterface(IDirectDrawSurface *iface, R
 static HRESULT WINAPI ddraw_gamma_control_QueryInterface(IDirectDrawGammaControl *iface,
         REFIID riid, void **object)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_gamma_control_QueryInterface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawGammaControl(iface);
 
     TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(riid), object);
@@ -427,6 +433,7 @@ static void ddraw_surface_add_iface(struct ddraw_surface *surface)
  *****************************************************************************/
 static ULONG WINAPI ddraw_surface7_AddRef(IDirectDrawSurface7 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_AddRef\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface7(iface);
     ULONG refcount = InterlockedIncrement(&This->ref7);
 
@@ -442,6 +449,7 @@ static ULONG WINAPI ddraw_surface7_AddRef(IDirectDrawSurface7 *iface)
 
 static ULONG WINAPI ddraw_surface4_AddRef(IDirectDrawSurface4 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_AddRef\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface4(iface);
     ULONG refcount = InterlockedIncrement(&This->ref4);
 
@@ -457,6 +465,7 @@ static ULONG WINAPI ddraw_surface4_AddRef(IDirectDrawSurface4 *iface)
 
 static ULONG WINAPI ddraw_surface3_AddRef(IDirectDrawSurface3 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_AddRef\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface3(iface);
     ULONG refcount = InterlockedIncrement(&This->ref3);
 
@@ -472,6 +481,7 @@ static ULONG WINAPI ddraw_surface3_AddRef(IDirectDrawSurface3 *iface)
 
 static ULONG WINAPI ddraw_surface2_AddRef(IDirectDrawSurface2 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_AddRef\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface2(iface);
     ULONG refcount = InterlockedIncrement(&This->ref2);
 
@@ -487,6 +497,7 @@ static ULONG WINAPI ddraw_surface2_AddRef(IDirectDrawSurface2 *iface)
 
 static ULONG WINAPI ddraw_surface1_AddRef(IDirectDrawSurface *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_AddRef\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface(iface);
     ULONG refcount = InterlockedIncrement(&This->ref1);
 
@@ -502,6 +513,7 @@ static ULONG WINAPI ddraw_surface1_AddRef(IDirectDrawSurface *iface)
 
 static ULONG WINAPI ddraw_gamma_control_AddRef(IDirectDrawGammaControl *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_gamma_control_AddRef\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawGammaControl(iface);
     ULONG refcount = InterlockedIncrement(&This->gamma_count);
 
@@ -699,6 +711,7 @@ static ULONG ddraw_surface_release_iface(struct ddraw_surface *This)
  *****************************************************************************/
 static ULONG WINAPI ddraw_surface7_Release(IDirectDrawSurface7 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_Release\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface7(iface);
     ULONG refcount = InterlockedDecrement(&This->ref7);
 
@@ -714,6 +727,7 @@ static ULONG WINAPI ddraw_surface7_Release(IDirectDrawSurface7 *iface)
 
 static ULONG WINAPI ddraw_surface4_Release(IDirectDrawSurface4 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_Release\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface4(iface);
     ULONG refcount = InterlockedDecrement(&This->ref4);
 
@@ -729,6 +743,7 @@ static ULONG WINAPI ddraw_surface4_Release(IDirectDrawSurface4 *iface)
 
 static ULONG WINAPI ddraw_surface3_Release(IDirectDrawSurface3 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_Release\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface3(iface);
     ULONG refcount = InterlockedDecrement(&This->ref3);
 
@@ -744,6 +759,7 @@ static ULONG WINAPI ddraw_surface3_Release(IDirectDrawSurface3 *iface)
 
 static ULONG WINAPI ddraw_surface2_Release(IDirectDrawSurface2 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_Release\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface2(iface);
     ULONG refcount = InterlockedDecrement(&This->ref2);
 
@@ -759,6 +775,7 @@ static ULONG WINAPI ddraw_surface2_Release(IDirectDrawSurface2 *iface)
 
 static ULONG WINAPI ddraw_surface1_Release(IDirectDrawSurface *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_Release\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface(iface);
     ULONG refcount = InterlockedDecrement(&This->ref1);
 
@@ -774,6 +791,7 @@ static ULONG WINAPI ddraw_surface1_Release(IDirectDrawSurface *iface)
 
 static ULONG WINAPI ddraw_gamma_control_Release(IDirectDrawGammaControl *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_gamma_control_Release\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawGammaControl(iface);
     ULONG refcount = InterlockedDecrement(&This->gamma_count);
 
@@ -835,6 +853,8 @@ static ULONG WINAPI d3d_texture1_Release(IDirect3DTexture *iface)
 static HRESULT WINAPI ddraw_surface7_GetAttachedSurface(IDirectDrawSurface7 *iface,
         DDSCAPS2 *caps, IDirectDrawSurface7 **surface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetAttachedSurface\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetAttachedSurface\n" );
     struct ddraw_surface *head_surface = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *surf;
     DDSCAPS2 our_caps;
@@ -930,6 +950,7 @@ static HRESULT WINAPI ddraw_surface7_GetAttachedSurface(IDirectDrawSurface7 *ifa
 static HRESULT WINAPI ddraw_surface4_GetAttachedSurface(IDirectDrawSurface4 *iface,
         DDSCAPS2 *caps, IDirectDrawSurface4 **attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
     struct ddraw_surface *attachment_impl;
     IDirectDrawSurface7 *attachment7;
@@ -955,6 +976,7 @@ static HRESULT WINAPI ddraw_surface4_GetAttachedSurface(IDirectDrawSurface4 *ifa
 static HRESULT WINAPI ddraw_surface3_GetAttachedSurface(IDirectDrawSurface3 *iface,
         DDSCAPS *caps, IDirectDrawSurface3 **attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     struct ddraw_surface *attachment_impl;
     IDirectDrawSurface7 *attachment7;
@@ -986,6 +1008,7 @@ static HRESULT WINAPI ddraw_surface3_GetAttachedSurface(IDirectDrawSurface3 *ifa
 static HRESULT WINAPI ddraw_surface2_GetAttachedSurface(IDirectDrawSurface2 *iface,
         DDSCAPS *caps, IDirectDrawSurface2 **attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     struct ddraw_surface *attachment_impl;
     IDirectDrawSurface7 *attachment7;
@@ -1017,6 +1040,8 @@ static HRESULT WINAPI ddraw_surface2_GetAttachedSurface(IDirectDrawSurface2 *ifa
 static HRESULT WINAPI ddraw_surface1_GetAttachedSurface(IDirectDrawSurface *iface,
         DDSCAPS *caps, IDirectDrawSurface **attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetAttachedSurface\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetAttachedSurface\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     struct ddraw_surface *attachment_impl;
     IDirectDrawSurface7 *attachment7;
@@ -1141,6 +1166,57 @@ static HRESULT surface_lock(struct ddraw_surface *surface,
     if (TRACE_ON(ddraw))
         DDRAW_dump_surface_desc(surface_desc);
 
+    /* MacRunner 2026-08-29 — ЧТО ИМЕННО ПОЛУЧИЛА ИГРА.
+     *
+     * Diablo делает ровно один Lock/Unlock и ни одного Blt/Flip — то есть кадр
+     * не выводится. Между ними игра пишет пиксели по указателю, который мы
+     * вернули здесь. Если указатель пуст, шаг строки нулевой или формат не тот,
+     * что она просила, — рисовать ей некуда, и до Blt дело не дойдёт. */
+    ERR( "macrunner-ddraw-веха: [pid=%04lx] Lock ВЫХОД буфер=%p шаг=%ld %lux%lu бит=%lu флаги_desc=%#lx\n",
+         (unsigned long)GetCurrentProcessId(),
+         surface_desc->lpSurface, (long)surface_desc->lPitch,
+         (unsigned long)surface_desc->dwWidth, (unsigned long)surface_desc->dwHeight,
+         (unsigned long)surface_desc->ddpfPixelFormat.dwRGBBitCount,
+         (unsigned long)surface_desc->dwFlags );
+
+    /* ★★★★★★ MacRunner 2026-08-29 — НАРИСОВАЛА ЛИ ИГРА ХОТЬ ЧТО-ТО.
+     *
+     * Считаем ненулевые байты В МОМЕНТ ВЫДАЧИ буфера. Первый Lock показывает пустой
+     * кадр — это норма. ВТОРОЙ и дальше показывают, что игра написала в ПРЕДЫДУЩИЙ раз:
+     * буфер тот же. Отсюда прямой ответ на вопрос, который иначе не решить —
+     * «кадр не выводится» или «кадр не рисуется». Шаг 4 по обеим осям: 19 200 проб
+     * на кадр 640x480, цена ничтожна, а прибор под гейтом. */
+    {
+        /* ★★★★★★ БЕЗ getenv. 29.08: гейт через getenv ПОВЕСИЛ прогон на старте
+         * (1636 диспетчеризаций против 60957, код 142 по alarm) — Unlock/Lock идут из
+         * потока wined3d_cs, а getenv берёт замок libsystem. Ровно те грабли, что уже
+         * записаны: getenv-v-goryachem-puti-ronyal-tri-protsessa. Остальные приборы
+         * этого файла ограничены счётчиком и печатают безусловно — делаем так же. */
+        static int _f;
+        if (_f++ < 8 && map_desc.data && map_desc.row_pitch)
+        {
+            const unsigned char *px = (const unsigned char *)map_desc.data;
+            unsigned long w = surface_desc->dwWidth, h = surface_desc->dwHeight;
+            unsigned long x, y, total = 0, nonzero = 0;
+            if (w > 4096) w = 4096;
+            if (h > 4096) h = 4096;
+            for (y = 0; y < h; y += 4)
+                for (x = 0; x < w; x += 4)
+                {
+                    total++;
+                    if (px[y * map_desc.row_pitch + x]) nonzero++;
+                }
+            /* pid: у Diablo три процесса (лаунчер, игра, служебный), и без него
+             * нельзя сказать, КТО именно щупает DirectDraw — см. память
+             * one-log-two-processes-probes-had-no-pid. */
+            ERR( "macrunner-ddraw-КАДР: [pid=%04lx] №%d первичная=%d caps=%#lx проб=%lu ненулевых=%lu (%lu%%)\n",
+                 (unsigned long)GetCurrentProcessId(), _f,
+                 !!(surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE),
+                 (unsigned long)surface->surface_desc.ddsCaps.dwCaps,
+                 total, nonzero, total ? nonzero * 100 / total : 0 );
+        }
+    }
+
     wined3d_mutex_unlock();
 
     return DD_OK;
@@ -1176,6 +1252,16 @@ static BOOL surface_validate_lock_desc(struct ddraw_surface *surface,
 static HRESULT WINAPI ddraw_surface7_Lock(IDirectDrawSurface7 *iface,
         RECT *rect, DDSURFACEDESC2 *surface_desc, DWORD flags, HANDLE h)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_Lock\n" ); }
+    /* MacRunner 2026-08-29 — ГОСТЕВОЙ адрес вызывающего.
+     *
+     * Игра делает ровно один Lock/Unlock/IsLost и не повторяет цикл (эталон
+     * CrossOver: 126 циклов). Чтобы найти этот цикл в коде игры, нужен адрес,
+     * откуда её зовут. ddraw здесь — i386-модуль, вызываемый гостем напрямую,
+     * поэтому адрес возврата это ГОСТЕВОЙ адрес: Storm.dll (0x15xxxxxx) или сам
+     * Diablo.exe (0x4xxxxx). По нему трассируется цикл отрисовки. */
+    ERR( "macrunner-ddraw-веха: surface7 Lock вход флаги=%#lx rect=%p возврат=%p\n",
+         (unsigned long)flags, rect, __builtin_return_address(0) );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     unsigned int surface_desc_size;
 
@@ -1197,6 +1283,8 @@ static HRESULT WINAPI ddraw_surface7_Lock(IDirectDrawSurface7 *iface,
 static HRESULT WINAPI ddraw_surface4_Lock(IDirectDrawSurface4 *iface, RECT *rect,
         DDSURFACEDESC2 *surface_desc, DWORD flags, HANDLE h)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_Lock\n" ); }
+    ERR( "macrunner-ddraw-веха: surface4 Lock вход\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
     unsigned int surface_desc_size;
 
@@ -1242,6 +1330,8 @@ static HRESULT ddraw_surface_lock_ddsd(struct ddraw_surface *surface, RECT *rect
 static HRESULT WINAPI ddraw_surface3_Lock(IDirectDrawSurface3 *iface, RECT *rect,
         DDSURFACEDESC *surface_desc, DWORD flags, HANDLE h)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_Lock\n" ); }
+    ERR( "macrunner-ddraw-веха: surface3 Lock вход\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, rect %s, surface_desc %p, flags %#lx, h %p.\n",
@@ -1253,6 +1343,8 @@ static HRESULT WINAPI ddraw_surface3_Lock(IDirectDrawSurface3 *iface, RECT *rect
 static HRESULT WINAPI ddraw_surface2_Lock(IDirectDrawSurface2 *iface, RECT *rect,
         DDSURFACEDESC *surface_desc, DWORD flags, HANDLE h)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_Lock\n" ); }
+    ERR( "macrunner-ddraw-веха: surface2 Lock вход\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, rect %s, surface_desc %p, flags %#lx, h %p.\n",
@@ -1264,6 +1356,8 @@ static HRESULT WINAPI ddraw_surface2_Lock(IDirectDrawSurface2 *iface, RECT *rect
 static HRESULT WINAPI ddraw_surface1_Lock(IDirectDrawSurface *iface, RECT *rect,
         DDSURFACEDESC *surface_desc, DWORD flags, HANDLE h)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_Lock\n" ); }
+    ERR( "macrunner-ddraw-веха: surface1 Lock вход\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, rect %s, surface_desc %p, flags %#lx, h %p.\n",
@@ -1276,16 +1370,42 @@ static HRESULT WINAPI ddraw_surface1_Lock(IDirectDrawSurface *iface, RECT *rect,
  * game uses later interfaces. */
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_Unlock(IDirectDrawSurface *iface, void *data)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_Unlock\n" ); }
+    ERR( "macrunner-ddraw-веха: surface Unlock\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     HRESULT hr;
 
     TRACE("iface %p, data %p.\n", iface, data);
 
     wined3d_mutex_lock();
+
+    /* ★★★★★★ MacRunner 2026-08-29 — ТОЧКА, ГДЕ КАДР ВЫХОДИТ НА ЭКРАН.
+     *
+     * Считалось, что кадр выводит Blt или Flip, а их в прогоне НОЛЬ. Но для ПЕРВИЧНОЙ
+     * поверхности вывод делает сам Unlock — вызовом ddraw_surface_update_frontbuffer
+     * ниже. Значит вопрос не «почему нет Blt», а «доходит ли до этого вызова и что он
+     * возвращает». Замер Diablo: Lock отдаёт буфер 640x480x8 шаг 640 — рисовать есть
+     * куда, и три Lock/Unlock за прогон проходят.
+     *
+     * Заодно считаем НЕНУЛЕВЫЕ байты кадра: если игра ничего не написала, виновата не
+     * выдача кадра, а то, что игра до отрисовки не дошла. Это разные дефекты, и
+     * различить их можно только здесь. Прибор под гейтом MACRUNNER_DDRAW_TRACE_FRAME. */
     hr = wined3d_resource_unmap(wined3d_texture_get_resource
             (ddraw_surface_get_default_texture(surface, 0)), surface->sub_resource_idx);
     if (SUCCEEDED(hr) && surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
-        hr = ddraw_surface_update_frontbuffer(surface, &surface->ddraw->primary_lock, FALSE, 0);
+    {
+        HRESULT hr_front = ddraw_surface_update_frontbuffer(surface, &surface->ddraw->primary_lock, FALSE, 0);
+        { static int _m; if (_m++ < 8)
+            ERR( "macrunner-ddraw-ВЫВОД: update_frontbuffer hr=%#lx (0 = кадр отдан)\n",
+                 (unsigned long)hr_front ); }
+        hr = hr_front;
+    }
+    else if (FAILED(hr))
+    {
+        static int _e;
+        if (_e++ < 4) ERR( "macrunner-ddraw-ВЫВОД: unmap ОТКАЗ hr=%#lx — кадр не выйдет\n",
+                           (unsigned long)hr );
+    }
     wined3d_mutex_unlock();
 
     return hr;
@@ -1293,6 +1413,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_Unlock(IDirectDrawSurface
 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_Unlock(IDirectDrawSurface7 *iface, RECT *rect)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_Unlock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, rect %s.\n", iface, wine_dbgstr_rect(rect));
@@ -1302,6 +1423,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_Unlock(IDirectDrawSurface
 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_Unlock(IDirectDrawSurface4 *iface, RECT *rect)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_Unlock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, rect %s.\n", iface, wine_dbgstr_rect(rect));
@@ -1311,6 +1433,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_Unlock(IDirectDrawSurface
 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_Unlock(IDirectDrawSurface3 *iface, void *data)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_Unlock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, data %p.\n", iface, data);
@@ -1320,6 +1443,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_Unlock(IDirectDrawSurface
 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface2_Unlock(IDirectDrawSurface2 *iface, void *data)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_Unlock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, data %p.\n", iface, data);
@@ -1389,6 +1513,8 @@ static void ddraw_texture_rename_to(struct ddraw_texture *dst_texture, struct wi
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_Flip(IDirectDrawSurface *iface,
         IDirectDrawSurface *src, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_Flip\n" ); }
+    ERR( "macrunner-ddraw-веха: surface Flip\n" );
     struct ddraw_surface *dst_impl = impl_from_IDirectDrawSurface(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface(src);
     struct ddraw_texture *dst_ddraw_texture, *src_ddraw_texture;
@@ -1502,6 +1628,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_Flip(IDirectDrawSurface *
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_Flip(IDirectDrawSurface7 *iface,
         IDirectDrawSurface7 *src, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_Flip\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface7(src);
 
@@ -1514,6 +1641,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_Flip(IDirectDrawSurface7 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_Flip(IDirectDrawSurface4 *iface,
         IDirectDrawSurface4 *src, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_Flip\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface4(src);
 
@@ -1526,6 +1654,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_Flip(IDirectDrawSurface4 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_Flip(IDirectDrawSurface3 *iface,
         IDirectDrawSurface3 *src, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_Flip\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface3(src);
 
@@ -1538,6 +1667,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_Flip(IDirectDrawSurface3 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface2_Flip(IDirectDrawSurface2 *iface,
         IDirectDrawSurface2 *src, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_Flip\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface2(src);
 
@@ -1728,6 +1858,8 @@ static HRESULT ddraw_surface_blt_clipped(struct ddraw_surface *dst_surface, cons
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_Blt(IDirectDrawSurface *iface, RECT *dst_rect,
         IDirectDrawSurface *src_surface, RECT *src_rect, DWORD flags, DDBLTFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_Blt\n" ); }
+    ERR( "macrunner-ddraw-веха: surface Blt\n" );
     struct ddraw_surface *dst_impl = impl_from_IDirectDrawSurface(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface(src_surface);
     struct wined3d_blt_fx wined3d_fx = {0};
@@ -1911,6 +2043,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_Blt(IDirectDrawSurface *i
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_Blt(IDirectDrawSurface7 *iface, RECT *dst_rect,
         IDirectDrawSurface7 *src_surface, RECT *src_rect, DWORD flags, DDBLTFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_Blt\n" ); }
     struct ddraw_surface *dst = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *src = unsafe_impl_from_IDirectDrawSurface7(src_surface);
 
@@ -1924,6 +2057,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_Blt(IDirectDrawSurface7 *
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_Blt(IDirectDrawSurface4 *iface, RECT *dst_rect,
         IDirectDrawSurface4 *src_surface, RECT *src_rect, DWORD flags, DDBLTFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_Blt\n" ); }
     struct ddraw_surface *dst = impl_from_IDirectDrawSurface4(iface);
     struct ddraw_surface *src = unsafe_impl_from_IDirectDrawSurface4(src_surface);
 
@@ -1937,6 +2071,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_Blt(IDirectDrawSurface4 *
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_Blt(IDirectDrawSurface3 *iface, RECT *dst_rect,
         IDirectDrawSurface3 *src_surface, RECT *src_rect, DWORD flags, DDBLTFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_Blt\n" ); }
     struct ddraw_surface *dst = impl_from_IDirectDrawSurface3(iface);
     struct ddraw_surface *src = unsafe_impl_from_IDirectDrawSurface3(src_surface);
 
@@ -1950,6 +2085,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_Blt(IDirectDrawSurface3 *
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface2_Blt(IDirectDrawSurface2 *iface, RECT *dst_rect,
         IDirectDrawSurface2 *src_surface, RECT *src_rect, DWORD flags, DDBLTFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_Blt\n" ); }
     struct ddraw_surface *dst = impl_from_IDirectDrawSurface2(iface);
     struct ddraw_surface *src = unsafe_impl_from_IDirectDrawSurface2(src_surface);
 
@@ -2046,6 +2182,7 @@ static HRESULT ddraw_surface_attach_surface(struct ddraw_surface *This, struct d
 
 static HRESULT WINAPI ddraw_surface7_AddAttachedSurface(IDirectDrawSurface7 *iface, IDirectDrawSurface7 *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_AddAttachedSurface\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface7(attachment);
     HRESULT hr;
@@ -2073,6 +2210,7 @@ static HRESULT WINAPI ddraw_surface7_AddAttachedSurface(IDirectDrawSurface7 *ifa
 
 static HRESULT WINAPI ddraw_surface4_AddAttachedSurface(IDirectDrawSurface4 *iface, IDirectDrawSurface4 *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_AddAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface4(attachment);
     HRESULT hr;
@@ -2112,6 +2250,7 @@ static HRESULT WINAPI ddraw_surface4_AddAttachedSurface(IDirectDrawSurface4 *ifa
 
 static HRESULT WINAPI ddraw_surface3_AddAttachedSurface(IDirectDrawSurface3 *iface, IDirectDrawSurface3 *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_AddAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface3(attachment);
     HRESULT hr;
@@ -2130,6 +2269,7 @@ static HRESULT WINAPI ddraw_surface3_AddAttachedSurface(IDirectDrawSurface3 *ifa
 
 static HRESULT WINAPI ddraw_surface2_AddAttachedSurface(IDirectDrawSurface2 *iface, IDirectDrawSurface2 *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_AddAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface2(attachment);
     HRESULT hr;
@@ -2148,6 +2288,8 @@ static HRESULT WINAPI ddraw_surface2_AddAttachedSurface(IDirectDrawSurface2 *ifa
 
 static HRESULT WINAPI ddraw_surface1_AddAttachedSurface(IDirectDrawSurface *iface, IDirectDrawSurface *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_AddAttachedSurface\n" ); }
+    ERR( "macrunner-ddraw-веха: surface AddAttachedSurface\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface(attachment);
     HRESULT hr;
@@ -2251,6 +2393,7 @@ static HRESULT ddraw_surface_delete_attached_surface(struct ddraw_surface *surfa
 static HRESULT WINAPI ddraw_surface7_DeleteAttachedSurface(IDirectDrawSurface7 *iface,
         DWORD flags, IDirectDrawSurface7 *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_DeleteAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface7(attachment);
 
@@ -2262,6 +2405,7 @@ static HRESULT WINAPI ddraw_surface7_DeleteAttachedSurface(IDirectDrawSurface7 *
 static HRESULT WINAPI ddraw_surface4_DeleteAttachedSurface(IDirectDrawSurface4 *iface,
         DWORD flags, IDirectDrawSurface4 *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_DeleteAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface4(attachment);
 
@@ -2273,6 +2417,7 @@ static HRESULT WINAPI ddraw_surface4_DeleteAttachedSurface(IDirectDrawSurface4 *
 static HRESULT WINAPI ddraw_surface3_DeleteAttachedSurface(IDirectDrawSurface3 *iface,
         DWORD flags, IDirectDrawSurface3 *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_DeleteAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface3(attachment);
 
@@ -2284,6 +2429,7 @@ static HRESULT WINAPI ddraw_surface3_DeleteAttachedSurface(IDirectDrawSurface3 *
 static HRESULT WINAPI ddraw_surface2_DeleteAttachedSurface(IDirectDrawSurface2 *iface,
         DWORD flags, IDirectDrawSurface2 *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_DeleteAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface2(attachment);
 
@@ -2295,6 +2441,7 @@ static HRESULT WINAPI ddraw_surface2_DeleteAttachedSurface(IDirectDrawSurface2 *
 static HRESULT WINAPI ddraw_surface1_DeleteAttachedSurface(IDirectDrawSurface *iface,
         DWORD flags, IDirectDrawSurface *attachment)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_DeleteAttachedSurface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     struct ddraw_surface *attachment_impl = unsafe_impl_from_IDirectDrawSurface(attachment);
 
@@ -2317,6 +2464,7 @@ static HRESULT WINAPI ddraw_surface1_DeleteAttachedSurface(IDirectDrawSurface *i
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_AddOverlayDirtyRect(IDirectDrawSurface7 *iface, RECT *Rect)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_AddOverlayDirtyRect\n" ); }
     TRACE("iface %p, rect %s.\n", iface, wine_dbgstr_rect(Rect));
 
     return DDERR_UNSUPPORTED; /* unchecked */
@@ -2324,6 +2472,7 @@ static HRESULT WINAPI ddraw_surface7_AddOverlayDirtyRect(IDirectDrawSurface7 *if
 
 static HRESULT WINAPI ddraw_surface4_AddOverlayDirtyRect(IDirectDrawSurface4 *iface, RECT *rect)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_AddOverlayDirtyRect\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, rect %s.\n", iface, wine_dbgstr_rect(rect));
@@ -2333,6 +2482,7 @@ static HRESULT WINAPI ddraw_surface4_AddOverlayDirtyRect(IDirectDrawSurface4 *if
 
 static HRESULT WINAPI ddraw_surface3_AddOverlayDirtyRect(IDirectDrawSurface3 *iface, RECT *rect)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_AddOverlayDirtyRect\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, rect %s.\n", iface, wine_dbgstr_rect(rect));
@@ -2342,6 +2492,7 @@ static HRESULT WINAPI ddraw_surface3_AddOverlayDirtyRect(IDirectDrawSurface3 *if
 
 static HRESULT WINAPI ddraw_surface2_AddOverlayDirtyRect(IDirectDrawSurface2 *iface, RECT *rect)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_AddOverlayDirtyRect\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, rect %s.\n", iface, wine_dbgstr_rect(rect));
@@ -2351,6 +2502,7 @@ static HRESULT WINAPI ddraw_surface2_AddOverlayDirtyRect(IDirectDrawSurface2 *if
 
 static HRESULT WINAPI ddraw_surface1_AddOverlayDirtyRect(IDirectDrawSurface *iface, RECT *rect)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_AddOverlayDirtyRect\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, rect %s.\n", iface, wine_dbgstr_rect(rect));
@@ -2373,6 +2525,7 @@ static HRESULT WINAPI ddraw_surface1_AddOverlayDirtyRect(IDirectDrawSurface *ifa
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetDC(IDirectDrawSurface7 *iface, HDC *dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetDC\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     HRESULT hr = DD_OK;
 
@@ -2425,6 +2578,7 @@ static HRESULT WINAPI ddraw_surface7_GetDC(IDirectDrawSurface7 *iface, HDC *dc)
 
 static HRESULT WINAPI ddraw_surface4_GetDC(IDirectDrawSurface4 *iface, HDC *dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetDC\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, dc %p.\n", iface, dc);
@@ -2434,6 +2588,7 @@ static HRESULT WINAPI ddraw_surface4_GetDC(IDirectDrawSurface4 *iface, HDC *dc)
 
 static HRESULT WINAPI ddraw_surface3_GetDC(IDirectDrawSurface3 *iface, HDC *dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetDC\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, dc %p.\n", iface, dc);
@@ -2443,6 +2598,7 @@ static HRESULT WINAPI ddraw_surface3_GetDC(IDirectDrawSurface3 *iface, HDC *dc)
 
 static HRESULT WINAPI ddraw_surface2_GetDC(IDirectDrawSurface2 *iface, HDC *dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetDC\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, dc %p.\n", iface, dc);
@@ -2452,6 +2608,8 @@ static HRESULT WINAPI ddraw_surface2_GetDC(IDirectDrawSurface2 *iface, HDC *dc)
 
 static HRESULT WINAPI ddraw_surface1_GetDC(IDirectDrawSurface *iface, HDC *dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetDC\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetDC\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, dc %p.\n", iface, dc);
@@ -2473,6 +2631,7 @@ static HRESULT WINAPI ddraw_surface1_GetDC(IDirectDrawSurface *iface, HDC *dc)
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_ReleaseDC(IDirectDrawSurface7 *iface, HDC hdc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_ReleaseDC\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     HRESULT hr;
 
@@ -2498,6 +2657,7 @@ static HRESULT WINAPI ddraw_surface7_ReleaseDC(IDirectDrawSurface7 *iface, HDC h
 
 static HRESULT WINAPI ddraw_surface4_ReleaseDC(IDirectDrawSurface4 *iface, HDC dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_ReleaseDC\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, dc %p.\n", iface, dc);
@@ -2507,6 +2667,7 @@ static HRESULT WINAPI ddraw_surface4_ReleaseDC(IDirectDrawSurface4 *iface, HDC d
 
 static HRESULT WINAPI ddraw_surface3_ReleaseDC(IDirectDrawSurface3 *iface, HDC dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_ReleaseDC\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, dc %p.\n", iface, dc);
@@ -2516,6 +2677,7 @@ static HRESULT WINAPI ddraw_surface3_ReleaseDC(IDirectDrawSurface3 *iface, HDC d
 
 static HRESULT WINAPI ddraw_surface2_ReleaseDC(IDirectDrawSurface2 *iface, HDC dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_ReleaseDC\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, dc %p.\n", iface, dc);
@@ -2525,6 +2687,8 @@ static HRESULT WINAPI ddraw_surface2_ReleaseDC(IDirectDrawSurface2 *iface, HDC d
 
 static HRESULT WINAPI ddraw_surface1_ReleaseDC(IDirectDrawSurface *iface, HDC dc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_ReleaseDC\n" ); }
+    ERR( "macrunner-ddraw-веха: surface ReleaseDC\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, dc %p.\n", iface, dc);
@@ -2547,6 +2711,7 @@ static HRESULT WINAPI ddraw_surface1_ReleaseDC(IDirectDrawSurface *iface, HDC dc
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetCaps(IDirectDrawSurface7 *iface, DDSCAPS2 *Caps)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetCaps\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, caps %p.\n", iface, Caps);
@@ -2561,6 +2726,7 @@ static HRESULT WINAPI ddraw_surface7_GetCaps(IDirectDrawSurface7 *iface, DDSCAPS
 
 static HRESULT WINAPI ddraw_surface4_GetCaps(IDirectDrawSurface4 *iface, DDSCAPS2 *caps)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetCaps\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, caps %p.\n", iface, caps);
@@ -2570,6 +2736,7 @@ static HRESULT WINAPI ddraw_surface4_GetCaps(IDirectDrawSurface4 *iface, DDSCAPS
 
 static HRESULT WINAPI ddraw_surface3_GetCaps(IDirectDrawSurface3 *iface, DDSCAPS *caps)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetCaps\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     DDSCAPS2 caps2;
     HRESULT hr;
@@ -2585,6 +2752,7 @@ static HRESULT WINAPI ddraw_surface3_GetCaps(IDirectDrawSurface3 *iface, DDSCAPS
 
 static HRESULT WINAPI ddraw_surface2_GetCaps(IDirectDrawSurface2 *iface, DDSCAPS *caps)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetCaps\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     DDSCAPS2 caps2;
     HRESULT hr;
@@ -2600,6 +2768,8 @@ static HRESULT WINAPI ddraw_surface2_GetCaps(IDirectDrawSurface2 *iface, DDSCAPS
 
 static HRESULT WINAPI ddraw_surface1_GetCaps(IDirectDrawSurface *iface, DDSCAPS *caps)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetCaps\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetCaps\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     DDSCAPS2 caps2;
     HRESULT hr;
@@ -2615,6 +2785,7 @@ static HRESULT WINAPI ddraw_surface1_GetCaps(IDirectDrawSurface *iface, DDSCAPS 
 
 static HRESULT WINAPI ddraw_surface7_SetPriority(IDirectDrawSurface7 *iface, DWORD priority)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_SetPriority\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     DWORD managed = DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE;
     HRESULT hr;
@@ -2646,6 +2817,7 @@ static HRESULT WINAPI ddraw_surface7_SetPriority(IDirectDrawSurface7 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface7_GetPriority(IDirectDrawSurface7 *iface, DWORD *priority)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetPriority\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     const struct wined3d_resource *resource;
     DWORD managed = DDSCAPS2_TEXTUREMANAGE | DDSCAPS2_D3DTEXTUREMANAGE;
@@ -2694,6 +2866,7 @@ static HRESULT WINAPI ddraw_surface7_GetPriority(IDirectDrawSurface7 *iface, DWO
 static HRESULT WINAPI ddraw_surface7_SetPrivateData(IDirectDrawSurface7 *iface,
         REFGUID tag, void *data, DWORD size, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_SetPrivateData\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     HRESULT hr;
 
@@ -2715,6 +2888,7 @@ static HRESULT WINAPI ddraw_surface7_SetPrivateData(IDirectDrawSurface7 *iface,
 static HRESULT WINAPI ddraw_surface4_SetPrivateData(IDirectDrawSurface4 *iface,
         REFGUID tag, void *data, DWORD size, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_SetPrivateData\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, tag %s, data %p, data_size %lu, flags %#lx.\n",
@@ -2740,6 +2914,7 @@ static HRESULT WINAPI ddraw_surface4_SetPrivateData(IDirectDrawSurface4 *iface,
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetPrivateData(IDirectDrawSurface7 *iface, REFGUID tag, void *data, DWORD *size)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetPrivateData\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     const struct wined3d_private_data *stored_data;
     HRESULT hr;
@@ -2782,6 +2957,7 @@ done:
 
 static HRESULT WINAPI ddraw_surface4_GetPrivateData(IDirectDrawSurface4 *iface, REFGUID tag, void *data, DWORD *size)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetPrivateData\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, tag %s, data %p, data_size %p.\n",
@@ -2804,6 +2980,7 @@ static HRESULT WINAPI ddraw_surface4_GetPrivateData(IDirectDrawSurface4 *iface, 
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_FreePrivateData(IDirectDrawSurface7 *iface, REFGUID tag)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_FreePrivateData\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     struct wined3d_private_data *entry;
 
@@ -2825,6 +3002,7 @@ static HRESULT WINAPI ddraw_surface7_FreePrivateData(IDirectDrawSurface7 *iface,
 
 static HRESULT WINAPI ddraw_surface4_FreePrivateData(IDirectDrawSurface4 *iface, REFGUID tag)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_FreePrivateData\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, tag %s.\n", iface, debugstr_guid(tag));
@@ -2846,6 +3024,7 @@ static HRESULT WINAPI ddraw_surface4_FreePrivateData(IDirectDrawSurface4 *iface,
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_PageLock(IDirectDrawSurface7 *iface, DWORD Flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_PageLock\n" ); }
     TRACE("iface %p, flags %#lx.\n", iface, Flags);
 
     /* This is Windows memory management related - we don't need this */
@@ -2854,6 +3033,7 @@ static HRESULT WINAPI ddraw_surface7_PageLock(IDirectDrawSurface7 *iface, DWORD 
 
 static HRESULT WINAPI ddraw_surface4_PageLock(IDirectDrawSurface4 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_PageLock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -2863,6 +3043,7 @@ static HRESULT WINAPI ddraw_surface4_PageLock(IDirectDrawSurface4 *iface, DWORD 
 
 static HRESULT WINAPI ddraw_surface3_PageLock(IDirectDrawSurface3 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_PageLock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -2872,6 +3053,7 @@ static HRESULT WINAPI ddraw_surface3_PageLock(IDirectDrawSurface3 *iface, DWORD 
 
 static HRESULT WINAPI ddraw_surface2_PageLock(IDirectDrawSurface2 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_PageLock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -2893,6 +3075,7 @@ static HRESULT WINAPI ddraw_surface2_PageLock(IDirectDrawSurface2 *iface, DWORD 
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_PageUnlock(IDirectDrawSurface7 *iface, DWORD Flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_PageUnlock\n" ); }
     TRACE("iface %p, flags %#lx.\n", iface, Flags);
 
     return DD_OK;
@@ -2900,6 +3083,7 @@ static HRESULT WINAPI ddraw_surface7_PageUnlock(IDirectDrawSurface7 *iface, DWOR
 
 static HRESULT WINAPI ddraw_surface4_PageUnlock(IDirectDrawSurface4 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_PageUnlock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -2909,6 +3093,7 @@ static HRESULT WINAPI ddraw_surface4_PageUnlock(IDirectDrawSurface4 *iface, DWOR
 
 static HRESULT WINAPI ddraw_surface3_PageUnlock(IDirectDrawSurface3 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_PageUnlock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -2918,6 +3103,7 @@ static HRESULT WINAPI ddraw_surface3_PageUnlock(IDirectDrawSurface3 *iface, DWOR
 
 static HRESULT WINAPI ddraw_surface2_PageUnlock(IDirectDrawSurface2 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_PageUnlock\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -2939,6 +3125,7 @@ static HRESULT WINAPI ddraw_surface2_PageUnlock(IDirectDrawSurface2 *iface, DWOR
  *****************************************************************************/
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_BltBatch(IDirectDrawSurface7 *iface, DDBLTBATCH *Batch, DWORD Count, DWORD Flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_BltBatch\n" ); }
     TRACE("iface %p, batch %p, count %lu, flags %#lx.\n", iface, Batch, Count, Flags);
 
     /* MSDN: "not currently implemented" */
@@ -2947,6 +3134,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_BltBatch(IDirectDrawSurfa
 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_BltBatch(IDirectDrawSurface4 *iface, DDBLTBATCH *batch, DWORD count, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_BltBatch\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, batch %p, count %lu, flags %#lx.\n", iface, batch, count, flags);
@@ -2956,6 +3144,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_BltBatch(IDirectDrawSurfa
 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_BltBatch(IDirectDrawSurface3 *iface, DDBLTBATCH *batch, DWORD count, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_BltBatch\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, batch %p, count %lu, flags %#lx.\n", iface, batch, count, flags);
@@ -2965,6 +3154,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_BltBatch(IDirectDrawSurfa
 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface2_BltBatch(IDirectDrawSurface2 *iface, DDBLTBATCH *batch, DWORD count, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_BltBatch\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, batch %p, count %lu, flags %#lx.\n", iface, batch, count, flags);
@@ -2974,6 +3164,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface2_BltBatch(IDirectDrawSurfa
 
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_BltBatch(IDirectDrawSurface *iface, DDBLTBATCH *batch, DWORD count, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_BltBatch\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, batch %p, count %lu, flags %#lx.\n", iface, batch, count, flags);
@@ -2998,6 +3189,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_BltBatch(IDirectDrawSurfa
 static HRESULT WINAPI ddraw_surface7_EnumAttachedSurfaces(IDirectDrawSurface7 *iface,
         void *context, LPDDENUMSURFACESCALLBACK7 cb)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_EnumAttachedSurfaces\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *surf;
     DDSURFACEDESC2 desc;
@@ -3084,6 +3276,7 @@ static HRESULT CALLBACK EnumCallback(IDirectDrawSurface7 *surface, DDSURFACEDESC
 static HRESULT WINAPI ddraw_surface4_EnumAttachedSurfaces(IDirectDrawSurface4 *iface,
         void *context, LPDDENUMSURFACESCALLBACK2 callback)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_EnumAttachedSurfaces\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
     struct callback_info2 info;
 
@@ -3099,6 +3292,7 @@ static HRESULT WINAPI ddraw_surface4_EnumAttachedSurfaces(IDirectDrawSurface4 *i
 static HRESULT WINAPI ddraw_surface3_EnumAttachedSurfaces(IDirectDrawSurface3 *iface,
         void *context, LPDDENUMSURFACESCALLBACK callback)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_EnumAttachedSurfaces\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     struct callback_info info;
 
@@ -3114,6 +3308,7 @@ static HRESULT WINAPI ddraw_surface3_EnumAttachedSurfaces(IDirectDrawSurface3 *i
 static HRESULT WINAPI ddraw_surface2_EnumAttachedSurfaces(IDirectDrawSurface2 *iface,
         void *context, LPDDENUMSURFACESCALLBACK callback)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_EnumAttachedSurfaces\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     struct callback_info info;
 
@@ -3129,6 +3324,7 @@ static HRESULT WINAPI ddraw_surface2_EnumAttachedSurfaces(IDirectDrawSurface2 *i
 static HRESULT WINAPI ddraw_surface1_EnumAttachedSurfaces(IDirectDrawSurface *iface,
         void *context, LPDDENUMSURFACESCALLBACK callback)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_EnumAttachedSurfaces\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     struct callback_info info;
 
@@ -3155,17 +3351,40 @@ static HRESULT WINAPI ddraw_surface1_EnumAttachedSurfaces(IDirectDrawSurface *if
  *  DD_OK, because it's a stub
  *
  *****************************************************************************/
+/* Перечисление оверлеев по Z-порядку. Аппаратных оверлеев на этом оборудовании
+ * нет, поэтому перечислять нечего — но проверки обязаны работать, а поверхность,
+ * которая оверлеем не является, должна получить именно DDERR_NOTAOVERLAYSURFACE,
+ * а не «DD_OK и ни одного вызова обратного вызова». Прежний ответ выглядел как
+ * «оверлеев ноль» и для не-оверлейной поверхности тоже — то есть скрывал ошибку
+ * вызывающего. */
 static HRESULT WINAPI ddraw_surface7_EnumOverlayZOrders(IDirectDrawSurface7 *iface,
         DWORD Flags, void *context, LPDDENUMSURFACESCALLBACK7 cb)
 {
-    FIXME("iface %p, flags %#lx, context %p, callback %p stub!\n", iface, Flags, context, cb);
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_EnumOverlayZOrders\n" ); }
+    struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
+    TRACE("iface %p, flags %#lx, context %p, callback %p.\n", iface, Flags, context, cb);
+
+    if (!cb)
+        return DDERR_INVALIDPARAMS;
+    wined3d_mutex_lock();
+    if (!(surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
+    {
+        wined3d_mutex_unlock();
+        WARN("Surface is not an overlay, returning DDERR_NOTAOVERLAYSURFACE.\n");
+        return DDERR_NOTAOVERLAYSURFACE;
+    }
+    wined3d_mutex_unlock();
+
+    /* Поверхность — оверлей, но цепочки Z-порядка мы не ведём: перечислять
+     * нечего, и это законный пустой результат. */
     return DD_OK;
 }
 
 static HRESULT WINAPI ddraw_surface4_EnumOverlayZOrders(IDirectDrawSurface4 *iface,
         DWORD flags, void *context, LPDDENUMSURFACESCALLBACK2 callback)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_EnumOverlayZOrders\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
     struct callback_info2 info;
 
@@ -3181,6 +3400,7 @@ static HRESULT WINAPI ddraw_surface4_EnumOverlayZOrders(IDirectDrawSurface4 *ifa
 static HRESULT WINAPI ddraw_surface3_EnumOverlayZOrders(IDirectDrawSurface3 *iface,
         DWORD flags, void *context, LPDDENUMSURFACESCALLBACK callback)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_EnumOverlayZOrders\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     struct callback_info info;
 
@@ -3196,6 +3416,7 @@ static HRESULT WINAPI ddraw_surface3_EnumOverlayZOrders(IDirectDrawSurface3 *ifa
 static HRESULT WINAPI ddraw_surface2_EnumOverlayZOrders(IDirectDrawSurface2 *iface,
         DWORD flags, void *context, LPDDENUMSURFACESCALLBACK callback)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_EnumOverlayZOrders\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     struct callback_info info;
 
@@ -3211,6 +3432,7 @@ static HRESULT WINAPI ddraw_surface2_EnumOverlayZOrders(IDirectDrawSurface2 *ifa
 static HRESULT WINAPI ddraw_surface1_EnumOverlayZOrders(IDirectDrawSurface *iface,
         DWORD flags, void *context, LPDDENUMSURFACESCALLBACK callback)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_EnumOverlayZOrders\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     struct callback_info info;
 
@@ -3234,6 +3456,7 @@ static HRESULT WINAPI ddraw_surface1_EnumOverlayZOrders(IDirectDrawSurface *ifac
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetBltStatus(IDirectDrawSurface7 *iface, DWORD Flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetBltStatus\n" ); }
     TRACE("iface %p, flags %#lx.\n", iface, Flags);
 
     switch (Flags)
@@ -3249,6 +3472,7 @@ static HRESULT WINAPI ddraw_surface7_GetBltStatus(IDirectDrawSurface7 *iface, DW
 
 static HRESULT WINAPI ddraw_surface4_GetBltStatus(IDirectDrawSurface4 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetBltStatus\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -3258,6 +3482,7 @@ static HRESULT WINAPI ddraw_surface4_GetBltStatus(IDirectDrawSurface4 *iface, DW
 
 static HRESULT WINAPI ddraw_surface3_GetBltStatus(IDirectDrawSurface3 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetBltStatus\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -3267,6 +3492,7 @@ static HRESULT WINAPI ddraw_surface3_GetBltStatus(IDirectDrawSurface3 *iface, DW
 
 static HRESULT WINAPI ddraw_surface2_GetBltStatus(IDirectDrawSurface2 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetBltStatus\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -3276,6 +3502,8 @@ static HRESULT WINAPI ddraw_surface2_GetBltStatus(IDirectDrawSurface2 *iface, DW
 
 static HRESULT WINAPI ddraw_surface1_GetBltStatus(IDirectDrawSurface *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetBltStatus\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetBltStatus\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -3299,6 +3527,7 @@ static HRESULT WINAPI ddraw_surface1_GetBltStatus(IDirectDrawSurface *iface, DWO
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetColorKey(IDirectDrawSurface7 *iface, DWORD Flags, DDCOLORKEY *CKey)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetColorKey\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, Flags, CKey);
@@ -3358,6 +3587,7 @@ static HRESULT WINAPI ddraw_surface7_GetColorKey(IDirectDrawSurface7 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface4_GetColorKey(IDirectDrawSurface4 *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetColorKey\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -3367,6 +3597,7 @@ static HRESULT WINAPI ddraw_surface4_GetColorKey(IDirectDrawSurface4 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface3_GetColorKey(IDirectDrawSurface3 *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetColorKey\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -3376,6 +3607,7 @@ static HRESULT WINAPI ddraw_surface3_GetColorKey(IDirectDrawSurface3 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface2_GetColorKey(IDirectDrawSurface2 *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetColorKey\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -3385,6 +3617,8 @@ static HRESULT WINAPI ddraw_surface2_GetColorKey(IDirectDrawSurface2 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface1_GetColorKey(IDirectDrawSurface *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetColorKey\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetColorKey\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -3403,6 +3637,7 @@ static HRESULT WINAPI ddraw_surface1_GetColorKey(IDirectDrawSurface *iface, DWOR
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetFlipStatus(IDirectDrawSurface7 *iface, DWORD Flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetFlipStatus\n" ); }
     TRACE("iface %p, flags %#lx.\n", iface, Flags);
 
     /* XXX: DDERR_INVALIDSURFACETYPE */
@@ -3420,6 +3655,7 @@ static HRESULT WINAPI ddraw_surface7_GetFlipStatus(IDirectDrawSurface7 *iface, D
 
 static HRESULT WINAPI ddraw_surface4_GetFlipStatus(IDirectDrawSurface4 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetFlipStatus\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -3429,6 +3665,7 @@ static HRESULT WINAPI ddraw_surface4_GetFlipStatus(IDirectDrawSurface4 *iface, D
 
 static HRESULT WINAPI ddraw_surface3_GetFlipStatus(IDirectDrawSurface3 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetFlipStatus\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -3438,6 +3675,7 @@ static HRESULT WINAPI ddraw_surface3_GetFlipStatus(IDirectDrawSurface3 *iface, D
 
 static HRESULT WINAPI ddraw_surface2_GetFlipStatus(IDirectDrawSurface2 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetFlipStatus\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -3447,6 +3685,8 @@ static HRESULT WINAPI ddraw_surface2_GetFlipStatus(IDirectDrawSurface2 *iface, D
 
 static HRESULT WINAPI ddraw_surface1_GetFlipStatus(IDirectDrawSurface *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetFlipStatus\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetFlipStatus\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -3468,6 +3708,7 @@ static HRESULT WINAPI ddraw_surface1_GetFlipStatus(IDirectDrawSurface *iface, DW
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetOverlayPosition(IDirectDrawSurface7 *iface, LONG *x, LONG *y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     HRESULT hr;
 
@@ -3483,6 +3724,7 @@ static HRESULT WINAPI ddraw_surface7_GetOverlayPosition(IDirectDrawSurface7 *ifa
 
 static HRESULT WINAPI ddraw_surface4_GetOverlayPosition(IDirectDrawSurface4 *iface, LONG *x, LONG *y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, x %p, y %p.\n", iface, x, y);
@@ -3492,6 +3734,7 @@ static HRESULT WINAPI ddraw_surface4_GetOverlayPosition(IDirectDrawSurface4 *ifa
 
 static HRESULT WINAPI ddraw_surface3_GetOverlayPosition(IDirectDrawSurface3 *iface, LONG *x, LONG *y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, x %p, y %p.\n", iface, x, y);
@@ -3501,6 +3744,7 @@ static HRESULT WINAPI ddraw_surface3_GetOverlayPosition(IDirectDrawSurface3 *ifa
 
 static HRESULT WINAPI ddraw_surface2_GetOverlayPosition(IDirectDrawSurface2 *iface, LONG *x, LONG *y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, x %p, y %p.\n", iface, x, y);
@@ -3510,6 +3754,7 @@ static HRESULT WINAPI ddraw_surface2_GetOverlayPosition(IDirectDrawSurface2 *ifa
 
 static HRESULT WINAPI ddraw_surface1_GetOverlayPosition(IDirectDrawSurface *iface, LONG *x, LONG *y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, x %p, y %p.\n", iface, x, y);
@@ -3533,6 +3778,7 @@ static HRESULT WINAPI ddraw_surface1_GetOverlayPosition(IDirectDrawSurface *ifac
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetPixelFormat(IDirectDrawSurface7 *iface, DDPIXELFORMAT *PixelFormat)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetPixelFormat\n" ); }
     /* What is DDERR_INVALIDSURFACETYPE for here? */
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
@@ -3550,6 +3796,7 @@ static HRESULT WINAPI ddraw_surface7_GetPixelFormat(IDirectDrawSurface7 *iface, 
 
 static HRESULT WINAPI ddraw_surface4_GetPixelFormat(IDirectDrawSurface4 *iface, DDPIXELFORMAT *pixel_format)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetPixelFormat\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, pixel_format %p.\n", iface, pixel_format);
@@ -3559,6 +3806,7 @@ static HRESULT WINAPI ddraw_surface4_GetPixelFormat(IDirectDrawSurface4 *iface, 
 
 static HRESULT WINAPI ddraw_surface3_GetPixelFormat(IDirectDrawSurface3 *iface, DDPIXELFORMAT *pixel_format)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetPixelFormat\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, pixel_format %p.\n", iface, pixel_format);
@@ -3568,6 +3816,7 @@ static HRESULT WINAPI ddraw_surface3_GetPixelFormat(IDirectDrawSurface3 *iface, 
 
 static HRESULT WINAPI ddraw_surface2_GetPixelFormat(IDirectDrawSurface2 *iface, DDPIXELFORMAT *pixel_format)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetPixelFormat\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, pixel_format %p.\n", iface, pixel_format);
@@ -3577,6 +3826,8 @@ static HRESULT WINAPI ddraw_surface2_GetPixelFormat(IDirectDrawSurface2 *iface, 
 
 static HRESULT WINAPI ddraw_surface1_GetPixelFormat(IDirectDrawSurface *iface, DDPIXELFORMAT *pixel_format)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetPixelFormat\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetPixelFormat\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, pixel_format %p.\n", iface, pixel_format);
@@ -3600,6 +3851,7 @@ static HRESULT WINAPI ddraw_surface1_GetPixelFormat(IDirectDrawSurface *iface, D
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetSurfaceDesc(IDirectDrawSurface7 *iface, DDSURFACEDESC2 *surface_desc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetSurfaceDesc\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, surface_desc %p.\n", iface, surface_desc);
@@ -3623,6 +3875,7 @@ static HRESULT WINAPI ddraw_surface7_GetSurfaceDesc(IDirectDrawSurface7 *iface, 
 
 static HRESULT WINAPI ddraw_surface4_GetSurfaceDesc(IDirectDrawSurface4 *iface, DDSURFACEDESC2 *DDSD)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetSurfaceDesc\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, surface_desc %p.\n", iface, DDSD);
@@ -3632,6 +3885,7 @@ static HRESULT WINAPI ddraw_surface4_GetSurfaceDesc(IDirectDrawSurface4 *iface, 
 
 static HRESULT WINAPI ddraw_surface3_GetSurfaceDesc(IDirectDrawSurface3 *iface, DDSURFACEDESC *surface_desc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetSurfaceDesc\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, surface_desc %p.\n", iface, surface_desc);
@@ -3659,6 +3913,7 @@ static HRESULT WINAPI ddraw_surface3_GetSurfaceDesc(IDirectDrawSurface3 *iface, 
 
 static HRESULT WINAPI ddraw_surface2_GetSurfaceDesc(IDirectDrawSurface2 *iface, DDSURFACEDESC *DDSD)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetSurfaceDesc\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, surface_desc %p.\n", iface, DDSD);
@@ -3668,6 +3923,8 @@ static HRESULT WINAPI ddraw_surface2_GetSurfaceDesc(IDirectDrawSurface2 *iface, 
 
 static HRESULT WINAPI ddraw_surface1_GetSurfaceDesc(IDirectDrawSurface *iface, DDSURFACEDESC *DDSD)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetSurfaceDesc\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetSurfaceDesc\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, surface_desc %p.\n", iface, DDSD);
@@ -3691,6 +3948,7 @@ static HRESULT WINAPI ddraw_surface1_GetSurfaceDesc(IDirectDrawSurface *iface, D
 static HRESULT WINAPI ddraw_surface7_Initialize(IDirectDrawSurface7 *iface,
         IDirectDraw *ddraw, DDSURFACEDESC2 *surface_desc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_Initialize\n" ); }
     TRACE("iface %p, ddraw %p, surface_desc %p.\n", iface, ddraw, surface_desc);
 
     return DDERR_ALREADYINITIALIZED;
@@ -3699,6 +3957,7 @@ static HRESULT WINAPI ddraw_surface7_Initialize(IDirectDrawSurface7 *iface,
 static HRESULT WINAPI ddraw_surface4_Initialize(IDirectDrawSurface4 *iface,
         IDirectDraw *ddraw, DDSURFACEDESC2 *surface_desc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_Initialize\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, ddraw %p, surface_desc %p.\n", iface, ddraw, surface_desc);
@@ -3710,6 +3969,7 @@ static HRESULT WINAPI ddraw_surface4_Initialize(IDirectDrawSurface4 *iface,
 static HRESULT WINAPI ddraw_surface3_Initialize(IDirectDrawSurface3 *iface,
         IDirectDraw *ddraw, DDSURFACEDESC *surface_desc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_Initialize\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     DDSURFACEDESC2 surface_desc2;
 
@@ -3723,6 +3983,7 @@ static HRESULT WINAPI ddraw_surface3_Initialize(IDirectDrawSurface3 *iface,
 static HRESULT WINAPI ddraw_surface2_Initialize(IDirectDrawSurface2 *iface,
         IDirectDraw *ddraw, DDSURFACEDESC *surface_desc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_Initialize\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     DDSURFACEDESC2 surface_desc2;
 
@@ -3736,6 +3997,7 @@ static HRESULT WINAPI ddraw_surface2_Initialize(IDirectDrawSurface2 *iface,
 static HRESULT WINAPI ddraw_surface1_Initialize(IDirectDrawSurface *iface,
         IDirectDraw *ddraw, DDSURFACEDESC *surface_desc)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_Initialize\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     DDSURFACEDESC2 surface_desc2;
 
@@ -3778,15 +4040,28 @@ static HRESULT WINAPI d3d_texture1_Initialize(IDirect3DTexture *iface,
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_IsLost(IDirectDrawSurface7 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_IsLost\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
+    BOOL lost;
 
     TRACE("iface %p.\n", iface);
 
-    return ddraw_surface_is_lost(surface) ? DDERR_SURFACELOST : DD_OK;
+    /* MacRunner 2026-08-29 — ОТВЕТ IsLost, а не только факт вызова.
+     *
+     * Diablo делает Lock(READONLY) -> Unlock -> IsLost и на этом умолкает: ни
+     * Blt, ни Flip. Значит решение принимается ЗДЕСЬ. Если поверхность
+     * объявлена потерянной, игра обязана позвать Restore — а она не зовёт;
+     * если не потеряна, должна рисовать — тоже не рисует. Печатаем ответ. */
+    lost = ddraw_surface_is_lost(surface);
+    ERR( "macrunner-ddraw-веха: surface IsLost ответ=%s поверхность=%p\n",
+         lost ? "ПОТЕРЯНА" : "цела", surface );
+
+    return lost ? DDERR_SURFACELOST : DD_OK;
 }
 
 static HRESULT WINAPI ddraw_surface4_IsLost(IDirectDrawSurface4 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_IsLost\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p.\n", iface);
@@ -3796,6 +4071,7 @@ static HRESULT WINAPI ddraw_surface4_IsLost(IDirectDrawSurface4 *iface)
 
 static HRESULT WINAPI ddraw_surface3_IsLost(IDirectDrawSurface3 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_IsLost\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p.\n", iface);
@@ -3805,6 +4081,7 @@ static HRESULT WINAPI ddraw_surface3_IsLost(IDirectDrawSurface3 *iface)
 
 static HRESULT WINAPI ddraw_surface2_IsLost(IDirectDrawSurface2 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_IsLost\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p.\n", iface);
@@ -3814,6 +4091,7 @@ static HRESULT WINAPI ddraw_surface2_IsLost(IDirectDrawSurface2 *iface)
 
 static HRESULT WINAPI ddraw_surface1_IsLost(IDirectDrawSurface *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_IsLost\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p.\n", iface);
@@ -3833,6 +4111,8 @@ static HRESULT WINAPI ddraw_surface1_IsLost(IDirectDrawSurface *iface)
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_Restore(IDirectDrawSurface7 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_Restore\n" ); }
+    ERR( "macrunner-ddraw-веха: surface Restore\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *attachment;
     unsigned int i;
@@ -3898,6 +4178,7 @@ static HRESULT WINAPI ddraw_surface7_Restore(IDirectDrawSurface7 *iface)
 
 static HRESULT WINAPI ddraw_surface4_Restore(IDirectDrawSurface4 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_Restore\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p.\n", iface);
@@ -3907,6 +4188,7 @@ static HRESULT WINAPI ddraw_surface4_Restore(IDirectDrawSurface4 *iface)
 
 static HRESULT WINAPI ddraw_surface3_Restore(IDirectDrawSurface3 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_Restore\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p.\n", iface);
@@ -3916,6 +4198,7 @@ static HRESULT WINAPI ddraw_surface3_Restore(IDirectDrawSurface3 *iface)
 
 static HRESULT WINAPI ddraw_surface2_Restore(IDirectDrawSurface2 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_Restore\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p.\n", iface);
@@ -3925,6 +4208,8 @@ static HRESULT WINAPI ddraw_surface2_Restore(IDirectDrawSurface2 *iface)
 
 static HRESULT WINAPI ddraw_surface1_Restore(IDirectDrawSurface *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_Restore\n" ); }
+    ERR( "macrunner-ddraw-веха: surface Restore\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p.\n", iface);
@@ -3946,6 +4231,7 @@ static HRESULT WINAPI ddraw_surface1_Restore(IDirectDrawSurface *iface)
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_SetOverlayPosition(IDirectDrawSurface7 *iface, LONG x, LONG y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_SetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     HRESULT hr;
 
@@ -3961,6 +4247,7 @@ static HRESULT WINAPI ddraw_surface7_SetOverlayPosition(IDirectDrawSurface7 *ifa
 
 static HRESULT WINAPI ddraw_surface4_SetOverlayPosition(IDirectDrawSurface4 *iface, LONG x, LONG y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_SetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, x %ld, y %ld.\n", iface, x, y);
@@ -3970,6 +4257,7 @@ static HRESULT WINAPI ddraw_surface4_SetOverlayPosition(IDirectDrawSurface4 *ifa
 
 static HRESULT WINAPI ddraw_surface3_SetOverlayPosition(IDirectDrawSurface3 *iface, LONG x, LONG y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_SetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, x %ld, y %ld.\n", iface, x, y);
@@ -3979,6 +4267,7 @@ static HRESULT WINAPI ddraw_surface3_SetOverlayPosition(IDirectDrawSurface3 *ifa
 
 static HRESULT WINAPI ddraw_surface2_SetOverlayPosition(IDirectDrawSurface2 *iface, LONG x, LONG y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_SetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, x %ld, y %ld.\n", iface, x, y);
@@ -3988,6 +4277,7 @@ static HRESULT WINAPI ddraw_surface2_SetOverlayPosition(IDirectDrawSurface2 *ifa
 
 static HRESULT WINAPI ddraw_surface1_SetOverlayPosition(IDirectDrawSurface *iface, LONG x, LONG y)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_SetOverlayPosition\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, x %ld, y %ld.\n", iface, x, y);
@@ -4013,6 +4303,7 @@ static HRESULT WINAPI ddraw_surface1_SetOverlayPosition(IDirectDrawSurface *ifac
 static HRESULT WINAPI ddraw_surface7_UpdateOverlay(IDirectDrawSurface7 *iface, RECT *src_rect,
         IDirectDrawSurface7 *dst_surface, RECT *dst_rect, DWORD flags, DDOVERLAYFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_UpdateOverlay\n" ); }
     struct ddraw_surface *src_impl = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *dst_impl = unsafe_impl_from_IDirectDrawSurface7(dst_surface);
     struct wined3d_texture *dst_wined3d_texture = NULL;
@@ -4041,6 +4332,7 @@ static HRESULT WINAPI ddraw_surface7_UpdateOverlay(IDirectDrawSurface7 *iface, R
 static HRESULT WINAPI ddraw_surface4_UpdateOverlay(IDirectDrawSurface4 *iface, RECT *src_rect,
         IDirectDrawSurface4 *dst_surface, RECT *dst_rect, DWORD flags, DDOVERLAYFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_UpdateOverlay\n" ); }
     struct ddraw_surface *src_impl = impl_from_IDirectDrawSurface4(iface);
     struct ddraw_surface *dst_impl = unsafe_impl_from_IDirectDrawSurface4(dst_surface);
 
@@ -4054,6 +4346,7 @@ static HRESULT WINAPI ddraw_surface4_UpdateOverlay(IDirectDrawSurface4 *iface, R
 static HRESULT WINAPI ddraw_surface3_UpdateOverlay(IDirectDrawSurface3 *iface, RECT *src_rect,
         IDirectDrawSurface3 *dst_surface, RECT *dst_rect, DWORD flags, DDOVERLAYFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_UpdateOverlay\n" ); }
     struct ddraw_surface *src_impl = impl_from_IDirectDrawSurface3(iface);
     struct ddraw_surface *dst_impl = unsafe_impl_from_IDirectDrawSurface3(dst_surface);
 
@@ -4067,6 +4360,7 @@ static HRESULT WINAPI ddraw_surface3_UpdateOverlay(IDirectDrawSurface3 *iface, R
 static HRESULT WINAPI ddraw_surface2_UpdateOverlay(IDirectDrawSurface2 *iface, RECT *src_rect,
         IDirectDrawSurface2 *dst_surface, RECT *dst_rect, DWORD flags, DDOVERLAYFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_UpdateOverlay\n" ); }
     struct ddraw_surface *src_impl = impl_from_IDirectDrawSurface2(iface);
     struct ddraw_surface *dst_impl = unsafe_impl_from_IDirectDrawSurface2(dst_surface);
 
@@ -4080,6 +4374,8 @@ static HRESULT WINAPI ddraw_surface2_UpdateOverlay(IDirectDrawSurface2 *iface, R
 static HRESULT WINAPI ddraw_surface1_UpdateOverlay(IDirectDrawSurface *iface, RECT *src_rect,
         IDirectDrawSurface *dst_surface, RECT *dst_rect, DWORD flags, DDOVERLAYFX *fx)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_UpdateOverlay\n" ); }
+    ERR( "macrunner-ddraw-веха: surface UpdateOverlay\n" );
     struct ddraw_surface *src_impl = impl_from_IDirectDrawSurface(iface);
     struct ddraw_surface *dst_impl = unsafe_impl_from_IDirectDrawSurface(dst_surface);
 
@@ -4103,6 +4399,7 @@ static HRESULT WINAPI ddraw_surface1_UpdateOverlay(IDirectDrawSurface *iface, RE
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_UpdateOverlayDisplay(IDirectDrawSurface7 *iface, DWORD Flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_UpdateOverlayDisplay\n" ); }
     TRACE("iface %p, flags %#lx.\n", iface, Flags);
 
     return DDERR_UNSUPPORTED;
@@ -4110,6 +4407,7 @@ static HRESULT WINAPI ddraw_surface7_UpdateOverlayDisplay(IDirectDrawSurface7 *i
 
 static HRESULT WINAPI ddraw_surface4_UpdateOverlayDisplay(IDirectDrawSurface4 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_UpdateOverlayDisplay\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -4119,6 +4417,7 @@ static HRESULT WINAPI ddraw_surface4_UpdateOverlayDisplay(IDirectDrawSurface4 *i
 
 static HRESULT WINAPI ddraw_surface3_UpdateOverlayDisplay(IDirectDrawSurface3 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_UpdateOverlayDisplay\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -4128,6 +4427,7 @@ static HRESULT WINAPI ddraw_surface3_UpdateOverlayDisplay(IDirectDrawSurface3 *i
 
 static HRESULT WINAPI ddraw_surface2_UpdateOverlayDisplay(IDirectDrawSurface2 *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_UpdateOverlayDisplay\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -4137,6 +4437,7 @@ static HRESULT WINAPI ddraw_surface2_UpdateOverlayDisplay(IDirectDrawSurface2 *i
 
 static HRESULT WINAPI ddraw_surface1_UpdateOverlayDisplay(IDirectDrawSurface *iface, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_UpdateOverlayDisplay\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, flags %#lx.\n", iface, flags);
@@ -4160,9 +4461,12 @@ static HRESULT WINAPI ddraw_surface1_UpdateOverlayDisplay(IDirectDrawSurface *if
 static HRESULT WINAPI ddraw_surface7_UpdateOverlayZOrder(IDirectDrawSurface7 *iface,
         DWORD flags, IDirectDrawSurface7 *reference)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_UpdateOverlayZOrder\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
-
-    FIXME("iface %p, flags %#lx, reference %p stub!\n", iface, flags, reference);
+    /* Не заглушка: аппаратных оверлеев на этом оборудовании нет, и для
+     * не-оверлейной поверхности DDERR_NOTAOVERLAYSURFACE — ровно тот ответ,
+     * который даёт настоящий DirectDraw. */
+    TRACE("iface %p, flags %#lx, reference %p.\n", iface, flags, reference);
 
     wined3d_mutex_lock();
     if (!(surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_OVERLAY))
@@ -4179,6 +4483,7 @@ static HRESULT WINAPI ddraw_surface7_UpdateOverlayZOrder(IDirectDrawSurface7 *if
 static HRESULT WINAPI ddraw_surface4_UpdateOverlayZOrder(IDirectDrawSurface4 *iface,
         DWORD flags, IDirectDrawSurface4 *reference)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_UpdateOverlayZOrder\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
     struct ddraw_surface *reference_impl = unsafe_impl_from_IDirectDrawSurface4(reference);
 
@@ -4191,6 +4496,7 @@ static HRESULT WINAPI ddraw_surface4_UpdateOverlayZOrder(IDirectDrawSurface4 *if
 static HRESULT WINAPI ddraw_surface3_UpdateOverlayZOrder(IDirectDrawSurface3 *iface,
         DWORD flags, IDirectDrawSurface3 *reference)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_UpdateOverlayZOrder\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     struct ddraw_surface *reference_impl = unsafe_impl_from_IDirectDrawSurface3(reference);
 
@@ -4203,6 +4509,7 @@ static HRESULT WINAPI ddraw_surface3_UpdateOverlayZOrder(IDirectDrawSurface3 *if
 static HRESULT WINAPI ddraw_surface2_UpdateOverlayZOrder(IDirectDrawSurface2 *iface,
         DWORD flags, IDirectDrawSurface2 *reference)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_UpdateOverlayZOrder\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
     struct ddraw_surface *reference_impl = unsafe_impl_from_IDirectDrawSurface2(reference);
 
@@ -4215,6 +4522,7 @@ static HRESULT WINAPI ddraw_surface2_UpdateOverlayZOrder(IDirectDrawSurface2 *if
 static HRESULT WINAPI ddraw_surface1_UpdateOverlayZOrder(IDirectDrawSurface *iface,
         DWORD flags, IDirectDrawSurface *reference)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_UpdateOverlayZOrder\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
     struct ddraw_surface *reference_impl = unsafe_impl_from_IDirectDrawSurface(reference);
 
@@ -4240,6 +4548,7 @@ static HRESULT WINAPI ddraw_surface1_UpdateOverlayZOrder(IDirectDrawSurface *ifa
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetDDInterface(IDirectDrawSurface7 *iface, void **DD)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetDDInterface\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, ddraw %p.\n", iface, DD);
@@ -4273,6 +4582,7 @@ static HRESULT WINAPI ddraw_surface7_GetDDInterface(IDirectDrawSurface7 *iface, 
 
 static HRESULT WINAPI ddraw_surface4_GetDDInterface(IDirectDrawSurface4 *iface, void **ddraw)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetDDInterface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, ddraw %p.\n", iface, ddraw);
@@ -4282,6 +4592,7 @@ static HRESULT WINAPI ddraw_surface4_GetDDInterface(IDirectDrawSurface4 *iface, 
 
 static HRESULT WINAPI ddraw_surface3_GetDDInterface(IDirectDrawSurface3 *iface, void **ddraw)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetDDInterface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, ddraw %p.\n", iface, ddraw);
@@ -4291,6 +4602,7 @@ static HRESULT WINAPI ddraw_surface3_GetDDInterface(IDirectDrawSurface3 *iface, 
 
 static HRESULT WINAPI ddraw_surface2_GetDDInterface(IDirectDrawSurface2 *iface, void **ddraw)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetDDInterface\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, ddraw %p.\n", iface, ddraw);
@@ -4300,6 +4612,7 @@ static HRESULT WINAPI ddraw_surface2_GetDDInterface(IDirectDrawSurface2 *iface, 
 
 static HRESULT WINAPI ddraw_surface7_ChangeUniquenessValue(IDirectDrawSurface7 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_ChangeUniquenessValue\n" ); }
     TRACE("iface %p.\n", iface);
 
     return DD_OK;
@@ -4307,6 +4620,7 @@ static HRESULT WINAPI ddraw_surface7_ChangeUniquenessValue(IDirectDrawSurface7 *
 
 static HRESULT WINAPI ddraw_surface4_ChangeUniquenessValue(IDirectDrawSurface4 *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_ChangeUniquenessValue\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p.\n", iface);
@@ -4316,6 +4630,7 @@ static HRESULT WINAPI ddraw_surface4_ChangeUniquenessValue(IDirectDrawSurface4 *
 
 static HRESULT WINAPI ddraw_surface7_GetUniquenessValue(IDirectDrawSurface7 *iface, DWORD *pValue)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetUniquenessValue\n" ); }
     TRACE("iface %p, value %p.\n", iface, pValue);
 
     *pValue = 0;
@@ -4325,6 +4640,7 @@ static HRESULT WINAPI ddraw_surface7_GetUniquenessValue(IDirectDrawSurface7 *ifa
 
 static HRESULT WINAPI ddraw_surface4_GetUniquenessValue(IDirectDrawSurface4 *iface, DWORD *pValue)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetUniquenessValue\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, value %p.\n", iface, pValue);
@@ -4347,6 +4663,7 @@ static HRESULT WINAPI ddraw_surface4_GetUniquenessValue(IDirectDrawSurface4 *ifa
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_SetLOD(IDirectDrawSurface7 *iface, DWORD MaxLOD)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_SetLOD\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     struct d3d_device *device;
 
@@ -4389,6 +4706,7 @@ static HRESULT WINAPI ddraw_surface7_SetLOD(IDirectDrawSurface7 *iface, DWORD Ma
  *****************************************************************************/
 static HRESULT WINAPI ddraw_surface7_GetLOD(IDirectDrawSurface7 *iface, DWORD *MaxLOD)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetLOD\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, lod %p.\n", iface, MaxLOD);
@@ -4428,6 +4746,7 @@ static HRESULT WINAPI ddraw_surface7_GetLOD(IDirectDrawSurface7 *iface, DWORD *M
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_BltFast(IDirectDrawSurface7 *iface,
         DWORD dst_x, DWORD dst_y, IDirectDrawSurface7 *src_surface, RECT *src_rect, DWORD trans)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_BltFast\n" ); }
     struct ddraw_surface *dst_impl = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface7(src_surface);
     DWORD flags = WINED3D_BLT_SYNCHRONOUS;
@@ -4495,6 +4814,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface7_BltFast(IDirectDrawSurfac
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_BltFast(IDirectDrawSurface4 *iface, DWORD dst_x, DWORD dst_y,
         IDirectDrawSurface4 *src_surface, RECT *src_rect, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_BltFast\n" ); }
     struct ddraw_surface *dst_impl = impl_from_IDirectDrawSurface4(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface4(src_surface);
 
@@ -4508,6 +4828,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface4_BltFast(IDirectDrawSurfac
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_BltFast(IDirectDrawSurface3 *iface, DWORD dst_x, DWORD dst_y,
         IDirectDrawSurface3 *src_surface, RECT *src_rect, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_BltFast\n" ); }
     struct ddraw_surface *dst_impl = impl_from_IDirectDrawSurface3(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface3(src_surface);
 
@@ -4521,6 +4842,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface3_BltFast(IDirectDrawSurfac
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface2_BltFast(IDirectDrawSurface2 *iface, DWORD dst_x, DWORD dst_y,
         IDirectDrawSurface2 *src_surface, RECT *src_rect, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_BltFast\n" ); }
     struct ddraw_surface *dst_impl = impl_from_IDirectDrawSurface2(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface2(src_surface);
 
@@ -4534,6 +4856,8 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface2_BltFast(IDirectDrawSurfac
 static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_BltFast(IDirectDrawSurface *iface, DWORD dst_x, DWORD dst_y,
         IDirectDrawSurface *src_surface, RECT *src_rect, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_BltFast\n" ); }
+    ERR( "macrunner-ddraw-веха: surface BltFast\n" );
     struct ddraw_surface *dst_impl = impl_from_IDirectDrawSurface(iface);
     struct ddraw_surface *src_impl = unsafe_impl_from_IDirectDrawSurface(src_surface);
 
@@ -4546,6 +4870,7 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH ddraw_surface1_BltFast(IDirectDrawSurfac
 
 static HRESULT WINAPI ddraw_surface7_GetClipper(IDirectDrawSurface7 *iface, IDirectDrawClipper **clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetClipper\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4571,6 +4896,7 @@ static HRESULT WINAPI ddraw_surface7_GetClipper(IDirectDrawSurface7 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface4_GetClipper(IDirectDrawSurface4 *iface, IDirectDrawClipper **clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetClipper\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4580,6 +4906,7 @@ static HRESULT WINAPI ddraw_surface4_GetClipper(IDirectDrawSurface4 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface3_GetClipper(IDirectDrawSurface3 *iface, IDirectDrawClipper **clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetClipper\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4589,6 +4916,7 @@ static HRESULT WINAPI ddraw_surface3_GetClipper(IDirectDrawSurface3 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface2_GetClipper(IDirectDrawSurface2 *iface, IDirectDrawClipper **clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetClipper\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4598,6 +4926,8 @@ static HRESULT WINAPI ddraw_surface2_GetClipper(IDirectDrawSurface2 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface1_GetClipper(IDirectDrawSurface *iface, IDirectDrawClipper **clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetClipper\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetClipper\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4620,6 +4950,7 @@ static HRESULT WINAPI ddraw_surface1_GetClipper(IDirectDrawSurface *iface, IDire
 static HRESULT WINAPI ddraw_surface7_SetClipper(IDirectDrawSurface7 *iface,
         IDirectDrawClipper *iclipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_SetClipper\n" ); }
     struct ddraw_surface *This = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_clipper *clipper = unsafe_impl_from_IDirectDrawClipper(iclipper);
     struct ddraw_clipper *old_clipper = This->clipper;
@@ -4667,6 +4998,7 @@ static HRESULT WINAPI ddraw_surface7_SetClipper(IDirectDrawSurface7 *iface,
 
 static HRESULT WINAPI ddraw_surface4_SetClipper(IDirectDrawSurface4 *iface, IDirectDrawClipper *clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_SetClipper\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4676,6 +5008,7 @@ static HRESULT WINAPI ddraw_surface4_SetClipper(IDirectDrawSurface4 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface3_SetClipper(IDirectDrawSurface3 *iface, IDirectDrawClipper *clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_SetClipper\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4685,6 +5018,7 @@ static HRESULT WINAPI ddraw_surface3_SetClipper(IDirectDrawSurface3 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface2_SetClipper(IDirectDrawSurface2 *iface, IDirectDrawClipper *clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_SetClipper\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4694,6 +5028,8 @@ static HRESULT WINAPI ddraw_surface2_SetClipper(IDirectDrawSurface2 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface1_SetClipper(IDirectDrawSurface *iface, IDirectDrawClipper *clipper)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_SetClipper\n" ); }
+    ERR( "macrunner-ddraw-веха: surface SetClipper\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, clipper %p.\n", iface, clipper);
@@ -4741,6 +5077,7 @@ static void ddraw_surface_sync_color_keys(struct ddraw_surface *surface)
 
 static HRESULT WINAPI ddraw_surface7_SetSurfaceDesc(IDirectDrawSurface7 *iface, DDSURFACEDESC2 *DDSD, DWORD Flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_SetSurfaceDesc\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     enum wined3d_format_id current_format_id, format_id;
     HRESULT hr;
@@ -5010,6 +5347,7 @@ static HRESULT WINAPI ddraw_surface7_SetSurfaceDesc(IDirectDrawSurface7 *iface, 
 static HRESULT WINAPI ddraw_surface4_SetSurfaceDesc(IDirectDrawSurface4 *iface,
         DDSURFACEDESC2 *surface_desc, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_SetSurfaceDesc\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, surface_desc %p, flags %#lx.\n", iface, surface_desc, flags);
@@ -5021,6 +5359,7 @@ static HRESULT WINAPI ddraw_surface4_SetSurfaceDesc(IDirectDrawSurface4 *iface,
 static HRESULT WINAPI ddraw_surface3_SetSurfaceDesc(IDirectDrawSurface3 *iface,
         DDSURFACEDESC *surface_desc, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_SetSurfaceDesc\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
     DDSURFACEDESC2 surface_desc2;
 
@@ -5033,6 +5372,7 @@ static HRESULT WINAPI ddraw_surface3_SetSurfaceDesc(IDirectDrawSurface3 *iface,
 
 static HRESULT WINAPI ddraw_surface7_GetPalette(IDirectDrawSurface7 *iface, IDirectDrawPalette **palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_GetPalette\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
     struct ddraw_palette *palette_impl;
     HRESULT hr = DD_OK;
@@ -5065,6 +5405,7 @@ static HRESULT WINAPI ddraw_surface7_GetPalette(IDirectDrawSurface7 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface4_GetPalette(IDirectDrawSurface4 *iface, IDirectDrawPalette **palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_GetPalette\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5074,6 +5415,7 @@ static HRESULT WINAPI ddraw_surface4_GetPalette(IDirectDrawSurface4 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface3_GetPalette(IDirectDrawSurface3 *iface, IDirectDrawPalette **palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_GetPalette\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5083,6 +5425,7 @@ static HRESULT WINAPI ddraw_surface3_GetPalette(IDirectDrawSurface3 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface2_GetPalette(IDirectDrawSurface2 *iface, IDirectDrawPalette **palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_GetPalette\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5092,6 +5435,8 @@ static HRESULT WINAPI ddraw_surface2_GetPalette(IDirectDrawSurface2 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface1_GetPalette(IDirectDrawSurface *iface, IDirectDrawPalette **palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_GetPalette\n" ); }
+    ERR( "macrunner-ddraw-веха: surface GetPalette\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5183,6 +5528,7 @@ static HRESULT ddraw_surface_set_color_key(struct ddraw_surface *surface, DWORD 
 
 static HRESULT WINAPI ddraw_surface7_SetColorKey(IDirectDrawSurface7 *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_SetColorKey\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -5195,6 +5541,7 @@ static HRESULT WINAPI ddraw_surface7_SetColorKey(IDirectDrawSurface7 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface4_SetColorKey(IDirectDrawSurface4 *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_SetColorKey\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -5204,6 +5551,7 @@ static HRESULT WINAPI ddraw_surface4_SetColorKey(IDirectDrawSurface4 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface3_SetColorKey(IDirectDrawSurface3 *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_SetColorKey\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -5213,6 +5561,7 @@ static HRESULT WINAPI ddraw_surface3_SetColorKey(IDirectDrawSurface3 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface2_SetColorKey(IDirectDrawSurface2 *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_SetColorKey\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -5222,6 +5571,8 @@ static HRESULT WINAPI ddraw_surface2_SetColorKey(IDirectDrawSurface2 *iface, DWO
 
 static HRESULT WINAPI ddraw_surface1_SetColorKey(IDirectDrawSurface *iface, DWORD flags, DDCOLORKEY *color_key)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_SetColorKey\n" ); }
+    ERR( "macrunner-ddraw-веха: surface SetColorKey\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, flags %#lx, color_key %p.\n", iface, flags, color_key);
@@ -5231,6 +5582,8 @@ static HRESULT WINAPI ddraw_surface1_SetColorKey(IDirectDrawSurface *iface, DWOR
 
 static HRESULT WINAPI ddraw_surface7_SetPalette(IDirectDrawSurface7 *iface, IDirectDrawPalette *palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface7_SetPalette\n" ); }
+    ERR( "macrunner-ddraw-веха: surface SetPalette\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5248,6 +5601,7 @@ static HRESULT WINAPI ddraw_surface7_SetPalette(IDirectDrawSurface7 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface4_SetPalette(IDirectDrawSurface4 *iface, IDirectDrawPalette *palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface4_SetPalette\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface4(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5263,6 +5617,7 @@ static HRESULT WINAPI ddraw_surface4_SetPalette(IDirectDrawSurface4 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface3_SetPalette(IDirectDrawSurface3 *iface, IDirectDrawPalette *palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface3_SetPalette\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface3(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5278,6 +5633,7 @@ static HRESULT WINAPI ddraw_surface3_SetPalette(IDirectDrawSurface3 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface2_SetPalette(IDirectDrawSurface2 *iface, IDirectDrawPalette *palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface2_SetPalette\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface2(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5293,6 +5649,8 @@ static HRESULT WINAPI ddraw_surface2_SetPalette(IDirectDrawSurface2 *iface, IDir
 
 static HRESULT WINAPI ddraw_surface1_SetPalette(IDirectDrawSurface *iface, IDirectDrawPalette *palette)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_surface1_SetPalette\n" ); }
+    ERR( "macrunner-ddraw-веха: surface SetPalette\n" );
     struct ddraw_surface *surface = impl_from_IDirectDrawSurface(iface);
 
     TRACE("iface %p, palette %p.\n", iface, palette);
@@ -5323,6 +5681,7 @@ static HRESULT WINAPI ddraw_surface1_SetPalette(IDirectDrawSurface *iface, IDire
 static HRESULT WINAPI ddraw_gamma_control_GetGammaRamp(IDirectDrawGammaControl *iface,
         DWORD flags, DDGAMMARAMP *gamma_ramp)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_gamma_control_GetGammaRamp\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawGammaControl(iface);
 
     TRACE("iface %p, flags %#lx, gamma_ramp %p.\n", iface, flags, gamma_ramp);
@@ -5365,6 +5724,7 @@ static HRESULT WINAPI ddraw_gamma_control_GetGammaRamp(IDirectDrawGammaControl *
 static HRESULT WINAPI ddraw_gamma_control_SetGammaRamp(IDirectDrawGammaControl *iface,
         DWORD flags, DDGAMMARAMP *gamma_ramp)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_gamma_control_SetGammaRamp\n" ); }
     struct ddraw_surface *surface = impl_from_IDirectDrawGammaControl(iface);
 
     TRACE("iface %p, flags %#lx, gamma_ramp %p.\n", iface, flags, gamma_ramp);
@@ -5404,9 +5764,40 @@ static HRESULT WINAPI ddraw_gamma_control_SetGammaRamp(IDirectDrawGammaControl *
  *  D3D_OK, because it's a stub
  *
  *****************************************************************************/
+/* Приложение сообщает: записи палитры [start, start+count) изменились, и
+ * содержимое, разложенное по СТАРОЙ палитре, устарело. Раньше здесь стоял
+ * `return D3D_OK` — уведомление терялось, и палитровая текстура оставалась в
+ * прежних цветах до тех пор, пока её не тронут по другой причине.
+ *
+ * Проверяем параметры (палитра DirectDraw — ровно 256 записей) и перезаливаем
+ * содержимое тем же путём, каким это делает смена палитры у поверхности. */
 static HRESULT WINAPI d3d_texture2_PaletteChanged(IDirect3DTexture2 *iface, DWORD start, DWORD count)
 {
-    FIXME("iface %p, start %lu, count %lu stub!\n", iface, start, count);
+    struct ddraw_surface *surface = impl_from_IDirect3DTexture2(iface);
+
+    TRACE("iface %p, start %lu, count %lu.\n", iface, start, count);
+
+    if (start > 255 || count > 256 || start + count > 256)
+        return DDERR_INVALIDPARAMS;
+    if (!count)
+        return D3D_OK;
+
+    wined3d_mutex_lock();
+
+    if (!surface->palette)
+    {
+        /* Палитры нет — сообщать не о чем, и это не ошибка вызывающего. */
+        wined3d_mutex_unlock();
+        return D3D_OK;
+    }
+
+    /* Переустановка той же палитры доводит изменение до wined3d: там оно
+     * помечает содержимое требующим перезаливки. */
+    wined3d_texture_set_color_key(surface->wined3d_texture, WINED3D_CKEY_SRC_BLT,
+            (surface->surface_desc.dwFlags & DDSD_CKSRCBLT)
+            ? (struct wined3d_color_key *)&surface->surface_desc.ddckCKSrcBlt : NULL);
+
+    wined3d_mutex_unlock();
 
     return D3D_OK;
 }
@@ -6728,7 +7119,11 @@ HRESULT ddraw_surface_create(struct ddraw *ddraw, const DDSURFACEDESC2 *surface_
         return DDERR_INVALIDCAPS;
     }
 
-    if (FAILED(hr = wined3d_output_get_display_mode(ddraw->wined3d_output, &mode, NULL)))
+    ERR( "macrunner-ddraw-шаг: surface_create перед get_display_mode\n" );
+    hr = wined3d_output_get_display_mode(ddraw->wined3d_output, &mode, NULL);
+    ERR( "macrunner-ddraw-шаг: surface_create после get_display_mode hr=%#lx %ux%u\n",
+         hr, mode.width, mode.height );
+    if (FAILED(hr))
     {
         ERR("Failed to get display mode, hr %#lx.\n", hr);
         free(texture);
@@ -6778,13 +7173,19 @@ HRESULT ddraw_surface_create(struct ddraw *ddraw, const DDSURFACEDESC2 *surface_
         {
             struct wined3d_swapchain_desc swapchain_desc;
 
+            ERR( "macrunner-ddraw-шаг: surface_create перед swapchain_get_desc\n" );
             wined3d_swapchain_get_desc(ddraw->wined3d_swapchain, &swapchain_desc);
+            ERR( "macrunner-ddraw-шаг: surface_create после swapchain_get_desc\n" );
             swapchain_desc.backbuffer_width = mode.width;
             swapchain_desc.backbuffer_height = mode.height;
             swapchain_desc.backbuffer_format = mode.format_id;
 
-            if (FAILED(hr = wined3d_device_reset(ddraw->wined3d_device,
-                    &swapchain_desc, NULL, ddraw_reset_enum_callback, FALSE)))
+            ERR( "macrunner-ddraw-шаг: surface_create ПЕРЕД device_reset %ux%u\n",
+                 swapchain_desc.backbuffer_width, swapchain_desc.backbuffer_height );
+            hr = wined3d_device_reset(ddraw->wined3d_device,
+                    &swapchain_desc, NULL, ddraw_reset_enum_callback, FALSE);
+            ERR( "macrunner-ddraw-шаг: surface_create ПОСЛЕ device_reset hr=%#lx\n", hr );
+            if (FAILED(hr))
             {
                 ERR("Failed to reset device.\n");
                 free(texture);

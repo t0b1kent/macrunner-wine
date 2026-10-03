@@ -24,8 +24,11 @@
 #pragma makedep unix
 #endif
 
-#include <pthread.h>
 #include <assert.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "win32u_private.h"
@@ -83,6 +86,14 @@ static pthread_mutex_t winproc_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct list class_list = LIST_INIT( class_list );
 
 HINSTANCE user32_module = 0;
+
+static BOOL trace_secondary_window_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) enabled = getenv("MACRUNNER_TRACE_SECONDARY_WINDOW") != NULL;
+    return enabled;
+}
 
 /* find an existing winproc for a given function and type */
 /* FIXME: probably should do something more clever than a linear search */
@@ -250,8 +261,9 @@ static void init_user(void)
     NtQuerySystemInformation( SystemBasicInformation, &system_info, sizeof(system_info), NULL );
 
     init_startup_info();
-    shared_session_init();
+    /* Driver/desktop bootstrap can load cursors before shared session init returns. */
     gdi_init();
+    shared_session_init();
     sysparams_init();
     winstation_init();
     register_desktop_class();
@@ -1198,6 +1210,7 @@ static void register_builtin( const struct builtin_class_descr *descr )
     UNICODE_STRING name, version = { .Length = 0 };
     struct client_menu_name menu_name = { 0 };
     WCHAR nameW[64];
+    ATOM atom;
     WNDCLASSEXW class = {
         .cbSize = sizeof(class),
         .hInstance = user32_module,
@@ -1214,7 +1227,15 @@ static void register_builtin( const struct builtin_class_descr *descr )
     asciiz_to_unicode( nameW, descr->name );
     RtlInitUnicodeString( &name, nameW );
 
-    if (!NtUserRegisterClassExWOW( &class, &name, &version, &menu_name, 1, 0, NULL ) && class.hCursor)
+    atom = NtUserRegisterClassExWOW( &class, &name, &version, &menu_name, 1, 0, NULL );
+    if (trace_secondary_window_enabled() &&
+        (!strcmp( descr->name, "#32768" ) || !strcmp( descr->name, "#32770" )))
+        fprintf( stderr, "macrunner-secondary: stage=register_builtin_class pid=%lu name=%s atom=%u "
+                 "user32_module=%p last_error=%lu proc=%p extra=%d\n",
+                 GetCurrentProcessId(), descr->name, atom, user32_module, RtlGetLastWin32Error(),
+                 class.lpfnWndProc, class.cbWndExtra );
+
+    if (!atom && class.hCursor)
         NtUserDestroyCursor( class.hCursor, 0 );
 }
 
@@ -1234,9 +1255,15 @@ static void register_builtins(void)
         .cursor = IDC_IBEAM,
     };
 
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=register_builtins_enter pid=%lu user32_module=%p\n",
+                 GetCurrentProcessId(), user32_module );
     for (i = 0; i < ARRAYSIZE(builtin_classes); i++) register_builtin( &builtin_classes[i] );
     register_builtin( &edit_class );
     KeUserModeCallback( NtUserInitBuiltinClasses, NULL, 0, &ret_ptr, &ret_len );
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=register_builtins_exit pid=%lu user32_module=%p\n",
+                 GetCurrentProcessId(), user32_module );
 }
 
 /***********************************************************************
@@ -1244,8 +1271,29 @@ static void register_builtins(void)
  */
 void register_builtin_classes(void)
 {
-    static pthread_once_t init_once = PTHREAD_ONCE_INIT;
-    pthread_once( &init_once, register_builtins );
+    static pthread_mutex_t init_mutex = PTHREAD_MUTEX_INITIALIZER;
+    static pthread_cond_t init_cond = PTHREAD_COND_INITIALIZER;
+    static pthread_t init_thread;
+    static int init_state;
+
+    pthread_mutex_lock( &init_mutex );
+    while (init_state == 1 && !pthread_equal( init_thread, pthread_self() ))
+        pthread_cond_wait( &init_cond, &init_mutex );
+    if (init_state)
+    {
+        pthread_mutex_unlock( &init_mutex );
+        return;
+    }
+    init_state = 1;
+    init_thread = pthread_self();
+    pthread_mutex_unlock( &init_mutex );
+
+    register_builtins();
+
+    pthread_mutex_lock( &init_mutex );
+    init_state = 2;
+    pthread_cond_broadcast( &init_cond );
+    pthread_mutex_unlock( &init_mutex );
 }
 
 /***********************************************************************

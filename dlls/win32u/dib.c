@@ -79,8 +79,80 @@
 #include "ntgdi_private.h"
 #include "wine/debug.h"
 
-WINE_DEFAULT_DEBUG_CHANNEL(bitmap);
+/* ★★★ 06.09.2026, лейн ПРИБОРЫ-3 — hb_probe В win32u.so, БЕЗ ЛИНКОВКИ ТРАНСЛЯТОРА.
+ *
+ * ЗАЧЕМ. База лейна писала: «hb_probe применим только там, где линкуется
+ * libhyperbridge.a: ntdll.so, xtajit.so, xtajit64.so. В win32u.so его НЕТ — поэтому
+ * sdib в партию не взят. Это ограничение НАШЕГО устройства, а не внешнее». Верно, и
+ * потому оно здесь снято, а не описано сметой.
+ *
+ * ПОЧЕМУ ВКЛЮЧЕНИЕМ, А НЕ ССЫЛКОЙ НА БИБЛИОТЕКУ. Линковать в win32u.so весь
+ * libhyperbridge.a (1,4 МБ транслятора) ради 294 строк учёта — плата ни за что, да ещё
+ * со вторым экземпляром состояния движка в чужом образе. Включение даёт ровно нужное:
+ * СВОЙ реестр приборов в win32u.so, своя перепись, свой ответ dladdr — а он тут и есть
+ * главная ценность, потому что путь sdib проходит именно через этот образ.
+ *
+ * ПОЧЕМУ НЕ КОПИЯ ИСХОДНИКА. Копия разъехалась бы с оригиналом — тот самый дефект, от
+ * которого лейн лечит других. Источник ОДИН, включается по пути.
+ *
+ * ПОЧЕМУ ИМЕННО В dib.c. Реализация обязана попасть в образ РОВНО ОДИН РАЗ. Второе
+ * включение в другом файле win32u даст ошибку компоновки (дублирование символов) —
+ * то есть нарушение будет ГРОМКИМ, а не молчаливым. Остальным файлам win32u достаточно
+ * `#include "hb_probe.h"`.
+ *
+ * Половина юниксовая (dib.o лежит в списке объектов win32u.so, PE-половина win32u
+ * состоит из одного main.o), значит libc и dladdr на месте. */
+#include "hb_probe.h"
+#include "../../../hyperbridge/src/hb_probe.c"
 
+/* Популяция названа так, чтобы ЧУЖОЙ путь нельзя было прочитать как свой ноль:
+ * сказано и что считается, и что НЕ считается, поимённо. */
+HB_PROBE_DEFINE(pr_sdib, "sdib",
+                "вызовы NtGdiStretchDIBits, дошедшие до возврата (растр из памяти "
+                "гостя на HDC). НЕ считает: BitBlt/StretchBlt, вывод через DIB-секцию, "
+                "любой путь драйвера мимо этой обёртки и видеозаставки Smacker — они "
+                "идут другой дорогой, и ноль здесь НЕ означает, что растров не было",
+                NULL, 4096);
+
+/* ★★★ 26.08.2026 — СВОЯ БАЗА В ЖУРНАЛ, ИЗ КОНСТРУКТОРА.
+ *
+ * ntdll печатает карту при своей загрузке, когда win32u ещё не загружен, — и в журнале
+ * его базы нет. Я пересчитал адрес отказа по базе из ДРУГОГО прогона и получил функцию,
+ * которой на пути не было; прибор, поставленный туда, дал ноль. Час потерян на неверном
+ * сопоставлении.
+ *
+ * Печать идёт из конструктора, на обычном потоке: `dladdr` берёт замки dyld, и вызов из
+ * обработчика сигнала уже приводил к взаимоблокировке (см. signal_arm64.c, шапка
+ * macrunner_hb_print_host_base). */
+static void macrunner_win32u_print_base(void) __attribute__((constructor));
+static void macrunner_win32u_print_base(void)
+{
+    extern int getpid( void );
+    extern uint32_t _dyld_image_count( void );
+    extern const char *_dyld_get_image_name( uint32_t );
+    extern const void *_dyld_get_image_header( uint32_t );
+    uint32_t i, n = _dyld_image_count();
+    for (i = 0; i < n; i++)
+    {
+        const char *имя = _dyld_get_image_name( i );
+        const void *база = _dyld_get_image_header( i );
+        const char *к;
+        if (!имя || !база) continue;
+        к = strrchr( имя, '/' );
+        /* MacRunner 2026-08-27, Diablo — PID И ВСЕ ОБРАЗЫ.
+         *
+         * Было два изъяна, и оба уже стоили времени. Первый: строка не несла pid, а под
+         * Diablo живут несколько процессов сразу, и в журнале их базы лежат вперемешку —
+         * сопоставить адрес отказа было не с чем. Второй: фильтр по "/lib/wine/" отбрасывал
+         * всё остальное, и кадр размотки, попавший в системную библиотеку или в чужой
+         * модуль, оставался неопознанным. */
+        fprintf( stderr, "macrunner-hb-модуль-win32u: pid=%d base=%p %s\n",
+                 (int)getpid(), база, к ? к + 1 : имя );
+    }
+    fflush( stderr );
+}
+
+WINE_DEFAULT_DEBUG_CHANNEL(bitmap);
 
 static INT DIB_GetObject( HGDIOBJ handle, INT count, LPVOID buffer );
 static BOOL DIB_DeleteObject( HGDIOBJ handle );
@@ -625,10 +697,10 @@ done:
 /***********************************************************************
  *           NtGdiStretchDIBitsInternal   (win32u.@)
  */
-INT WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT xDst, INT yDst, INT widthDst, INT heightDst,
-                                       INT xSrc, INT ySrc, INT widthSrc, INT heightSrc,
-                                       const void *bits, const BITMAPINFO *bmi, UINT coloruse,
-                                       DWORD rop, UINT max_info, UINT max_bits, HANDLE xform )
+INT MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT xDst, INT yDst, INT widthDst, INT heightDst,
+                                                                      INT xSrc, INT ySrc, INT widthSrc, INT heightSrc,
+                                                                      const void *bits, const BITMAPINFO *bmi, UINT coloruse,
+                                                                      DWORD rop, UINT max_info, UINT max_bits, HANDLE xform )
 {
     char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
     BITMAPINFO *info = (BITMAPINFO *)buffer;
@@ -637,6 +709,24 @@ INT WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT xDst, INT yDst, INT widthDst
     INT ret = 0;
 
     if (!bits) return 0;
+    /* ★★★ 26.08.2026 — ПРИБОР НА ПРИЁМ: не «перевели ли мы», а «что нам пришло».
+     *
+     * Отказ по адресу 0x016bfb40 (гостевой стек) при нуле промахов перевода означает,
+     * что указатель дошёл до хозяина мимо обёртки. Проверять обёртки по одной — долго;
+     * дешевле спросить у самой win32u, что ей вручили. Гостевые адреса i386 лежат ниже
+     * 4 ГБ, хозяйские — выше, поэтому признак однозначен. */
+    {
+        static unsigned n_guest;
+        unsigned long long b = (unsigned long long)(ULONG_PTR)bits;
+        unsigned long long m = (unsigned long long)(ULONG_PTR)bmi;
+        if ((b && b < 0x100000000ull) || (m && m < 0x100000000ull))
+        {
+            if (++n_guest <= 16)
+                MESSAGE( "macrunner-win32u-guest-ptr: n=%u ГОСТЕВОЙ УКАЗАТЕЛЬ В win32u "
+                         "bits=%p bmi=%p — обёртка НЕ ПЕРЕВЕЛА\n",
+                         n_guest, bits, bmi );
+        }
+    }
     if (!bitmapinfo_from_user_bitmapinfo( info, bmi, coloruse, TRUE ))
     {
         RtlSetLastWin32Error( ERROR_INVALID_PARAMETER );
@@ -651,6 +741,31 @@ INT WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT xDst, INT yDst, INT widthDst
                                               xSrc, ySrc, widthSrc, heightSrc, bits, info, coloruse, rop );
         release_dc_ptr( dc );
     }
+    /* Итерация 438: зонд вписан РУЧНОЙ правкой перед возвратом — обёртка на многострочной
+     * сигнатуре ломает файл (437). Замер 436 дал 36 вызовов этого пути.
+     *
+     * ★★★ 06.09.2026, лейн ПРИБОРЫ-3 — НА НУЛЕ ЭТОГО ПРИБОРА УЖЕ БЫЛ СДЕЛАН ВЫВОД,
+     * и он оказался неверным. Прибор дал «растров крупнее 32x32 — ноль», а на экране в
+     * это время шла заставка Diablo. Вывод «крупных растров нет» был ложным: заставка
+     * идёт МИМО StretchDIBits, то есть мимо этого прибора вовсе. Ноль означал «явление
+     * идёт не через меня» — а прочитан был как «явления нет».
+     *
+     * Что чинится:
+     *   1. ПОПУЛЯЦИЯ НАЗВАНА ВСЛУХ и печатается переписью РЯДОМ с числом. Именно её
+     *      отсутствие и позволило прочитать чужой ноль как свой;
+     *   2. ГДЕ ЖИВЁТ прибор говорит dladdr — win32u.so; путь заставки в этом образе
+     *      не лежит, и теперь это видно, а не додумывается;
+     *   3. ПОТОЛОК БОЛЬШЕ НЕ УСЕКАЕТ МОЛЧА. `static unsigned n` рос ВНУТРИ `if`, то есть
+     *      считал НАПЕЧАТАННОЕ, а не случившееся: при 5000 вызовах он остановился бы на
+     *      4096 и объявил бы это полным счётом. Теперь hits растёт всегда, печать
+     *      ограничена, а состояние EVENTS-TRUNCATED само объявляет число нижней границей;
+     *   4. LOOKED стоит ВЫШЕ всякого условия — «до меня не дошло управление»
+     *      (NOT-OBSERVED) отличимо от «дошло, вызовов не было». */
+    HB_PROBE_LOOKED( &pr_sdib );
+    HB_PROBE_SAY( &pr_sdib,
+                  "ret=%d hdc=%p dst=%d,%d %dx%d src=%d,%d %dx%d rop=%06x\n",
+                  (int)ret, hdc, (int)xDst, (int)yDst, (int)widthDst, (int)heightDst,
+                  (int)xSrc, (int)ySrc, (int)widthSrc, (int)heightSrc, (unsigned)rop );
     return ret;
 }
 
@@ -884,11 +999,11 @@ done:
 /***********************************************************************
  *           NtGdiSetDIBitsToDeviceInternal   (win32u.@)
  */
-INT WINAPI NtGdiSetDIBitsToDeviceInternal( HDC hdc, INT xDest, INT yDest, DWORD cx,
-                                           DWORD cy, INT xSrc, INT ySrc, UINT startscan,
-                                           UINT lines, const void *bits, const BITMAPINFO *bmi,
-                                           UINT coloruse, UINT max_bits, UINT max_info,
-                                           BOOL xform_coords, HANDLE xform )
+INT MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiSetDIBitsToDeviceInternal( HDC hdc, INT xDest, INT yDest, DWORD cx,
+                                                                          DWORD cy, INT xSrc, INT ySrc, UINT startscan,
+                                                                          UINT lines, const void *bits, const BITMAPINFO *bmi,
+                                                                          UINT coloruse, UINT max_bits, UINT max_info,
+                                                                          BOOL xform_coords, HANDLE xform )
 {
     char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
     BITMAPINFO *info = (BITMAPINFO *)buffer;
@@ -1540,8 +1655,8 @@ HBITMAP WINAPI NtGdiCreateDIBSection( HDC hdc, HANDLE section, DWORD offset, con
 
         map_offset.QuadPart = offset - (offset % system_info.AllocationGranularity);
         map_size = bmp->dib.dsBmih.biSizeImage + (offset - map_offset.QuadPart);
-        if (NtMapViewOfSection( section, GetCurrentProcess(), &mapBits, 0, 0, &map_offset,
-                                &map_size, ViewShare, 0, PAGE_READWRITE ))
+        if (win32u_map_view_of_section( section, GetCurrentProcess(), &mapBits, 0, 0, &map_offset,
+                                        &map_size, ViewShare, 0, PAGE_READWRITE ))
             goto error;
         bmp->dib.dsBm.bmBits = (char *)mapBits + (offset - map_offset.QuadPart);
     }

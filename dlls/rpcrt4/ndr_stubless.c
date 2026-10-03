@@ -699,6 +699,26 @@ static void CALLBACK ndr_client_call_finally(BOOL normal, void *arg)
 
 /* Helper for NdrpClientCall2, to factor out the part that may or may not be
  * guarded by a try/except block. */
+
+/* ★★★★★★ MacRunner 2026-08-31 — ПОСЛЕДНЯЯ ВЕХА ПЕРЕД ОТКАЗОМ.
+ *
+ * Стена: управление уходит на адрес данных, цепочка кадров кончается на
+ * `NdrpClientCall2+0x280`. Сама `ndr_client_call` разобрана дизассемблером: 242
+ * инструкции, ни одного косвенного перехода и ни одного хвостового наружу. Значит
+ * управление передаёт функция, которую она зовёт, а раскрутчик её кадр не показывает.
+ * Готовая трасса `MACRUNNER_HB_TRACE_PC` сюда не достаёт — она про ГОСТЕВЫЕ x86 адреса.
+ *
+ * Список вех взят из ДИЗАССЕМБЛЕРА `ndr_client_call`, не из чтения исходника.
+ * Вехи ставятся МАКРОСОМ-обёрткой: отдельный оператор разрывает `if (...) вызов();
+ * else ...` и ломает сборку — поймано первой же попыткой. */
+static int macrunner_ndr_веха( const char *имя )
+{
+    static unsigned int n;
+    if (n++ < 200) ERR( "macrunner-ndr-веха: n=%u %s\n", n, имя );
+    return 0;
+}
+#define ВЕХА(f, ...) (macrunner_ndr_веха(#f), f(__VA_ARGS__))
+
 static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_STRING format,
         const PFORMAT_STRING handle_format, void **stack_top, BOOLEAN fpu_args, MIDL_STUB_MESSAGE *stub_msg,
         unsigned short procedure_number, unsigned short stack_size, unsigned int number_of_params,
@@ -716,13 +736,13 @@ static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_
 
     /* create the full pointer translation tables, if requested */
     if (proc_header->Oi_flags & Oi_FULL_PTR_USED)
-        stub_msg->FullPtrXlatTables = NdrFullPointerXlatInit(0,XLAT_CLIENT);
+        stub_msg->FullPtrXlatTables = ВЕХА(NdrFullPointerXlatInit, 0,XLAT_CLIENT);
 
     if (proc_header->Oi_flags & Oi_OBJECT_PROC)
     {
         /* object is always the first argument */
         This = stack_top[0];
-        NdrProxyInitialize(This, &rpc_msg, stub_msg, stub_desc, procedure_number);
+        ВЕХА(NdrProxyInitialize, This, &rpc_msg, stub_msg, stub_desc, procedure_number);
     }
 
     finally_ctx.stub_msg = stub_msg;
@@ -742,7 +762,7 @@ static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_
 
         /* we only need a handle if this isn't an object method */
         if (!(proc_header->Oi_flags & Oi_OBJECT_PROC))
-            hbinding = client_get_handle(stub_msg, proc_header, handle_format);
+            hbinding = ВЕХА(client_get_handle, stub_msg, proc_header, handle_format);
 
         stub_msg->BufferLength = 0;
 
@@ -752,7 +772,7 @@ static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_
 
         /* use alternate memory allocation routines */
         if (proc_header->Oi_flags & Oi_RPCSS_ALLOC_USED)
-            NdrRpcSmSetClientToOsf(stub_msg);
+            ВЕХА(NdrRpcSmSetClientToOsf, stub_msg);
 
         if (Oif_flags.HasPipes)
         {
@@ -764,7 +784,7 @@ static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_
         if (ext_flags.HasNewCorrDesc)
         {
             /* initialize extra correlation package */
-            NdrCorrelationInitialize(stub_msg, NdrCorrCache, sizeof(NdrCorrCache), 0);
+            ВЕХА(NdrCorrelationInitialize, stub_msg, NdrCorrCache, sizeof(NdrCorrCache), 0);
             if (ext_flags.Unused & 0x2) /* has range on conformance */
                 stub_msg->CorrDespIncrement = 12;
         }
@@ -795,7 +815,7 @@ static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_
         /* 3. GETBUFFER */
         TRACE( "GETBUFFER\n" );
         if (proc_header->Oi_flags & Oi_OBJECT_PROC)
-            NdrProxyGetBuffer(This, stub_msg);
+            ВЕХА(NdrProxyGetBuffer, This, stub_msg);
         else if (Oif_flags.HasPipes)
             FIXME("pipes not supported yet\n");
         else if (proc_header->handle_type == FC_AUTO_HANDLE)
@@ -805,7 +825,7 @@ static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_
             FIXME("using auto handle - call NdrNsGetBuffer when it gets implemented\n");
 #endif
         else
-            NdrGetBuffer(stub_msg, stub_msg->BufferLength, hbinding);
+            ВЕХА(NdrGetBuffer, stub_msg, stub_msg->BufferLength, hbinding);
 
         /* 4. MARSHAL */
         TRACE( "MARSHAL\n" );
@@ -815,7 +835,7 @@ static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_
         /* 5. SENDRECEIVE */
         TRACE( "SENDRECEIVE\n" );
         if (proc_header->Oi_flags & Oi_OBJECT_PROC)
-            NdrProxySendReceive(This, stub_msg);
+            ВЕХА(NdrProxySendReceive, This, stub_msg);
         else if (Oif_flags.HasPipes)
             /* NdrPipesSendReceive(...) */
             FIXME("pipes not supported yet\n");
@@ -826,7 +846,7 @@ static LONG_PTR ndr_client_call( const MIDL_STUB_DESC *stub_desc, const PFORMAT_
             FIXME("using auto handle - call NdrNsSendReceive when it gets implemented\n");
 #endif
         else
-            NdrSendReceive(stub_msg, stub_msg->Buffer);
+            ВЕХА(NdrSendReceive, stub_msg, stub_msg->Buffer);
 
         /* convert strings, floating point values and endianness into our
          * preferred format */

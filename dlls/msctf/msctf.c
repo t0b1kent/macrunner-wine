@@ -577,6 +577,21 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, LPVOID *ppvOut)
 
     for (i = 0; ClassesTable[i].clsid != NULL; i++)
         if (IsEqualCLSID(ClassesTable[i].clsid, clsid)) {
+            /* MacRunner stopgap 2026-07-12: env-gated bail. TSF/IME is not on the
+             * frame path for games (reflexive UE4 startup activation); refusing the
+             * 5 TSF CLSIDs lets UE4/ABZU skip IME and proceed to D3D11 instead of
+             * dereferencing a constructor object corrupted by the HB
+             * store-coherence defect at ClassFactory_CreateInstance. */
+            static int mr_no_tsf = -1;
+            if (mr_no_tsf < 0) {
+                char buf[8];
+                mr_no_tsf = GetEnvironmentVariableA("MACRUNNER_MSCTF_STOPGAP", buf, sizeof(buf)) ? 1 : 0;
+            }
+            if (mr_no_tsf) {
+                fprintf(stderr, "macrunner-msctf-stopgap: refusing TSF CLSID -> CLASS_E_CLASSNOTAVAILABLE\n");
+                fflush(stderr);
+                return CLASS_E_CLASSNOTAVAILABLE;
+            }
             return ClassFactory_Constructor(ClassesTable[i].ctor, ppvOut);
         }
     FIXME("CLSID %s not supported\n", debugstr_guid(clsid));

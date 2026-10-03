@@ -35,6 +35,7 @@
 WINE_DEFAULT_DEBUG_CHANNEL(font);
 
 #define MS_OTTO_TAG MS_MAKE_TAG('O','T','T','O')
+#define MS_TRUE_TAG MS_MAKE_TAG('t','r','u','e')
 #define MS_HEAD_TAG MS_MAKE_TAG('h','e','a','d')
 #define MS_HHEA_TAG MS_MAKE_TAG('h','h','e','a')
 #define MS_OS_2_TAG MS_MAKE_TAG('O','S','/','2')
@@ -630,6 +631,11 @@ BOOL opentype_get_ttc_sfnt_v1( const void *data, size_t size, DWORD index, DWORD
     switch (fourcc)
     {
     default:
+        if ((fourcc & 0xffff) == 0x5a4d) /* MZ: NE/FON bitmap font container. */
+        {
+            TRACE( "non-OpenType MZ font container %x\n", fourcc );
+            return FALSE;
+        }
         WARN( "unsupported font format %x\n", fourcc );
         return FALSE;
     case MS_TTCF_TAG:
@@ -639,6 +645,7 @@ BOOL opentype_get_ttc_sfnt_v1( const void *data, size_t size, DWORD index, DWORD
         break;
     case 0x00000100:
     case MS_OTTO_TAG:
+    case MS_TRUE_TAG:
         offset = 0;
         break;
     }
@@ -648,19 +655,19 @@ BOOL opentype_get_ttc_sfnt_v1( const void *data, size_t size, DWORD index, DWORD
 
     if (!opentype_get_table_ptr( data, size, *ttc_sfnt_v1, MS_HEAD_TAG, NULL, NULL ))
     {
-        WARN( "unsupported sfnt font: missing head table.\n" );
+        TRACE( "sfnt font missing head table.\n" );
         return FALSE;
     }
 
     if (!opentype_get_table_ptr( data, size, *ttc_sfnt_v1, MS_HHEA_TAG, NULL, NULL ))
     {
-        WARN( "unsupported sfnt font: missing hhea table.\n" );
+        TRACE( "sfnt font missing hhea table.\n" );
         return FALSE;
     }
 
     if (!opentype_get_tt_os2_v1( data, size, *ttc_sfnt_v1, &tt_os2_v1 ))
     {
-        WARN( "unsupported sfnt font: missing OS/2 table.\n" );
+        TRACE( "sfnt font missing OS/2 table.\n" );
         return FALSE;
     }
 
@@ -676,7 +683,7 @@ BOOL opentype_get_ttc_sfnt_v1( const void *data, size_t size, DWORD index, DWORD
     if (opentype_get_table_ptr( data, size, *ttc_sfnt_v1, MS_EBDT_TAG, NULL, NULL ) ||
         opentype_get_table_ptr( data, size, *ttc_sfnt_v1, MS_CBDT_TAG, NULL, NULL ))
     {
-        WARN( "unsupported sfnt font: embedded bitmap data.\n" );
+        TRACE( "sfnt font has embedded bitmap data.\n" );
         return FALSE;
     }
 

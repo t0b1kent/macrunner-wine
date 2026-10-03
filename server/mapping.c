@@ -1703,7 +1703,15 @@ DECL_HANDLER(map_image_view)
         if (req->machine != current->process->machine)
         {
             /* on 32-bit, the native 64-bit machine is allowed */
-            if (is_machine_64bit( current->process->machine ) || req->machine != native_machine)
+            if (native_machine == IMAGE_FILE_MACHINE_ARM64 &&
+                current->process->machine == IMAGE_FILE_MACHINE_AMD64 &&
+                req->machine == native_machine)
+            {
+                /* MacRunner HyperBridge x64 lane: the process machine is the
+                 * AMD64 guest, but ARM64 native Wine support images (ntdll,
+                 * win32u, etc.) must still be mappable in the same process. */
+            }
+            else if (is_machine_64bit( current->process->machine ) || req->machine != native_machine)
                 set_error( STATUS_IMAGE_MACHINE_TYPE_MISMATCH );
         }
     }

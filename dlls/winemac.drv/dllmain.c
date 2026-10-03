@@ -19,6 +19,7 @@
  */
 
 #include <stdarg.h>
+#include <stdio.h>
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "windef.h"
@@ -31,9 +32,131 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(macdrv);
+WINE_DECLARE_DEBUG_CHANNEL(winediag);
 
 
 static HMODULE macdrv_module = 0;
+
+/* Which winemac.drv actually ran.  Both system32 (x86_64) and syswow64 (i386) copies are
+ * synced into every prefix and an aarch64 build also exists, so "which one" is half the
+ * answer whenever the driver fails to come up.  ARM64EC also defines __aarch64__, so it
+ * must be tested first. */
+#if defined(__arm64ec__) || defined(_M_ARM64EC)
+# define MACDRV_PE_ARCH "arm64ec"
+#elif defined(__aarch64__)
+# define MACDRV_PE_ARCH "aarch64"
+#elif defined(__x86_64__)
+# define MACDRV_PE_ARCH "x86_64"
+#elif defined(__i386__)
+# define MACDRV_PE_ARCH "i386"
+#else
+# define MACDRV_PE_ARCH "unknown"
+#endif
+
+/* UNGATED PE-side trace.
+ *
+ * Deliberately NOT ERR()/TRACE(): every run before try9 used WINEDEBUG=-all, which
+ * silences __wine_dbg_output entirely -- and that is exactly how the null-user-driver
+ * state stayed invisible for two days.  A trace that a debug channel can suppress is a
+ * trace whose silence proves nothing, which is this lane's standing gate
+ * ("not logged != did not happen").  So this writes straight to the process stderr
+ * handle, where mr-run.sh's run.log already captures the unix side's fprintf output.
+ *
+ * Three lines, once per process, on the process-attach path only. */
+static void macdrv_pe_trace( const char *fmt, ... )
+{
+    HANDLE handle = GetStdHandle( STD_ERROR_HANDLE );
+    char buf[256];
+    DWORD written;
+    va_list args;
+    int len;
+
+    va_start( args, fmt );
+    len = vsnprintf( buf, sizeof(buf), fmt, args );
+    va_end( args );
+
+    if (len <= 0) return;
+    if (len > (int)sizeof(buf) - 1) len = sizeof(buf) - 1;   /* vsnprintf returns the WANTED length */
+
+    if (handle && handle != INVALID_HANDLE_VALUE)
+        WriteFile( handle, buf, len, &written, NULL );
+
+    /* SECOND, INDEPENDENT PATH.  GetStdHandle(STD_ERROR_HANDLE) can legitimately be NULL
+     * in a GUI process, and this trace mechanism has never been exercised in a PE in this
+     * process type -- so relying on it alone would risk manufacturing exactly the silence
+     * it exists to rule out.  try9 runs WINEDEBUG='-all,+winediag,err+win', so the winediag
+     * channel is open; if one path is dead the other still reports.  Two paths agreeing
+     * also cross-validates the mechanism for every later run. */
+    ERR_(winediag)( "%s", buf );
+
+    /* THIRD PATH, added 2026-07-29 (HK E2E lane) — because on HK BOTH paths above are
+     * dead and their silence was therefore uninterpretable.  Measured: HK's run log has
+     * zero dllmain_* lines while winemac.so is mapped in the process, and the two paths
+     * fail for independent reasons — STD_ERROR_HANDLE is NULL in this GUI process (the
+     * comment above already anticipated it), and ERR_(winediag) is suppressed because
+     * these runs use WINEDEBUG=-all, not try9's '-all,+winediag,err+win'.
+     * MESSAGE() goes through __wine_dbg_output unconditionally, with no channel to
+     * disable, so it survives WINEDEBUG=-all — the same property that made the
+     * kernelbase MUI process-attach counts readable in arbitrary run logs. */
+    MESSAGE( "%s", buf );
+}
+
+/* MacRunner 2026-07-29 (HK DllMain lane).  Skip the LoadStringW menu-string loop in
+ * process_attach and hand macdrv_init a NULL strings array.
+ *
+ * Why this gate exists, measured: with the loader change that lets winemac.drv's x64 DllMain
+ * run in HK's process (loader.c needs_x64_entry), process_attach reaches
+ * stage=dllmain_unixcall_init status=00000000 and then WEDGES -- 3 runs out of 3, in two
+ * independent lanes, log frozen with the process alive.  `sample` on the live process caught
+ * the thread with 3626/3626 samples inside macrunner_hb_route_x64_callback_fault, on a stack
+ * that carries BOTH macrunner_hb_x64_dll_entry and win32u's load_display_driver ->
+ * KeUserModeCallback: the DllMain is running NESTED INSIDE the display-driver load, and it
+ * faulted while calling a native PE import (macrunner_hb_call_direct_native_target ->
+ * macrunner_hb_call_arm64_pe_import12_for_ctx).
+ *
+ * The import is very likely LoadStringW and not something earlier, because macdrv_pe_trace
+ * itself calls GetStdHandle+WriteFile (kernel32) immediately before and those DID work -- the
+ * dllmain_unixcall_init line is in the log.  What differs about the next 12 calls is that
+ * LoadStringW is a USER32 import, issued while win32u is mid-load_display_driver on this very
+ * thread.  [HYPOTHESIS] that re-entry is the fault; this gate tests it by removing it.
+ *
+ * Passing NULL is explicitly legal: macdrv_init_core() takes `strings` NULL and skips
+ * load_strings(), which is exactly what the unix self-init path already does.  Cost of NULL is
+ * the Mac menu-bar strings falling back to defaults -- not input, not the driver itself.
+ *
+ * MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 337 — УМОЛЧАНИЕ ПЕРЕВЕДЕНО В «ПРОПУСКАТЬ».
+ *
+ * Гипотеза выше подтверждена замером: без гейта `DllMain` печатает `dllmain_strings_enter` и
+ * НЕ ВОЗВРАЩАЕТСЯ — `LoadLibraryW(L"winemac.drv")` в `explorer` висит до конца прогона. С гейтом
+ * прогон идёт дальше: `dllmain_strings_skipped` → `macdrv_init_session status=0 graphic=1` →
+ * `run_cocoa_app_decide created_app=1 success=1` → `driver_set_user_driver_real`.
+ *
+ * Почему именно умолчание, а не переменная. Драйвер грузит `explorer`, которого запускает
+ * wineserver, и переменные окружения нашего процесса до него НЕ ДОХОДЯТ: замер
+ * `ps -Eww` по живому explorer даёт ноль вхождений имени гейта (контроль на инструмент пройден —
+ * `PATH` тем же способом виден). Поэтому прогон игры с `MACRUNNER_WINEMAC_PE_SKIP_STRINGS=1`
+ * лечения НЕ дал: гейт до нужного процесса не доехал. Гейт, который не может достичь процесса,
+ * где выполняется код, равносилен выключенному.
+ *
+ * Цена пропуска названа выше и не изменилась: строки меню Mac берутся по умолчанию. Ни ввод, ни
+ * сам драйвер от этого не страдают.
+ *
+ * Возврат прежнего поведения: `MACRUNNER_WINEMAC_PE_STRINGS=1`. */
+static BOOL macdrv_pe_skip_strings(void)
+{
+    char value[8] = {0};
+
+    if (GetEnvironmentVariableA( "MACRUNNER_WINEMAC_PE_STRINGS", value, sizeof(value) )
+        && value[0] && value[0] != '0')
+        return FALSE;                      /* явный возврат к загрузке строк */
+
+    value[0] = 0;
+    if (GetEnvironmentVariableA( "MACRUNNER_WINEMAC_PE_SKIP_STRINGS", value, sizeof(value) )
+        && value[0] == '0')
+        return FALSE;                      /* старый выключатель по-прежнему работает */
+
+    return TRUE;                           /* умолчание: пропускать */
+}
 
 struct quit_info {
     HWND               *wins;
@@ -458,6 +581,7 @@ static NTSTATUS WINAPI macdrv_regsetvalueexa(void *arg, ULONG size)
 static BOOL process_attach(void)
 {
     struct init_params params;
+    NTSTATUS status;
 
     struct localized_string *str;
     struct localized_string strings[] = {
@@ -478,25 +602,56 @@ static BOOL process_attach(void)
         { .id = 0 }
     };
 
-    if (__wine_init_unix_call()) return FALSE;
+    status = __wine_init_unix_call();
+    macdrv_pe_trace( "macrunner-ui-input: stage=dllmain_unixcall_init arch=%s status=%08x\n",
+                     MACDRV_PE_ARCH, (unsigned int)status );
+    if (status) return FALSE;
 
-    for (str = strings; str->id; str++)
-        str->len = LoadStringW(macdrv_module, str->id, (WCHAR *)&str->str, 0);
-    params.strings = strings;
+    /* Both branches trace, and they trace on BOTH sides of the LoadStringW loop.  This lane's
+     * standing gate is that a probe which only reports success cannot distinguish "did not run"
+     * from "ran and hung": the wedge measured on 2026-07-29 sits between the line above and the
+     * MACDRV_CALL(init) below, and nothing currently prints in that window, so the window itself
+     * is what has to be made observable.  strings_enter/strings_loaded bracket the suspect. */
+    if (macdrv_pe_skip_strings())
+    {
+        macdrv_pe_trace( "macrunner-ui-input: stage=dllmain_strings_skipped arch=%s\n",
+                         MACDRV_PE_ARCH );
+        params.strings = NULL;
+    }
+    else
+    {
+        macdrv_pe_trace( "macrunner-ui-input: stage=dllmain_strings_enter arch=%s\n",
+                         MACDRV_PE_ARCH );
+        for (str = strings; str->id; str++)
+            str->len = LoadStringW(macdrv_module, str->id, (WCHAR *)&str->str, 0);
+        macdrv_pe_trace( "macrunner-ui-input: stage=dllmain_strings_loaded arch=%s n=%u\n",
+                         MACDRV_PE_ARCH, (unsigned int)(str - strings) );
+        params.strings = strings;
+    }
     params.app_icon_callback = (UINT_PTR)macdrv_app_icon;
     params.app_quit_request_callback = (UINT_PTR)macdrv_app_quit_request;
     params.regcreateopenkeyexa_callback = (UINT_PTR)macdrv_regcreateopenkeyexa;
     params.regsetvalueexa_callback = (UINT_PTR)macdrv_regsetvalueexa;
     params.regqueryvalueexa_callback = (UINT_PTR)macdrv_regqueryvalueexa;
 
-    if (MACDRV_CALL(init, &params)) return FALSE;
+    status = MACDRV_CALL(init, &params);
+    macdrv_pe_trace( "macrunner-ui-input: stage=dllmain_macdrv_init_call arch=%s status=%08x\n",
+                     MACDRV_PE_ARCH, (unsigned int)status );
+    if (status) return FALSE;
 
+    macdrv_pe_trace( "macrunner-ui-input: stage=dllmain_attach_ok arch=%s\n", MACDRV_PE_ARCH );
     return TRUE;
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 {
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
+
+    /* FIRST statement on the attach path: if this line is absent from a run.log, the
+     * winemac.drv PE was never loaded at all -- which is precisely the 2026-07-28
+     * null-user-driver finding, and it separates that from "loaded but init failed". */
+    macdrv_pe_trace( "macrunner-ui-input: stage=dllmain_attach arch=%s pid=%04x inst=%p\n",
+                     MACDRV_PE_ARCH, (unsigned int)GetCurrentProcessId(), instance );
 
     DisableThreadLibraryCalls(instance);
     macdrv_module = instance;

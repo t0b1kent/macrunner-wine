@@ -27,6 +27,19 @@
 #include "ntgdi.h"
 #include "ddk/d3dkmthk.h"
 #include "wow64win_private.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(wow);
+
+/* MacRunner 2026-08-10, лейн ЛЕСТНИЦА: ПАРТИЯ B закрытия долга wow64win.
+ *
+ * Все места в этом файле — указатели на ГОСТЕВЫЕ буферы, которые хост читает или
+ * пишет (D3DKMT: pPrivateRuntimeData, pAllocationInfo, pCommandBuffer,
+ * ObjectHandleArray, FenceValueArray; печать: lpszDocName и соседи). Исключений
+ * нет: описателей и адресов гостевого кода среди них не оказалось, поэтому файл
+ * переведён целиком. Эталон — dlls/wow64/, там UlongToPtr не осталось ни одного.
+ * Матрица: reports/lanes/МАТРИЦА-wow64win-перевод-указателей.md */
+
 
 typedef struct
 {
@@ -532,16 +545,16 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateAllocation( UINT *args )
     desc.hDevice = desc32->hDevice;
     desc.hResource = desc32->hResource;
     desc.hGlobalShare = desc32->hGlobalShare;
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
     if (!desc32->Flags.StandardAllocation)
     {
-        desc.pPrivateDriverData = UlongToPtr( desc32->pPrivateDriverData );
+        desc.pPrivateDriverData = guest32_host_ptr( desc32->pPrivateDriverData );
         desc.PrivateDriverDataSize = desc32->PrivateDriverDataSize;
     }
     else
     {
-        standard32 = UlongToPtr( desc32->pStandardAllocation );
+        standard32 = guest32_host_ptr( desc32->pStandardAllocation );
         standard.Type = standard32->Type;
         standard.ExistingHeapData.Size = standard32->ExistingHeapData.Size;
         standard.Flags = standard32->Flags;
@@ -550,7 +563,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateAllocation( UINT *args )
         desc.PrivateDriverDataSize = desc32->PrivateDriverDataSize;
     }
     desc.NumAllocations = desc32->NumAllocations;
-    allocs32 = UlongToPtr( desc32->pAllocationInfo );
+    allocs32 = guest32_host_ptr( desc32->pAllocationInfo );
     desc.pAllocationInfo = NULL;
     if (desc32->pAllocationInfo && desc32->NumAllocations)
     {
@@ -560,8 +573,8 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateAllocation( UINT *args )
         for (i = 0; i < desc32->NumAllocations; i++)
         {
             desc.pAllocationInfo[i].hAllocation = allocs32->hAllocation;
-            desc.pAllocationInfo[i].pSystemMem = UlongToPtr( allocs32->pSystemMem );
-            desc.pAllocationInfo[i].pPrivateDriverData = UlongToPtr( allocs32->pPrivateDriverData );
+            desc.pAllocationInfo[i].pSystemMem = guest32_host_ptr( allocs32->pSystemMem );
+            desc.pAllocationInfo[i].pPrivateDriverData = guest32_host_ptr( allocs32->pPrivateDriverData );
             desc.pAllocationInfo[i].PrivateDriverDataSize = allocs32->PrivateDriverDataSize;
             desc.pAllocationInfo[i].VidPnSourceId = allocs32->VidPnSourceId;
             desc.pAllocationInfo[i].Flags.Value = allocs32->Flags.Value;
@@ -641,16 +654,16 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateAllocation2( UINT *args )
     desc.hDevice = desc32->hDevice;
     desc.hResource = desc32->hResource;
     desc.hGlobalShare = desc32->hGlobalShare;
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
     if (!desc32->Flags.StandardAllocation)
     {
-        desc.pPrivateDriverData = UlongToPtr( desc32->pPrivateDriverData );
+        desc.pPrivateDriverData = guest32_host_ptr( desc32->pPrivateDriverData );
         desc.PrivateDriverDataSize = desc32->PrivateDriverDataSize;
     }
     else
     {
-        standard32 = UlongToPtr( desc32->pStandardAllocation );
+        standard32 = guest32_host_ptr( desc32->pStandardAllocation );
         standard.Type = standard32->Type;
         standard.ExistingHeapData.Size = standard32->ExistingHeapData.Size;
         standard.Flags = standard32->Flags;
@@ -659,7 +672,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateAllocation2( UINT *args )
         desc.PrivateDriverDataSize = desc32->PrivateDriverDataSize;
     }
     desc.NumAllocations = desc32->NumAllocations;
-    allocs32 = UlongToPtr( desc32->pAllocationInfo2 );
+    allocs32 = guest32_host_ptr( desc32->pAllocationInfo2 );
     desc.pAllocationInfo2 = NULL;
     if (desc32->pAllocationInfo2 && desc32->NumAllocations)
     {
@@ -669,8 +682,8 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateAllocation2( UINT *args )
         for (i = 0; i < desc32->NumAllocations; i++)
         {
             desc.pAllocationInfo2[i].hAllocation = allocs32->hAllocation;
-            desc.pAllocationInfo2[i].pSystemMem = UlongToPtr( allocs32->pSystemMem );
-            desc.pAllocationInfo2[i].pPrivateDriverData = UlongToPtr( allocs32->pPrivateDriverData );
+            desc.pAllocationInfo2[i].pSystemMem = guest32_host_ptr( allocs32->pSystemMem );
+            desc.pAllocationInfo2[i].pPrivateDriverData = guest32_host_ptr( allocs32->pPrivateDriverData );
             desc.pAllocationInfo2[i].PrivateDriverDataSize = allocs32->PrivateDriverDataSize;
             desc.pAllocationInfo2[i].VidPnSourceId = allocs32->VidPnSourceId;
             desc.pAllocationInfo2[i].Flags.Value = allocs32->Flags.Value;
@@ -710,16 +723,33 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateDCFromMemory( UINT *args )
     NTSTATUS status;
 
     if (!desc32) return STATUS_INVALID_PARAMETER;
-    desc.pMemory = UlongToPtr( desc32->pMemory );
+    desc.pMemory = guest32_host_ptr( desc32->pMemory );
     desc.Format = desc32->Format;
     desc.Width = desc32->Width;
     desc.Height = desc32->Height;
     desc.Pitch = desc32->Pitch;
     desc.hDeviceDc = UlongToHandle( desc32->hDeviceDc );
-    desc.pColorTable = UlongToPtr( desc32->pColorTable );
+    desc.pColorTable = guest32_host_ptr( desc32->pColorTable );
     desc.hDc = UlongToHandle( desc32->hDc );
     desc.hBitmap = UlongToHandle( desc32->hBitmap );
 
+    /* Итерация 421: спрашиваем ядро о памяти В МОМЕНТ ПЕРЕДАЧИ. Если уже здесь она свободна,
+     * значит окно перевода расходится с настоящим отображением гостя, а не портится позже.
+     * Печатаем и базу из слота TLS — ту самую, которой guest32_host_ptr подставляет старшую
+     * половину: пустой слот эта функция обрабатывает МОЛЧА, отдавая голый адрес. */
+    {
+        MEMORY_BASIC_INFORMATION mbi;
+        SIZE_T got = 0;
+        NTSTATUS qst = NtQueryVirtualMemory( GetCurrentProcess(), desc.pMemory,
+                                             MemoryBasicInformation, &mbi, sizeof(mbi), &got );
+        ULONG_PTR tls_base = (ULONG_PTR)NtCurrentTeb()->TlsSlots[MACRUNNER_WOW64_TLS_GUEST32_BASE];
+        MESSAGE( "macrunner-dcmem-vm: гость=%08x хозяин=%p tls_база=%p qst=%08x "
+                 "state=%08x protect=%08x размер=%llu | %ux%u fmt=%#x pitch=%u\n",
+                 (unsigned)desc32->pMemory, desc.pMemory, (void *)tls_base, (unsigned)qst,
+                 (unsigned)mbi.State, (unsigned)mbi.Protect, (unsigned long long)mbi.RegionSize,
+                 (unsigned)desc.Width, (unsigned)desc.Height, (unsigned)desc.Format,
+                 (unsigned)desc.Pitch );
+    }
     if (!(status = NtGdiDdDDICreateDCFromMemory( &desc )))
     {
         desc32->hDc = HandleToUlong( desc.hDc );
@@ -750,11 +780,11 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateDevice( UINT *args )
     desc.hAdapter = desc32->hAdapter;
     desc.hDevice = desc32->hDevice;
     desc.Flags = desc32->Flags;
-    desc.pCommandBuffer = UlongToPtr( desc32->pCommandBuffer );
+    desc.pCommandBuffer = guest32_host_ptr( desc32->pCommandBuffer );
     desc.CommandBufferSize = desc32->CommandBufferSize;
-    desc.pAllocationList = UlongToPtr( desc32->pAllocationList );
+    desc.pAllocationList = guest32_host_ptr( desc32->pAllocationList );
     desc.AllocationListSize = desc32->AllocationListSize;
-    desc.pPatchLocationList = UlongToPtr( desc32->pPatchLocationList );
+    desc.pPatchLocationList = guest32_host_ptr( desc32->pPatchLocationList );
     desc.PatchLocationListSize = desc32->PatchLocationListSize;
     if (!(status = NtGdiDdDDICreateDevice( &desc )))
         desc32->hDevice = desc.hDevice;
@@ -786,7 +816,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateKeyedMutex2( UINT *args )
     desc.InitialValue = desc32->InitialValue;
     desc.hSharedHandle = desc32->hSharedHandle;
     desc.hKeyedMutex = desc32->hKeyedMutex;
-    desc.pPrivateRuntimeData = ULongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
     desc.Flags = desc32->Flags;
     status = NtGdiDdDDICreateKeyedMutex2( &desc );
@@ -828,7 +858,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIDestroyAllocation( UINT *args )
 
     desc.hDevice = desc32->hDevice;
     desc.hResource = desc32->hResource;
-    desc.phAllocationList = ULongToPtr( desc32->phAllocationList );
+    desc.phAllocationList = guest32_host_ptr( desc32->phAllocationList );
     desc.AllocationCount = desc32->AllocationCount;
     return NtGdiDdDDIDestroyAllocation( &desc );
 }
@@ -847,7 +877,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIDestroyAllocation2( UINT *args )
 
     desc.hDevice = desc32->hDevice;
     desc.hResource = desc32->hResource;
-    desc.phAllocationList = ULongToPtr( desc32->phAllocationList );
+    desc.phAllocationList = guest32_host_ptr( desc32->phAllocationList );
     desc.AllocationCount = desc32->AllocationCount;
     desc.Flags = desc32->Flags;
     return NtGdiDdDDIDestroyAllocation2( &desc );
@@ -908,7 +938,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIEnumAdapters2( UINT *args )
     if (!desc32) return STATUS_INVALID_PARAMETER;
 
     desc.NumAdapters = desc32->NumAdapters;
-    desc.pAdapters = UlongToPtr( desc32->pAdapters );
+    desc.pAdapters = guest32_host_ptr( desc32->pAdapters );
 
     status = NtGdiDdDDIEnumAdapters2( &desc );
 
@@ -936,7 +966,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIEscape( UINT *args )
     desc.hDevice = desc32->hDevice;
     desc.Type = desc32->Type;
     desc.Flags = desc32->Flags;
-    desc.pPrivateDriverData = UlongToPtr( desc32->pPrivateDriverData );
+    desc.pPrivateDriverData = guest32_host_ptr( desc32->pPrivateDriverData );
     desc.PrivateDriverDataSize = desc32->PrivateDriverDataSize;
     desc.hContext = desc32->hContext;
 
@@ -955,7 +985,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenAdapterFromDeviceName( UINT *args )
     NTSTATUS status;
 
     if (!desc32) return STATUS_INVALID_PARAMETER;
-    desc.pDeviceName = UlongToPtr( desc32->pDeviceName );
+    desc.pDeviceName = guest32_host_ptr( desc32->pDeviceName );
     desc.hAdapter = desc32->hAdapter;
     desc.AdapterLuid = desc32->AdapterLuid;
 
@@ -1022,7 +1052,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenKeyedMutex2( UINT *args )
 
     desc.hSharedHandle = desc32->hSharedHandle;
     desc.hKeyedMutex = desc32->hKeyedMutex;
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
     status = NtGdiDdDDIOpenKeyedMutex2( &desc );
     desc32->hKeyedMutex = desc.hKeyedMutex;
@@ -1043,7 +1073,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenKeyedMutexFromNtHandle( UINT *args )
 
     desc.hNtHandle = UlongToHandle( desc32->hNtHandle );
     desc.hKeyedMutex = desc32->hKeyedMutex;
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
     status = NtGdiDdDDIOpenKeyedMutexFromNtHandle( &desc );
     desc32->hKeyedMutex = desc.hKeyedMutex;
@@ -1063,7 +1093,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenNtHandleFromName( UINT *args )
     NTSTATUS status;
 
     desc.dwDesiredAccess = desc32->dwDesiredAccess;
-    desc.pObjAttrib = objattr_32to64( &attr, UlongToPtr( desc32->pObjAttrib ) );
+    desc.pObjAttrib = objattr_32to64( &attr, guest32_host_ptr( desc32->pObjAttrib ) );
     desc.hNtHandle = UlongToHandle( desc32->hNtHandle );
     status = NtGdiDdDDIOpenNtHandleFromName( &desc );
     desc32->hNtHandle = HandleToUlong( desc.hNtHandle );
@@ -1099,7 +1129,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenResource( UINT *args )
     desc.hDevice = desc32->hDevice;
     desc.hGlobalShare = desc32->hGlobalShare;
     desc.NumAllocations = desc32->NumAllocations;
-    allocs32 = UlongToPtr( desc32->pOpenAllocationInfo );
+    allocs32 = guest32_host_ptr( desc32->pOpenAllocationInfo );
     desc.pOpenAllocationInfo = NULL;
     if (desc32->pOpenAllocationInfo && desc32->NumAllocations)
     {
@@ -1109,16 +1139,16 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenResource( UINT *args )
         for (i = 0; i < desc32->NumAllocations; i++)
         {
             desc.pOpenAllocationInfo[i].hAllocation = allocs32->hAllocation;
-            desc.pOpenAllocationInfo[i].pPrivateDriverData = UlongToPtr( allocs32->pPrivateDriverData );
+            desc.pOpenAllocationInfo[i].pPrivateDriverData = guest32_host_ptr( allocs32->pPrivateDriverData );
             desc.pOpenAllocationInfo[i].PrivateDriverDataSize = allocs32->PrivateDriverDataSize;
         }
     }
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.ResourcePrivateDriverDataSize = desc32->ResourcePrivateDriverDataSize;
-    desc.pResourcePrivateDriverData = UlongToPtr( desc32->pResourcePrivateDriverData );
+    desc.pResourcePrivateDriverData = guest32_host_ptr( desc32->pResourcePrivateDriverData );
     desc.TotalPrivateDriverDataBufferSize = desc32->TotalPrivateDriverDataBufferSize;
-    desc.pTotalPrivateDriverDataBuffer = UlongToPtr( desc32->pTotalPrivateDriverDataBuffer );
+    desc.pTotalPrivateDriverDataBuffer = guest32_host_ptr( desc32->pTotalPrivateDriverDataBuffer );
     desc.hResource = desc32->hResource;
 
     status = NtGdiDdDDIOpenResource( &desc );
@@ -1163,7 +1193,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenResource2( UINT *args )
     desc.hDevice = desc32->hDevice;
     desc.hGlobalShare = desc32->hGlobalShare;
     desc.NumAllocations = desc32->NumAllocations;
-    allocs32 = UlongToPtr( desc32->pOpenAllocationInfo2 );
+    allocs32 = guest32_host_ptr( desc32->pOpenAllocationInfo2 );
     desc.pOpenAllocationInfo2 = NULL;
     if (desc32->pOpenAllocationInfo2 && desc32->NumAllocations)
     {
@@ -1173,17 +1203,17 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenResource2( UINT *args )
         for (i = 0; i < desc32->NumAllocations; i++)
         {
             desc.pOpenAllocationInfo2[i].hAllocation = allocs32->hAllocation;
-            desc.pOpenAllocationInfo2[i].pPrivateDriverData = UlongToPtr( allocs32->pPrivateDriverData );
+            desc.pOpenAllocationInfo2[i].pPrivateDriverData = guest32_host_ptr( allocs32->pPrivateDriverData );
             desc.pOpenAllocationInfo2[i].PrivateDriverDataSize = allocs32->PrivateDriverDataSize;
             desc.pOpenAllocationInfo2[i].GpuVirtualAddress = allocs32->GpuVirtualAddress;
         }
     }
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.ResourcePrivateDriverDataSize = desc32->ResourcePrivateDriverDataSize;
-    desc.pResourcePrivateDriverData = UlongToPtr( desc32->pResourcePrivateDriverData );
+    desc.pResourcePrivateDriverData = guest32_host_ptr( desc32->pResourcePrivateDriverData );
     desc.TotalPrivateDriverDataBufferSize = desc32->TotalPrivateDriverDataBufferSize;
-    desc.pTotalPrivateDriverDataBuffer = UlongToPtr( desc32->pTotalPrivateDriverDataBuffer );
+    desc.pTotalPrivateDriverDataBuffer = guest32_host_ptr( desc32->pTotalPrivateDriverDataBuffer );
     desc.hResource = desc32->hResource;
 
     status = NtGdiDdDDIOpenResource2( &desc );
@@ -1233,7 +1263,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenResourceFromNtHandle( UINT *args )
     desc.hDevice = desc32->hDevice;
     desc.hNtHandle = UlongToHandle( desc32->hNtHandle );
     desc.NumAllocations = desc32->NumAllocations;
-    allocs32 = UlongToPtr( desc32->pOpenAllocationInfo2 );
+    allocs32 = guest32_host_ptr( desc32->pOpenAllocationInfo2 );
     desc.pOpenAllocationInfo2 = NULL;
     if (desc32->pOpenAllocationInfo2 && desc32->NumAllocations)
     {
@@ -1243,18 +1273,18 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenResourceFromNtHandle( UINT *args )
         for (i = 0; i < desc32->NumAllocations; i++)
         {
             desc.pOpenAllocationInfo2[i].hAllocation = allocs32->hAllocation;
-            desc.pOpenAllocationInfo2[i].pPrivateDriverData = UlongToPtr( allocs32->pPrivateDriverData );
+            desc.pOpenAllocationInfo2[i].pPrivateDriverData = guest32_host_ptr( allocs32->pPrivateDriverData );
             desc.pOpenAllocationInfo2[i].PrivateDriverDataSize = allocs32->PrivateDriverDataSize;
             desc.pOpenAllocationInfo2[i].GpuVirtualAddress = allocs32->GpuVirtualAddress;
         }
     }
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.ResourcePrivateDriverDataSize = desc32->ResourcePrivateDriverDataSize;
-    desc.pResourcePrivateDriverData = UlongToPtr( desc32->pResourcePrivateDriverData );
+    desc.pResourcePrivateDriverData = guest32_host_ptr( desc32->pResourcePrivateDriverData );
     desc.TotalPrivateDriverDataBufferSize = desc32->TotalPrivateDriverDataBufferSize;
-    desc.pTotalPrivateDriverDataBuffer = UlongToPtr( desc32->pTotalPrivateDriverDataBuffer );
-    desc.pKeyedMutexPrivateRuntimeData = UlongToPtr( desc32->pKeyedMutexPrivateRuntimeData );
+    desc.pTotalPrivateDriverDataBuffer = guest32_host_ptr( desc32->pTotalPrivateDriverDataBuffer );
+    desc.pKeyedMutexPrivateRuntimeData = guest32_host_ptr( desc32->pKeyedMutexPrivateRuntimeData );
     desc.KeyedMutexPrivateRuntimeDataSize = desc32->KeyedMutexPrivateRuntimeDataSize;
     desc.hResource = desc32->hResource;
     desc.hKeyedMutex = desc32->hKeyedMutex;
@@ -1320,7 +1350,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenSyncObjectFromNtHandle2( UINT *args )
     desc.Flags = desc32->Flags;
     desc.hSyncObject = desc32->hSyncObject;
     desc.MonitoredFence.EngineAffinity = desc32->MonitoredFence.EngineAffinity;
-    desc.MonitoredFence.FenceValueCPUVirtualAddress = UlongToPtr( desc32->MonitoredFence.FenceValueCPUVirtualAddress );
+    desc.MonitoredFence.FenceValueCPUVirtualAddress = guest32_host_ptr( desc32->MonitoredFence.FenceValueCPUVirtualAddress );
     desc.MonitoredFence.FenceValueGPUVirtualAddress = desc32->MonitoredFence.FenceValueGPUVirtualAddress;
 
     status = NtGdiDdDDIOpenSyncObjectFromNtHandle2( &desc );
@@ -1343,7 +1373,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenSyncObjectNtHandleFromName( UINT *args )
     NTSTATUS status;
 
     desc.dwDesiredAccess = desc32->dwDesiredAccess;
-    desc.pObjAttrib = objattr_32to64( &attr, UlongToPtr( desc32->pObjAttrib ) );
+    desc.pObjAttrib = objattr_32to64( &attr, guest32_host_ptr( desc32->pObjAttrib ) );
     desc.hNtHandle = UlongToHandle( desc32->hNtHandle );
     status = NtGdiDdDDIOpenSyncObjectNtHandleFromName( &desc );
     desc32->hNtHandle = HandleToUlong( desc.hNtHandle );
@@ -1371,7 +1401,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIQueryAdapterInfo( UINT *args )
 
     desc.hAdapter = desc32->hAdapter;
     desc.Type = desc32->Type;
-    desc.pPrivateDriverData = UlongToPtr( desc32->pPrivateDriverData );
+    desc.pPrivateDriverData = guest32_host_ptr( desc32->pPrivateDriverData );
     desc.PrivateDriverDataSize = desc32->PrivateDriverDataSize;
 
     return NtGdiDdDDIQueryAdapterInfo( &desc );
@@ -1394,7 +1424,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIQueryResourceInfo( UINT *args )
 
     desc.hDevice = desc32->hDevice;
     desc.hGlobalShare = desc32->hGlobalShare;
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
     desc.TotalPrivateDriverDataSize = desc32->TotalPrivateDriverDataSize;
     desc.ResourcePrivateDriverDataSize = desc32->ResourcePrivateDriverDataSize;
@@ -1424,7 +1454,7 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIQueryResourceInfoFromNtHandle( UINT *args )
 
     desc.hDevice = desc32->hDevice;
     desc.hNtHandle = UlongToHandle( desc32->hNtHandle );
-    desc.pPrivateRuntimeData = UlongToPtr( desc32->pPrivateRuntimeData );
+    desc.pPrivateRuntimeData = guest32_host_ptr( desc32->pPrivateRuntimeData );
     desc.PrivateRuntimeDataSize = desc32->PrivateRuntimeDataSize;
     desc.TotalPrivateDriverDataSize = desc32->TotalPrivateDriverDataSize;
     desc.ResourcePrivateDriverDataSize = desc32->ResourcePrivateDriverDataSize;
@@ -1530,8 +1560,8 @@ NTSTATUS WINAPI wow64_NtGdiDdDDISetVidPnSourceOwner( UINT *args )
 
     if (!desc32) return STATUS_INVALID_PARAMETER;
     desc.hDevice = desc32->hDevice;
-    desc.pType = UlongToPtr( desc32->pType );
-    desc.pVidPnSourceId = UlongToPtr( desc32->pVidPnSourceId );
+    desc.pType = guest32_host_ptr( desc32->pType );
+    desc.pVidPnSourceId = guest32_host_ptr( desc32->pVidPnSourceId );
     desc.VidPnSourceCount = desc32->VidPnSourceCount;
 
     return NtGdiDdDDISetVidPnSourceOwner( &desc );
@@ -1569,8 +1599,8 @@ NTSTATUS WINAPI wow64_NtGdiDdDDISignalSynchronizationObjectFromCpu( UINT *args )
     if (!desc32) return STATUS_INVALID_PARAMETER;
     desc.hDevice = desc32->hDevice;
     desc.ObjectCount = desc32->ObjectCount;
-    desc.ObjectHandleArray = UlongToPtr( desc32->ObjectHandleArray );
-    desc.FenceValueArray = UlongToPtr( desc32->FenceValueArray );
+    desc.ObjectHandleArray = guest32_host_ptr( desc32->ObjectHandleArray );
+    desc.FenceValueArray = guest32_host_ptr( desc32->FenceValueArray );
     desc.Flags = desc32->Flags;
 
     return NtGdiDdDDISignalSynchronizationObjectFromCpu( &desc );
@@ -1592,8 +1622,8 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIWaitForSynchronizationObjectFromCpu( UINT *args 
     if (!desc32) return STATUS_INVALID_PARAMETER;
     desc.hDevice = desc32->hDevice;
     desc.ObjectCount = desc32->ObjectCount;
-    desc.ObjectHandleArray = UlongToPtr( desc32->ObjectHandleArray );
-    desc.FenceValueArray = UlongToPtr( desc32->FenceValueArray );
+    desc.ObjectHandleArray = guest32_host_ptr( desc32->ObjectHandleArray );
+    desc.FenceValueArray = guest32_host_ptr( desc32->FenceValueArray );
     desc.hAsyncEvent = UlongToHandle( desc32->hAsyncEvent );
     desc.Flags = desc32->Flags;
 
@@ -2015,8 +2045,22 @@ NTSTATUS WINAPI wow64_NtGdiGetDCDword( UINT *args )
     HDC hdc = get_handle( &args );
     UINT method = get_ulong( &args );
     DWORD *result = get_ptr( &args );
+    /* ★★ MacRunner 2026-08-23, лейн ЛЕСТНИЦА, итерация 2702 — ЗОНД НА ЦИКЛ ЗАПРОСОВ К DC.
+     * Замер 2701: после показа окна Diablo делает СТРОГО чередующийся цикл
+     * `NtGdiGetDCDword` -> `NtAllocateVirtualMemory`, 722 витка (пары 11ef->18 722 раза,
+     * 18->11ef 721), и умирает. Ни одного полноэкранного растра при этом нет. Что именно
+     * спрашивают и что отвечают — не знали. Зонд безусловный, потолок «первые 12 и каждый
+     * 200-й», печать через MESSAGE как у соседних приборов проекта. */
+    {
+        static LONG _n;
+        LONG _k = InterlockedIncrement( &_n );
+        BOOL _ok = NtGdiGetDCDword( hdc, method, result );
 
-    return NtGdiGetDCDword( hdc, method, result );
+        if (_k <= 12 || !(_k % 200))
+            MESSAGE( "macrunner-getdcdword: n=%ld hdc=%p method=%u ok=%d value=%08lx\n",
+                     (long)_k, hdc, method, _ok, result ? *result : 0xdeadbeef );
+        return _ok;
+    }
 }
 
 NTSTATUS WINAPI wow64_NtGdiGetDCObject( UINT *args )
@@ -2568,6 +2612,22 @@ NTSTATUS WINAPI wow64_NtGdiOffsetRgn( UINT *args )
 
 NTSTATUS WINAPI wow64_NtGdiOpenDCW( UINT *args )
 {
+    /* MacRunner 2026-08-13, лейн ЛЕСТНИЦА, итерация 808 — БЕЗУСЛОВНЫЙ ЗОНД ВХОДА/ВЫХОДА.
+     *
+     * Итерация 807 замерила: Diablo (i386) доходит до ПЕРВОГО вызова GDI и на нём кончается.
+     * `NtGdiOpenDCW` (0x1246, номер разрешён по `win32syscalls.h`) зовётся РОВНО ОДИН РАЗ на
+     * строке 7349 из 7520, после чего i386-сторона не работает ни разу.
+     *
+     * Признак объявлен заранее и различает ЧЕТЫРЕ исхода, а не два:
+     *   вход есть, выход есть, ret!=0   — вызов прошёл, стена ПОСЛЕ него;
+     *   вход есть, выхода нет           — умирает или виснет ВНУТРИ `NtGdiOpenDCW`;
+     *   вход есть, выход с ret=0        — GDI отказывает, смотреть внутрь `win32u`;
+     *   входа нет вовсе                 — вызов до переходника не доходит (маршрутизация).
+     *
+     * Печать через `MESSAGE`: это PE-модуль, и такой способ ДОКАЗАН живым примером —
+     * `macrunner-xtajit: hbc-syscall` печатается тем же макросом из `xtajit/cpu.c` и даёт
+     * 577 строк в том же журнале. */
+    UINT *raw = args;
     UNICODE_STRING32 *device32 = get_ptr( &args );
     const DEVMODEW *devmode = get_ptr( &args );
     UNICODE_STRING32 *output32 = get_ptr( &args );
@@ -2578,9 +2638,21 @@ NTSTATUS WINAPI wow64_NtGdiOpenDCW( UINT *args )
     void *pdev = get_ptr( &args );
 
     UNICODE_STRING device, output;
-    HDC ret = NtGdiOpenDCW( unicode_str_32to64( &device, device32 ), devmode,
-                            unicode_str_32to64( &output, output32 ), type,
-                            is_display, hspool, driver_info, pdev );
+    UNICODE_STRING *device64 = unicode_str_32to64( &device, device32 );
+    UNICODE_STRING *output64 = unicode_str_32to64( &output, output32 );
+    HDC ret;
+
+    MESSAGE( "macrunner-opendc: вход dev32=%08x devmode32=%08x out32=%08x type=%08x "
+             "disp=%08x hspool=%08x drv32=%08x pdev32=%08x dev64=%p buf=%p len=%u out64=%p\n",
+             (unsigned)raw[0], (unsigned)raw[1], (unsigned)raw[2], (unsigned)raw[3],
+             (unsigned)raw[4], (unsigned)raw[5], (unsigned)raw[6], (unsigned)raw[7],
+             device64, device64 ? device64->Buffer : NULL,
+             device64 ? (unsigned)device64->Length : 0u, output64 );
+
+    ret = NtGdiOpenDCW( device64, devmode, output64, type, is_display, hspool,
+                        driver_info, pdev );
+
+    MESSAGE( "macrunner-opendc: выход ret=%p\n", ret );
     return HandleToUlong( ret );
 }
 
@@ -2930,9 +3002,9 @@ NTSTATUS WINAPI wow64_NtGdiStartDoc( UINT *args )
 
     DOCINFOW doc;
     doc.cbSize = sizeof(doc);
-    doc.lpszDocName = UlongToPtr( doc32->lpszDocName );
-    doc.lpszOutput = UlongToPtr( doc32->lpszOutput );
-    doc.lpszDatatype = UlongToPtr( doc32->lpszDatatype );
+    doc.lpszDocName = guest32_host_ptr( doc32->lpszDocName );
+    doc.lpszOutput = guest32_host_ptr( doc32->lpszOutput );
+    doc.lpszDatatype = guest32_host_ptr( doc32->lpszDatatype );
     doc.fwType = doc32->fwType;
 
     return NtGdiStartDoc( hdc, &doc, banding, job );

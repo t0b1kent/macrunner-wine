@@ -7,6 +7,8 @@ SOURCES = \
 	lib/builtins/arm/aeabi_uldivmod.S \
 	lib/builtins/arm/divmodsi4.S \
 	lib/builtins/arm/udivmodsi4.S \
+	lib/builtins/i386/chkstk.S \
+	lib/builtins/i386/chkstk2.S \
 	lib/builtins/divdi3.c \
 	lib/builtins/divmoddi4.c \
 	lib/builtins/divmodsi4.c \
@@ -21,6 +23,7 @@ SOURCES = \
 	lib/builtins/floatundidf.c \
 	lib/builtins/floatundisf.c \
 	lib/builtins/mingw_fixfloat.c \
+	lib/builtins/moddi3.c \
 	lib/builtins/udivdi3.c \
 	lib/builtins/udivmoddi4.c \
 	lib/builtins/udivmodsi4.c \

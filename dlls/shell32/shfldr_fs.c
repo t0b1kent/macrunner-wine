@@ -72,6 +72,15 @@ typedef struct {
 
 static UINT cfShellIDList;
 
+static BOOL get_drive_path_from_pidl(LPCITEMIDLIST pidl, WCHAR path[MAX_PATH])
+{
+    char drive[MAX_PATH];
+
+    if (!_ILGetDrive(pidl, drive, sizeof(drive))) return FALSE;
+    if (!MultiByteToWideChar(CP_ACP, 0, drive, -1, path, MAX_PATH)) return FALSE;
+    return TRUE;
+}
+
 static inline IGenericSFImpl *impl_from_IUnknown(IUnknown *iface)
 {
     return CONTAINING_RECORD(iface, IGenericSFImpl, IUnknown_inner);
@@ -1413,7 +1422,8 @@ IFSFldr_PersistFolder3_Initialize (IPersistFolder3 * iface, LPCITEMIDLIST pidl)
         }
         else lstrcpyW( wszTemp, L"\\\\?\\unix\\" );
     }
-    else SHGetPathFromIDListW( pidl, wszTemp );
+    else if (!get_drive_path_from_pidl( pidl, wszTemp ))
+        SHGetPathFromIDListW( pidl, wszTemp );
 
     if ((len = lstrlenW(wszTemp)))
     {
@@ -1505,7 +1515,8 @@ IFSFldr_PersistFolder3_InitializeEx (IPersistFolder3 * iface,
             memcpy(This->sPathTarget, ppfti->szTargetParsingName,
                    (len + 1) * sizeof(WCHAR));
         } else if (ppfti->pidlTargetFolder) {
-            if (SHGetPathFromIDListW(ppfti->pidlTargetFolder, wszTemp)) {
+            if (get_drive_path_from_pidl(ppfti->pidlTargetFolder, wszTemp) ||
+                    SHGetPathFromIDListW(ppfti->pidlTargetFolder, wszTemp)) {
                 int len = lstrlenW(wszTemp);
                 This->sPathTarget = SHAlloc((len + 1) * sizeof(WCHAR));
                 if (!This->sPathTarget)

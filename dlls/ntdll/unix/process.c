@@ -706,7 +706,16 @@ static unsigned int get_pe_file_info( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *n
     HANDLE mapping;
 
     *handle = 0;
+    *unix_name = NULL;
+    nt_name->Buffer = NULL;
+    nt_name->Length = nt_name->MaximumLength = 0;
     memset( info, 0, sizeof(*info) );
+    if (macrunner_hb_prefer_native_helper_exe( attr->ObjectName ))
+    {
+        info->machine = IMAGE_FILE_MACHINE_ARM64;
+        TRACE( "assuming native helper builtin for %s\n", debugstr_us(attr->ObjectName));
+        return STATUS_SUCCESS;
+    }
     if (!(status = get_nt_and_unix_names( attr, nt_name, unix_name, FILE_OPEN, FALSE )))
     {
         status = open_unix_file( handle, *unix_name, GENERIC_READ, attr, 0,
@@ -858,10 +867,38 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
         isatty(1) && is_unix_console_handle( params->hStdOutput ))
         stdout_fd = 1;
 
+    /* ★★★★★ 28.08.2026 — ГДЕ ТЕРЯЕТСЯ СОЗДАНИЕ ПРОЦЕССА.
+     *
+     * Замер Diablo: `CreateProcessA` рапортует успех (итог=1 ошибка=0 pid=304), а нового
+     * процесса wine в системе НЕ появляется — ни журнала, ни своего DiabloEvent. Игра
+     * (единственный экземпляр) рисует окно, ждёт второго в цикле, не дожидается и уходит:
+     * окно мелькает и гаснет.
+     *
+     * Кандидатов на «успех без процесса» здесь два: ветка CrossOver-загрузчика (уходит на
+     * `done` со STATUS_SUCCESS) и двойной fork, где отказ внука виден только по коду выхода.
+     * Печатаем каждый шаг. Гейт `MACRUNNER_HB_SPAWN_PROBE`, умолчание ВЫКЛ. */
+    {
+        static int probe = -1;
+        if (probe < 0) probe = getenv( "MACRUNNER_HB_SPAWN_PROBE" ) ? 1 : 0;
+        if (probe)
+        {
+            fprintf( stderr, "macrunner-spawn: вход pid=%d cx_socket=%s\n",
+                     (int)getpid(), getenv("CX_ALT_LOADER_SOCKET") ? "ЕСТЬ" : "нет" );
+            fflush( stderr );
+        }
+    }
+
     /* CrossOver Hack 10523: shunt the loading to CrossOver */
     if (send_to_cx_loader(params, socketfd, stdin_fd, stdout_fd,
                           winedebug, pe_info))
+    {
+        if (getenv( "MACRUNNER_HB_SPAWN_PROBE" ))
+        {
+            fprintf( stderr, "macrunner-spawn: УШЛО В CX-ЗАГРУЗЧИК — процесс здесь не создаётся\n" );
+            fflush( stderr );
+        }
         goto done;
+    }
 
     if (!(pid = fork()))  /* child */
     {
@@ -933,7 +970,17 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
                 }
             }
 
+            if (getenv( "MACRUNNER_HB_SPAWN_PROBE" ))
+            {
+                fprintf( stderr, "macrunner-spawn: внук готов, зову exec_wineloader\n" );
+                fflush( stderr );
+            }
             exec_wineloader( argv, socketfd, pe_info, image_path_name_a );
+            if (getenv( "MACRUNNER_HB_SPAWN_PROBE" ))
+            {
+                fprintf( stderr, "macrunner-spawn: exec_wineloader ВЕРНУЛСЯ (значит НЕ УДАЛСЯ) errno=%d\n", errno );
+                fflush( stderr );
+            }
             _exit(1);
         }
 
@@ -1251,10 +1298,28 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
     unixdir = get_unix_curdir( params );
 
     InitializeObjectAttributes( &attr, &path, OBJ_CASE_INSENSITIVE, 0, 0 );
+    /* ★★★★★ 28.08.2026 — ГДЕ ТЕРЯЕТСЯ СОЗДАНИЕ ПРОЦЕССА У DIABLO.
+     *
+     * Замер: `CreateProcessA` возвращает успех, а процесса нет; при этом `spawn_process` от
+     * игры НЕ вызывается вовсе (четыре вызова за прогон — все от других процессов). Значит
+     * обрыв выше, здесь. Кандидат виден сразу: ветка `STATUS_INVALID_IMAGE_NOT_MZ` отдаёт
+     * STATUS_SUCCESS с НУЛЕВЫМИ дескрипторами процесса и потока.
+     * Гейт `MACRUNNER_HB_SPAWN_PROBE`, умолчание ВЫКЛ. */
     if ((status = get_pe_file_info( &attr, &nt_name, &unix_name, &file_handle, &pe_info )))
     {
+        if (getenv( "MACRUNNER_HB_SPAWN_PROBE" ))
+        {
+            fprintf( stderr, "macrunner-spawn: get_pe_file_info ОТКАЗ status=%#x образ=%s\n",
+                     (unsigned)status, debugstr_us(&path) );
+            fflush( stderr );
+        }
         if (status == STATUS_INVALID_IMAGE_NOT_MZ && !fork_and_exec( &attr, unix_name, unixdir, params ))
         {
+            if (getenv( "MACRUNNER_HB_SPAWN_PROBE" ))
+            {
+                fprintf( stderr, "macrunner-spawn: УСПЕХ БЕЗ ПРОЦЕССА (ветка NOT_MZ + fork_and_exec)\n" );
+                fflush( stderr );
+            }
             *process_handle_ptr = *thread_handle_ptr = 0;
             memset( info, 0, sizeof(*info) );
             free( unix_name );
@@ -1262,6 +1327,12 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
             return STATUS_SUCCESS;
         }
         goto done;
+    }
+    if (getenv( "MACRUNNER_HB_SPAWN_PROBE" ))
+    {
+        fprintf( stderr, "macrunner-spawn: образ разобран, machine=%04x, идём к spawn_process\n",
+                 (unsigned)pe_info.machine );
+        fflush( stderr );
     }
     if (!machine)
     {
@@ -1460,6 +1531,23 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
     unsigned int ret;
     BOOL self;
 
+    if (getenv("MACRUNNER_TRACE_PROCESS_EXIT") || getenv("MACRUNNER_TRACE_UI_INPUT"))
+    {
+        const RTL_USER_PROCESS_PARAMETERS *params = NtCurrentTeb()->Peb ? NtCurrentTeb()->Peb->ProcessParameters : NULL;
+#ifdef __APPLE__
+        char **argv = *_NSGetArgv();
+#else
+        char **argv = NULL;
+#endif
+        fprintf( stderr,
+                 "macrunner-process-exit: stage=NtTerminateProcess_enter pid=%d tid=%lx handle=%p exit_code=0x%x image=%s cmd=%s argv0=%s\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), handle, exit_code,
+                 params ? debugstr_us( &params->ImagePathName ) : "(null)",
+                 params ? debugstr_us( &params->CommandLine ) : "(null)",
+                 (argv && argv[0]) ? argv[0] : "(null)" );
+        fflush( stderr );
+    }
+
     SERVER_START_REQ( terminate_process )
     {
         req->handle    = wine_server_obj_handle( handle );
@@ -1468,6 +1556,15 @@ NTSTATUS WINAPI NtTerminateProcess( HANDLE handle, LONG exit_code )
         self = reply->self;
     }
     SERVER_END_REQ;
+
+    if (getenv("MACRUNNER_TRACE_PROCESS_EXIT") || getenv("MACRUNNER_TRACE_UI_INPUT"))
+    {
+        fprintf( stderr,
+                 "macrunner-process-exit: stage=NtTerminateProcess_after_server pid=%d tid=%lx ret=0x%x self=%d\n",
+                 getpid(), (unsigned long)GetCurrentThreadId(), ret, self );
+        fflush( stderr );
+    }
+
     if (self)
     {
         if (!handle) process_exiting = TRUE;
@@ -2470,6 +2567,21 @@ NTSTATUS WINAPI NtGetNextProcess( HANDLE process, ACCESS_MASK access, ULONG attr
 NTSTATUS WINAPI NtDebugActiveProcess( HANDLE process, HANDLE debug )
 {
     unsigned int ret;
+    /* MacRunner 2026-08-16, лейн ЛЕСТНИЦА, итерация 1304 — ВХОД И ВЫХОД ОТДЕЛЬНЫМИ ПЕЧАТЯМИ.
+     *
+     * Замер 1303: с перенесённым PEB32 набор `wow64_test` либо получает здесь ЛОЖЬ (отказ
+     * `wow64.c:1016 debugging failed`), либо не возвращается вовсе — четыре прогона подряд
+     * вставали ровно после последней строки предыдущей проверки. Который из двух исходов
+     * случился, из журнала было не видно: обычная печать результата в случае зависания не
+     * печатается НИКОГДА, потому что до неё не доходит.
+     *
+     * Поэтому печатей ДВЕ. «Вошёл без выхода» — доказательство зависания ИМЕННО здесь;
+     * «вошёл и вышел с кодом» — доказательство обратного, и тогда искать надо дальше.
+     * Печать безусловная (первые 8 вызовов), в stderr: канал `ERR` до наших журналов не
+     * доходит, это проверено в проекте 02.08. */
+    { static int said_in; if (said_in++ < 8)
+        fprintf( stderr, "macrunner-hb-debugattach: ВХОД process=%p debug=%p\n", process, debug ),
+        fflush( stderr ); }
 
     SERVER_START_REQ( debug_process )
     {
@@ -2479,6 +2591,9 @@ NTSTATUS WINAPI NtDebugActiveProcess( HANDLE process, HANDLE debug )
         ret = wine_server_call( req );
     }
     SERVER_END_REQ;
+
+    { static int said_out; if (said_out++ < 8)
+        fprintf( stderr, "macrunner-hb-debugattach: ВЫХОД ret=0x%x\n", ret ), fflush( stderr ); }
     return ret;
 }
 

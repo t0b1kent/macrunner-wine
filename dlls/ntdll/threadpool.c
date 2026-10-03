@@ -92,6 +92,35 @@ struct timer_queue
     HANDLE thread;
 };
 
+static void macrunner_timerqueue_trace(const char *phase, struct timer_queue *q,
+                                       struct queue_timer *t, ULONGLONG value)
+{
+    static LONG count;
+    struct list *head = q ? list_head(&q->timers) : NULL;
+    LONG current;
+
+    current = ++count;
+    if (current > 20000)
+    {
+        if (current == 20001)
+            MESSAGE("macrunner-hb-timerqueue: budget exhausted\n");
+        return;
+    }
+
+    MESSAGE("macrunner-hb-timerqueue: #%ld phase=%s tid=%p q=%p magic=%08lx quit=%u "
+        "qevent=%p qthread=%p head=%p t=%p tq=%p runcount=%lu destroy=%u "
+        "expire=%016llx period=%lu flags=%08lx tevent=%p entry=%p/%p value=%016llx\n",
+        current, phase ? phase : "?",
+        NtCurrentTeb() ? NtCurrentTeb()->ClientId.UniqueThread : NULL,
+        q, q ? q->magic : 0, q ? q->quit : 0, q ? q->event : NULL,
+        q ? q->thread : NULL, head, t, t ? t->q : NULL,
+        t ? t->runcount : 0, t ? t->destroy : 0,
+        (unsigned long long)(t ? t->expire : 0), t ? t->period : 0,
+        t ? t->flags : 0, t ? t->event : NULL,
+        t ? t->entry.prev : NULL, t ? t->entry.next : NULL,
+        (unsigned long long)value);
+}
+
 /*
  * Object-oriented thread pooling API
  */
@@ -565,6 +594,7 @@ static void queue_remove_timer(struct queue_timer *t)
        being zero makes sure we don't have any already queued.  */
     struct timer_queue *q = t->q;
 
+    macrunner_timerqueue_trace("remove-enter", q, t, 0);
     assert(t->runcount == 0);
     assert(t->destroy);
 
@@ -582,8 +612,10 @@ static void timer_cleanup_callback(struct queue_timer *t)
     struct timer_queue *q = t->q;
     RtlEnterCriticalSection(&q->cs);
 
+    macrunner_timerqueue_trace("cleanup-enter", q, t, 0);
     assert(0 < t->runcount);
     --t->runcount;
+    macrunner_timerqueue_trace("cleanup-after-decrement", q, t, 0);
 
     if (t->destroy && t->runcount == 0)
         queue_remove_timer(t);
@@ -613,6 +645,7 @@ static void queue_add_timer(struct queue_timer *t, ULONGLONG time,
     struct timer_queue *q = t->q;
     struct list *ptr = &q->timers;
 
+    macrunner_timerqueue_trace("add-before", q, t, time);
     assert(!q->quit || (t->destroy && time == EXPIRE_NEVER));
 
     if (time != EXPIRE_NEVER)
@@ -630,14 +663,17 @@ static void queue_add_timer(struct queue_timer *t, ULONGLONG time,
        than expected.  */
     if (set_event && &t->entry == list_head(&q->timers))
         NtSetEvent(q->event, NULL);
+    macrunner_timerqueue_trace("add-after", q, t, time);
 }
 
 static inline void queue_move_timer(struct queue_timer *t, ULONGLONG time,
                                     BOOL set_event)
 {
     /* We MUST hold the queue cs while calling this function.  */
+    macrunner_timerqueue_trace("move-before", t->q, t, time);
     list_remove(&t->entry);
     queue_add_timer(t, time, set_event);
+    macrunner_timerqueue_trace("move-after", t->q, t, time);
 }
 
 static void queue_timer_expire(struct timer_queue *q)
@@ -661,6 +697,7 @@ static void queue_timer_expire(struct timer_queue *q)
             }
             else
                 next = EXPIRE_NEVER;
+            macrunner_timerqueue_trace("expire-selected", q, t, next);
             queue_move_timer(t, next, FALSE);
         }
         else
@@ -679,6 +716,7 @@ static void queue_timer_expire(struct timer_queue *q)
                    & (WT_EXECUTEINIOTHREAD | WT_EXECUTEINPERSISTENTTHREAD
                       | WT_EXECUTELONGFUNCTION | WT_TRANSFER_IMPERSONATION));
             NTSTATUS status = RtlQueueWorkItem(timer_callback_wrapper, t, flags);
+            macrunner_timerqueue_trace("expire-queued-work", q, t, status);
             if (status != STATUS_SUCCESS)
                 timer_cleanup_callback(t);
         }
@@ -753,7 +791,9 @@ static void WINAPI timer_queue_thread_proc(LPVOID p)
 static void queue_destroy_timer(struct queue_timer *t)
 {
     /* We MUST hold the queue cs while calling this function.  */
+    macrunner_timerqueue_trace("destroy-before", t->q, t, 0);
     t->destroy = TRUE;
+    macrunner_timerqueue_trace("destroy-after", t->q, t, 0);
     if (t->runcount == 0)
         /* Ensure a timer is promptly removed.  If callbacks are pending,
            it will be removed after the last one finishes by the callback
@@ -804,6 +844,7 @@ NTSTATUS WINAPI RtlCreateTimerQueue(PHANDLE NewTimerQueue)
     }
 
     *NewTimerQueue = q;
+    macrunner_timerqueue_trace("queue-create", q, NULL, status);
     return STATUS_SUCCESS;
 }
 
@@ -834,6 +875,7 @@ NTSTATUS WINAPI RtlDeleteTimerQueueEx(HANDLE TimerQueue, HANDLE CompletionEvent)
         return STATUS_INVALID_HANDLE;
 
     thread = q->thread;
+    macrunner_timerqueue_trace("queue-delete-enter", q, NULL, (ULONGLONG)(ULONG_PTR)CompletionEvent);
 
     RtlEnterCriticalSection(&q->cs);
     q->quit = TRUE;
@@ -841,7 +883,10 @@ NTSTATUS WINAPI RtlDeleteTimerQueueEx(HANDLE TimerQueue, HANDLE CompletionEvent)
         /* When the last timer is removed, it will signal the timer thread to
            exit...  */
         LIST_FOR_EACH_ENTRY_SAFE(t, temp, &q->timers, struct queue_timer, entry)
+        {
+            macrunner_timerqueue_trace("queue-delete-member", q, t, 0);
             queue_destroy_timer(t);
+        }
     else
         /* However if we have none, we must do it ourselves.  */
         NtSetEvent(q->event, NULL);
@@ -885,6 +930,8 @@ static struct timer_queue *get_timer_queue(HANDLE TimerQueue)
                 if (p)
                     /* Got beat to the punch.  */
                     RtlDeleteTimerQueueEx(q, NULL);
+                else
+                    macrunner_timerqueue_trace("default-queue-installed", q, NULL, 0);
             }
         }
         return default_timer_queue;
@@ -942,6 +989,8 @@ NTSTATUS WINAPI RtlCreateTimer(HANDLE TimerQueue, HANDLE *NewTimer,
     t->event = NULL;
 
     status = STATUS_SUCCESS;
+    macrunner_timerqueue_trace("timer-create-before-lock", q, t,
+                               ((ULONGLONG)Period << 32) | DueTime);
     RtlEnterCriticalSection(&q->cs);
     if (q->quit)
         status = STATUS_INVALID_HANDLE;
@@ -950,9 +999,16 @@ NTSTATUS WINAPI RtlCreateTimer(HANDLE TimerQueue, HANDLE *NewTimer,
     RtlLeaveCriticalSection(&q->cs);
 
     if (status == STATUS_SUCCESS)
+    {
         *NewTimer = t;
+        macrunner_timerqueue_trace("timer-create-success", q, t,
+                                   ((ULONGLONG)Period << 32) | DueTime);
+    }
     else
+    {
+        macrunner_timerqueue_trace("timer-create-fail", q, t, status);
         RtlFreeHeap(GetProcessHeap(), 0, t);
+    }
 
     return status;
 }
@@ -981,6 +1037,8 @@ NTSTATUS WINAPI RtlUpdateTimer(HANDLE TimerQueue, HANDLE Timer,
     struct queue_timer *t = Timer;
     struct timer_queue *q = t->q;
 
+    macrunner_timerqueue_trace("timer-update-enter", q, t,
+                               ((ULONGLONG)Period << 32) | DueTime);
     RtlEnterCriticalSection(&q->cs);
     /* Can't change a timer if it was once-only or destroyed.  */
     if (t->expire != EXPIRE_NEVER)
@@ -1022,6 +1080,8 @@ NTSTATUS WINAPI RtlDeleteTimer(HANDLE TimerQueue, HANDLE Timer,
     if (!Timer)
         return STATUS_INVALID_PARAMETER_1;
     q = t->q;
+    macrunner_timerqueue_trace("timer-delete-enter", q, t,
+                               (ULONGLONG)(ULONG_PTR)CompletionEvent);
     if (CompletionEvent == INVALID_HANDLE_VALUE)
     {
         status = NtCreateEvent(&event, EVENT_ALL_ACCESS, NULL, SynchronizationEvent, FALSE);
@@ -1035,6 +1095,7 @@ NTSTATUS WINAPI RtlDeleteTimer(HANDLE TimerQueue, HANDLE Timer,
     t->event = event;
     if (t->runcount == 0 && event)
         status = STATUS_SUCCESS;
+    macrunner_timerqueue_trace("timer-delete-before-destroy", q, t, status);
     queue_destroy_timer(t);
     RtlLeaveCriticalSection(&q->cs);
 

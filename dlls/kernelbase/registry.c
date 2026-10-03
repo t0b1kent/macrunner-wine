@@ -83,6 +83,34 @@ static struct list reg_mui_cache = LIST_INIT(reg_mui_cache); /* MRU */
 static unsigned int reg_mui_cache_count;
 #define REG_MUI_CACHE_SIZE 8
 
+/* MacRunner 2026-07-28 (HK input): reg_mui_cache read back as {0,0}, so LIST_FOR_EACH_ENTRY
+ * dereferenced NULL at kernelbase+0x5CCC8 (`ldr w8,[x25,#0x18]`, x25==0) => c0000005.  That kills
+ * DllMain's init_locale(), process_attach(kernelbase) fails, and explorer.exe/services.exe die at
+ * 1s.  With no explorer there is no desktop, so load_desktop_driver() fails, winemac.drv never
+ * loads, [NSApp run] is never entered, and no keyboard or mouse event can reach the guest.
+ *
+ * The original diagnosis — "under ARM64X the static LIST_INIT above only lands in the native
+ * view" — was WRONG, and the twin-sweep lane refuted it against the shipped binary the same day.
+ * The linker initialises BOTH copies correctly; in kernelbase.dll sha b7e96fb9 the two copies
+ * hold {0x1801525B0,0x1801525B0} and {0x180150AB0,0x180150AB0}, each pointing at ITSELF, exactly
+ * as LIST_INIT intends.  All 75 .data twin pairs check out that way, and the DVRT has no .data
+ * entries, so nothing rewrites them at load.
+ *
+ * What actually zeroed this list was locale.c's own mirror.  macrunner_hb_sync_locale_ec_copies
+ * computed its destination as `&g - delta` when the native blob is the LOWER one and the twin is
+ * at `+delta`, so MR_SYNC_CORE_EC(codepages) memcpy'd 8192 bytes of zeroed .bss over
+ * RVA 0x1503F0..0x1523F0 — which contains reg_mui_cache (0x150AB0), reg_mui_cs, reg_mui_cs_debug
+ * and entry_sintlsymbol (the "first casualty").  That mirror is now disabled; see the block
+ * comment on macrunner_hb_mirror_ec_copy in locale.c for the full address evidence.
+ *
+ * So the list_init below is a repair for damage that no longer happens.  With the mirror off,
+ * reg_mui_cache.next is non-NULL from load and this is a no-op.  Kept as cheap insurance, not
+ * because the twin needs it. */
+static inline void reg_mui_cache_ensure_init(void)
+{
+    if (!reg_mui_cache.next) list_init( &reg_mui_cache );
+}
+
 #define IS_OPTION_TRUE(ch) ((ch) == 'y' || (ch) == 'Y' || (ch) == 't' || (ch) == 'T' || (ch) == '1')
 
 /* check if value type needs string conversion (Ansi<->Unicode) */
@@ -2761,6 +2789,7 @@ static void dump_mui_cache(void)
 {
     struct mui_cache_entry *ent;
 
+    reg_mui_cache_ensure_init();
     TRACE("---------- MUI Cache ----------\n");
     LIST_FOR_EACH_ENTRY( ent, &reg_mui_cache, struct mui_cache_entry, entry )
         TRACE("entry=%p, %s,-%lu [%#lx] => %s\n",
@@ -2781,6 +2810,7 @@ static int reg_mui_cache_get(const WCHAR *file_name, UINT index, WCHAR **buffer)
 
     TRACE("(%s %u %p)\n", wine_dbgstr_w(file_name), index, buffer);
 
+    reg_mui_cache_ensure_init();
     LIST_FOR_EACH_ENTRY(ent, &reg_mui_cache, struct mui_cache_entry, entry)
     {
         if (ent->index == index && ent->locale == GetThreadLocale() &&
@@ -2807,6 +2837,7 @@ static void reg_mui_cache_put(const WCHAR *file_name, UINT index, const WCHAR *b
     struct mui_cache_entry *ent;
     TRACE("(%s %u %s %d)\n", wine_dbgstr_w(file_name), index, wine_dbgstr_wn(buffer, size), size);
 
+    reg_mui_cache_ensure_init();
     ent = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*ent));
     if (!ent)
         return;

@@ -571,6 +571,10 @@ This is an error since --enable-archs=$wine_arch was requested.])])
     WINE_TRY_PE_CFLAGS([-Wenum-enum-conversion],[:],WINE_TRY_PE_CFLAGS([-Wenum-conversion]))
     WINE_TRY_PE_CFLAGS([-ffunction-sections])
     WINE_TRY_PE_CFLAGS([-fasync-exceptions -DMIN_CLANG_VERSION=19], AS_VAR_APPEND([${wine_arch}_EXTRACFLAGS],[" -fasync-exceptions"]))
+    dnl MacRunner: clang 22 ignores -fasync-exceptions; -fms-extensions is what actually enables the
+    dnl __try/__except keyword.  Pair it with -DUSE_COMPILER_EXCEPTIONS so wine/exception.h uses the
+    dnl compiler SEH (the PE-side ntdll signal code is native-SEH style: return inside __TRY, no __ENDTRY).
+    WINE_TRY_PE_CFLAGS([-fms-extensions], [AS_VAR_APPEND([${wine_arch}_EXTRACFLAGS],[" -fms-extensions -DUSE_COMPILER_EXCEPTIONS"])])
     WINE_TRY_PE_CFLAGS([-ffp-exception-behavior=maytrap])
 
     dnl clang had broken -fms-hotpatch support before version 18 (https://github.com/llvm/llvm-project/pull/77245)
@@ -945,10 +949,18 @@ case $host_os in
         AC_CHECK_HEADERS(AVFoundation/AVFoundation.h)
     AC_LANG_POP([Objective C])
 
-    WINELOADER_LDFLAGS="-Wl,-segalign,0x1000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist"
+    case $HOST_ARCH in
+      aarch64)
+        WINELOADER_LDFLAGS="-Wl,-segalign,0x4000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist"
+        ;;
+      *)
+        WINELOADER_LDFLAGS="-Wl,-segalign,0x1000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist"
+        ;;
+    esac
 
     case $HOST_ARCH in
       i386) wine_use_preloader=yes ;;
+      aarch64) wine_use_preloader=yes ;;
       x86_64)
         dnl If the -no_huge linker option is present (added in Xcode 15.3), use zerofill sections instead of the preloader
         WINE_TRY_CFLAGS([-Wl,-no_huge],
@@ -961,19 +973,29 @@ case $host_os in
 
     if test "$wine_use_preloader" = "yes"
     then
-        WINEPRELOADER_LDFLAGS="-nostartfiles -nodefaultlibs -e _start -ldylib1.o -mmacosx-version-min=10.7 -Wl,-no_new_main,-segalign,0x1000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist"
-        WINE_TRY_CFLAGS([-Wl,-no_pie],
-                        [WINEPRELOADER_LDFLAGS="-Wl,-no_pie $WINEPRELOADER_LDFLAGS"])
         case $HOST_ARCH in
-          i386)
-            WINEPRELOADER_LDFLAGS="-Wl,-image_base,0x7d400000 $WINEPRELOADER_LDFLAGS"
+          aarch64)
+            WINEPRELOADER_LDFLAGS="-nostartfiles -nodefaultlibs -Wl,-e,_start,-segalign,0x4000,-pagezero_size,0x100000000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist -lSystem"
             ;;
-          x86_64)
-            WINEPRELOADER_LDFLAGS="-Wl,-image_base,0x200000000,-segalign,0x1000,-segaddr,WINE_RESERVE,0x1000 $WINEPRELOADER_LDFLAGS"
+          *)
+            WINEPRELOADER_LDFLAGS="-nostartfiles -nodefaultlibs -e _start -ldylib1.o -mmacosx-version-min=10.7 -Wl,-no_new_main,-segalign,0x1000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist"
+            WINE_TRY_CFLAGS([-Wl,-no_pie],
+                            [WINEPRELOADER_LDFLAGS="-Wl,-no_pie $WINEPRELOADER_LDFLAGS"])
+            case $HOST_ARCH in
+              i386)
+                WINEPRELOADER_LDFLAGS="-Wl,-image_base,0x7d400000 $WINEPRELOADER_LDFLAGS"
+                ;;
+              x86_64)
+                WINEPRELOADER_LDFLAGS="-Wl,-image_base,0x200000000,-segalign,0x1000,-segaddr,WINE_RESERVE,0x1000 $WINEPRELOADER_LDFLAGS"
+                ;;
+            esac
             ;;
         esac
-        dnl If preloader is used, the loader needs to be an LC_UNIXTHREAD binary to avoid AppKit/Core Animation problems.
-        WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -mmacosx-version-min=10.7"
+        dnl If preloader is used, non-arm64 loaders need to stay on the legacy startup path.
+        case $HOST_ARCH in
+          aarch64) ;;
+          *) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -mmacosx-version-min=10.7" ;;
+        esac
     fi
 
     if test "x$with_coreaudio" != "xno";
@@ -2414,11 +2436,13 @@ then
     enable_wow64=${enable_wow64:-aarch64,x86_64}
     enable_wow64win=${enable_wow64win:-aarch64,x86_64}
     enable_wow64cpu=${enable_wow64cpu:-x86_64}
+    enable_xtajit=${enable_xtajit:-aarch64}
     enable_xtajit64=${enable_xtajit64:-arm64ec}
 else
     enable_wow64=${enable_wow64:-no}
     enable_wow64win=${enable_wow64win:-no}
     enable_wow64cpu=${enable_wow64cpu:-no}
+    enable_xtajit=${enable_xtajit:-no}
     enable_xtajit64=${enable_xtajit64:-no}
     enable_compiler_rt=${enable_compiler_rt:-no}
 fi
@@ -3515,6 +3539,7 @@ WINE_CONFIG_MAKEFILE(dlls/xmllite/tests)
 WINE_CONFIG_MAKEFILE(dlls/xolehlp)
 WINE_CONFIG_MAKEFILE(dlls/xpsprint)
 WINE_CONFIG_MAKEFILE(dlls/xpssvcs)
+WINE_CONFIG_MAKEFILE(dlls/xtajit)
 WINE_CONFIG_MAKEFILE(dlls/xtajit64)
 WINE_CONFIG_MAKEFILE(fonts)
 WINE_CONFIG_MAKEFILE(include)

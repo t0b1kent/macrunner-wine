@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #ifdef HAVE_SYS_STAT_H
 # include <sys/stat.h>
 #endif
@@ -352,6 +353,24 @@ static inline void signal_all_internal( unsigned int shm_idx )
     struct tid_node *current, *temp;
     struct tid_list *list = get_tid_list( shm_idx );
 
+    /* MacRunner 2026-06-21: inter-signal cadence meter — is the trigger a fixed ~10ms tick
+     * (server timer) or producer-paced (variable)? Reports min/avg gap every ~2000 signals. */
+    {
+        static int mr_en = -1; static FILE *mr_f; static uint64_t mr_n, mr_last_us, mr_sum_us, mr_min_us = ~0ull;
+        if (mr_en < 0) { mr_en = getenv("MACRUNNER_HB_TRACE_SYNCMETER") ? 1 : 0; if (mr_en) mr_f = fopen("/tmp/hk-msync-cadence.txt", "a"); }
+        if (mr_en && mr_f) {
+            struct timeval tv; gettimeofday(&tv, NULL);
+            uint64_t now = (uint64_t)tv.tv_sec*1000000ull + tv.tv_usec;
+            if (mr_last_us) { uint64_t d = now - mr_last_us; mr_sum_us += d; if (d < mr_min_us) mr_min_us = d; }
+            mr_last_us = now;
+            if ((++mr_n % 2000) == 0) {
+                fprintf(mr_f, "msync-cadence: signal_all_internal n=%llu avg_gap_us=%llu min_gap_us=%llu\n",
+                        (unsigned long long)mr_n, (unsigned long long)(mr_sum_us/mr_n), (unsigned long long)mr_min_us);
+                fflush(mr_f);
+            }
+        }
+    }
+
     current = list->head;
     list->head = NULL;
 
@@ -672,10 +691,12 @@ static void *get_shm( unsigned int idx )
     if (entry >= shm_addrs_size)
     {
         int new_size = max(shm_addrs_size * 2, entry + 1);
+        void **new_addrs;
 
-        if (!(shm_addrs = realloc( shm_addrs, new_size * sizeof(shm_addrs[0]) )))
-            fprintf( stderr, "msync: couldn't expand shm_addrs array to size %d\n", entry + 1 );
+        if (!(new_addrs = realloc( shm_addrs, new_size * sizeof(shm_addrs[0]) )))
+            fatal_error( "msync: couldn't expand shm_addrs array to size %d\n", new_size );
 
+        shm_addrs = new_addrs;
         memset( shm_addrs + shm_addrs_size, 0, (new_size - shm_addrs_size) * sizeof(shm_addrs[0]) );
 
         shm_addrs_size = new_size;
@@ -684,11 +705,20 @@ static void *get_shm( unsigned int idx )
     if (!shm_addrs[entry])
     {
         kern_return_t kr;
-        mach_vm_address_t address;
+        mach_vm_address_t address = 0;
 
         kr = mach_vm_map( mach_task_self(), (mach_vm_address_t *)&address, (mach_vm_size_t)pagesize, 0, VM_FLAGS_ANYWHERE,
                           MACH_PORT_NULL, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT, VM_INHERIT_SHARE );
-        MACH_CHECK_ERROR( kr, "mach_vm_map" );
+        if (kr != KERN_SUCCESS)
+        {
+            struct timeval now = {0};
+            gettimeofday( &now, NULL );
+            /* Never clear or publish an address from a failed mapping. */
+            fatal_error( "msync: mach_vm_map failed time=%lld.%06ld pid=%ld idx=%u entry=%d size=%llu "
+                         "address=0x%llx kr=%d: %s\n",
+                         (long long)now.tv_sec, (long)now.tv_usec, (long)getpid(), idx, entry,
+                         (unsigned long long)pagesize, (unsigned long long)address, kr, mach_error_string( kr ) );
+        }
         memset( (void *)address, 0, pagesize );
 
         if (debug_level)

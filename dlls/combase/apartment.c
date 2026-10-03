@@ -1276,6 +1276,28 @@ HRESULT apartment_createwindowifneeded(struct apartment *apt)
 {
     static INIT_ONCE class_init_once = INIT_ONCE_STATIC_INIT;
 
+    /* MacRunner 2026-08-27 — ВХОД В ФУНКЦИЮ, а не только создание.
+     *
+     * Первая редакция прибора стояла внутри ветви `if (!apt->win)` и не сработала ни разу,
+     * при 288 созданных окнах OleMainThreadWndClass. Значит окна создаёт не эта функция —
+     * либо её вовсе не зовут, либо зовут и она уходит по S_OK. Отмечаем сам вход. */
+    {
+        /* ★ ПОПРАВКА: печаталась ОДНА строка при 45 созданных окнах, хотя условие пропускает
+         * первые восемь. Значит InterlockedIncrement возвращает всегда 1 — то есть атомарная
+         * операция в i386-госте не сохраняет результат. Печатаем БЕЗУСЛОВНО первые двадцать
+         * и сравниваем атомарный счётчик с обычным: если они разойдутся, дефект наш. */
+        static LONG enter_n;
+        static LONG plain_n;
+        LONG en = InterlockedIncrement( &enter_n );
+        LONG pn = ++plain_n;
+
+        if (pn <= 20)
+            ERR( "macrunner-apt-enter: обычный=%ld атомарный=%ld (в памяти=%ld) апартамент=%p "
+                 "многопоточный=%d окно=%p\n",
+                 (long)pn, (long)en, (long)enter_n, apt,
+                 apt ? apt->multi_threaded : -1, apt ? apt->win : NULL );
+    }
+
     if (apt->multi_threaded)
         return S_OK;
 
@@ -1291,9 +1313,29 @@ HRESULT apartment_createwindowifneeded(struct apartment *apt)
             ERR("CreateWindow failed with error %ld\n", GetLastError());
             return HRESULT_FROM_WIN32(GetLastError());
         }
-        if (InterlockedCompareExchangePointer((void **)&apt->win, hwnd, NULL))
-            /* someone beat us to it */
-            DestroyWindow(hwnd);
+        /* MacRunner 2026-08-27 — СОХРАНЯЕТСЯ ЛИ ОКНО АПАРТАМЕНТА.
+         *
+         * Замер Heroes III: 4597 окон класса OleMainThreadWndClass за 100 секунд, все с
+         * parent=HWND_MESSAGE, все создаются успешно и ни одно не уничтожается. По коду это
+         * невозможно: окно создаётся только при apt->win == NULL и тут же сохраняется.
+         *
+         * Значит либо апартамент каждый раз новый, либо сохранение не срабатывает — а
+         * InterlockedCompareExchangePointer здесь исполняется НАШИМ транслятором, гостевым
+         * cmpxchg. Печатаем apt, значение до и после: это различит три случая за один прогон. */
+        {
+            void *before = apt->win;
+            void *prev = InterlockedCompareExchangePointer((void **)&apt->win, hwnd, NULL);
+            void *after = apt->win;
+            static LONG apt_n;
+            LONG an = InterlockedIncrement( &apt_n );
+
+            if (an <= 8 || !(an % 500))
+                ERR( "macrunner-apt-win: n=%ld апартамент=%p было=%p вернул=%p стало=%p окно=%p\n",
+                     (long)an, apt, before, prev, after, hwnd );
+            if (prev)
+                /* someone beat us to it */
+                DestroyWindow(hwnd);
+        }
     }
 
     return S_OK;

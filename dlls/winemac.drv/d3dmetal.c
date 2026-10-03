@@ -22,7 +22,7 @@
 #pragma makedep unix
 #endif
 
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__aarch64__)
 
 #include "config.h"
 
@@ -104,6 +104,17 @@ static struct d3dmetal_macdrv_win_data *my_get_win_data(HWND hwnd)
     struct macdrv_client_surface *client_surface;
     TRACE("get_win_data %p\n", hwnd);
 
+    /* MacRunner 2026-07-29 (HK E2E lane): THIS is the first winemac.so entry point that
+     * Hollow Knight's own process ever reaches -- DXMT calls it through the exported
+     * `macdrv_functions` table below, which needs neither a unixlib call nor a DllMain.
+     * Measured over all 20 of the day's HK run dirs: macrunner-get-win-data prints with
+     * HK's unix pid while stage=macdrv_init_entry, stage=wow64_init_entry and
+     * stage=dllmain_attach are ALL 0 for it, so the driver is present but uninitialised
+     * and win32u keeps load_display_driver()'s re-entrancy placeholder for life.
+     * Initialise here, before any window work, so the Cocoa app loop is running and the
+     * real driver is installed by the time the swapchain window is realised. */
+    macdrv_process_selfinit();
+
     /* Creating a client surface on each call to get_win_data() means it's no longer idempotent,
      * but D3DMetal/DXMT both call it only when creating a new DXGI swapchain.
      * They do:
@@ -111,10 +122,37 @@ static struct d3dmetal_macdrv_win_data *my_get_win_data(HWND hwnd)
      */
     client_surface = macdrv_client_surface_create(hwnd);
 
+    /* MacRunner instrument: discriminate get_win_data=NULL cause (thread / top-level / ordering).
+     * Use raw fprintf(stderr) (unconditional) — ERR() is channel-gated and was suppressed at runtime. */
+    {
+        DWORD owner_tid = NtUserGetWindowThread( hwnd, NULL );
+        DWORD current_tid = GetCurrentThreadId();
+        HWND root = NtUserGetAncestor( hwnd, GA_ROOT );
+        fprintf( stderr, "macrunner-get-win-data: hwnd=%p owner_tid=%u current_tid=%u same=%d root=%p is_root=%d\n",
+                 hwnd, (unsigned)owner_tid, (unsigned)current_tid, (int)(owner_tid == current_tid),
+                 (void *)root, (int)(root == hwnd) );
+        fflush( stderr );
+    }
+
     /* get_win_data() needs to happen after client_surface creation to avoid deadlocks */
     data = get_win_data(hwnd);
     if (!data)
     {
+        data = macdrv_ensure_win_data(hwnd);
+        if (data)
+        {
+            release_win_data(data);
+            client_surface->client.funcs->update(&client_surface->client);
+            client_surface->client.funcs->present(&client_surface->client, 0);
+            data = get_win_data(hwnd);
+        }
+    }
+    if (!data)
+    {
+        /* MacRunner 2026-06-20: force-realize-via-SetWindowPos from this unix-call
+         * binding context was REFUTED (swp=1 but never reaches macdrv_WindowPosChanging;
+         * the game window/tid is never realized by macdrv at all). Reverted to the
+         * plain NULL return; the realize fix lives elsewhere (defer/retry or PE-side). */
         client_surface_release((struct client_surface *)client_surface);
         return NULL;
     }
@@ -164,9 +202,21 @@ static void my_release_win_data(struct d3dmetal_macdrv_win_data *data)
     free(data);
 }
 
+/* MacRunner 2026-07-29 (HK E2E lane): self-init RETRY points.
+ *
+ * get_win_data() above is a one-shot -- DXMT calls it only when creating a swapchain -- so
+ * with MACRUNNER_MACDRV_SELFINIT_DELAY_MS set, that single early call declines and nothing
+ * would ever bring the driver up. These three are the recurring entry points DXMT drives
+ * from the render path, so the deferred install lands on the first frame after the delay,
+ * which is the point of the deferral: after the Mono scene load, not in the middle of it.
+ *
+ * Free when the delay is unset or already satisfied -- macdrv_process_selfinit() returns on
+ * a plain BOOL read once the driver is up. All three are called on Wine threads, which is
+ * required: see the TEB note on macdrv_process_selfinit(). */
 static macdrv_window my_macdrv_get_cocoa_window(HWND hwnd, BOOL require_on_screen)
 {
     TRACE("macdrv_get_cocoa_window %p %d\n", hwnd, require_on_screen);
+    macdrv_process_selfinit();
     return macdrv_get_cocoa_window(hwnd, require_on_screen);
 }
 
@@ -191,6 +241,7 @@ static macdrv_metal_view my_macdrv_view_create_metal_view(macdrv_view v, macdrv_
 static macdrv_metal_layer my_macdrv_view_get_metal_layer(macdrv_metal_view v)
 {
     TRACE("macdrv_view_get_metal_layer %p\n", v);
+    macdrv_process_selfinit();   /* deferred-install retry, see my_macdrv_get_cocoa_window */
     return macdrv_view_get_metal_layer(v);
 }
 
@@ -366,6 +417,7 @@ static LONG_PTR WINAPI my_GetWindowLongPtrW(HWND h,int nIndex)
 static BOOL WINAPI my_GetWindowRect(HWND h, LPRECT rect)
 {
     TRACE("GetWindowRect %p %p\n", h, rect);
+    macdrv_process_selfinit();   /* deferred-install retry, see my_macdrv_get_cocoa_window */
     return NtUserGetWindowRect(h, rect, NtUserGetWinMonitorDpi(h, MDT_DEFAULT));
 }
 

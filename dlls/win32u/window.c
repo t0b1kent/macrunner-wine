@@ -28,6 +28,7 @@
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "ntgdi_private.h"
+#include <unistd.h>
 #include "ntuser_private.h"
 #include "wine/opengl_driver.h"
 #include "wine/server.h"
@@ -35,8 +36,24 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(win);
 
+/* ★ 06.09.2026 — реализация прибора в dib.c, здесь только заголовок. */
+#include "hb_probe.h"
+
+HB_PROBE_DEFINE(pr_createwnd, "createwnd",
+                "входы в создание окна (NtUserCreateWindowEx), СЧИТАЯ отказавшие и "
+                "служебные классы — фильтровать по полю pid= и по имени класса обязан "
+                "читатель. Окна ДРУГИХ процессов прогона (explorer, services) сюда не "
+                "попадают: у каждого процесса свой образ win32u.so и своя перепись",
+                NULL, 400);
+
 #define USER_HANDLE_TO_INDEX(hwnd) ((LOWORD(hwnd) - FIRST_USER_HANDLE) >> 1)
 #define USER_HANDLE_FROM_INDEX(index, generation) UlongToHandle( (index << 1) + FIRST_USER_HANDLE + (generation << 16) )
+
+static BOOL macrunner_trace_create_window(void)
+{
+    const char *val = getenv( "MACRUNNER_HB_TRACE_GEOMETRY" );
+    return val && val[0] && val[0] != '0';
+}
 
 static void *client_objects[MAX_USER_HANDLES];
 
@@ -2159,7 +2176,14 @@ static struct window_surface *get_window_surface( HWND hwnd, UINT swp_flags, BOO
     if (is_child) monitor_rects = map_dpi_window_rects( *rects, get_thread_dpi(), raw_dpi );
     else monitor_rects = map_window_rects_virt_to_raw( *rects, get_thread_dpi() );
 
-    if (!user_driver->pWindowPosChanging( hwnd, swp_flags, shaped, &monitor_rects )) needs_surface = FALSE;
+    if (!user_driver->pWindowPosChanging( hwnd, swp_flags, shaped, &monitor_rects ))
+    {
+        needs_surface = FALSE;
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-window-surface: stage=pos-changing-no-surface hwnd=%p flags=%08x "
+                     "shaped=%d rect=%s parent=%p child=%d\n", hwnd, swp_flags, shaped,
+                     wine_dbgstr_rect(&monitor_rects.window), parent, is_child );
+    }
     else if (is_child) needs_surface = FALSE;
     else if (swp_flags & SWP_HIDEWINDOW) needs_surface = FALSE;
     else if (swp_flags & SWP_SHOWWINDOW) needs_surface = TRUE;
@@ -2167,6 +2191,11 @@ static struct window_surface *get_window_surface( HWND hwnd, UINT swp_flags, BOO
 
     if (!is_child) rects->visible = get_visible_rect( hwnd, shaped, style, ex_style, rects );
     if (!get_surface_rect( &rects->visible, surface_rect )) needs_surface = FALSE;
+    if (macrunner_trace_create_window())
+        fprintf( stderr, "macrunner-window-surface: stage=surface-decision hwnd=%p flags=%08x "
+                 "needs_surface=%d child=%d style=%08x ex=%08x visible=%s surface=%s\n",
+                 hwnd, swp_flags, needs_surface, is_child, style, ex_style,
+                 wine_dbgstr_rect(&rects->visible), wine_dbgstr_rect(surface_rect) );
     if (!get_default_window_surface( hwnd, surface_rect, &new_surface )) return NULL;
 
     is_layered = new_surface && new_surface->alpha_mask;
@@ -2437,8 +2466,16 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
         if (!owner_hint) owner_hint = NtUserWindowFromPoint(new_rects->window.left - 1, new_rects->window.top - 1);
         if (owner_hint) owner_hint = NtUserGetAncestor(owner_hint, GA_ROOT);
 
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-window-pos: stage=before-driver-pos-changed hwnd=%p flags=%08x "
+                     "insert_after=%p owner_hint=%p window=%s visible=%s surface=%p\n",
+                     hwnd, swp_flags, insert_after, owner_hint, wine_dbgstr_rect(&monitor_rects.window),
+                     wine_dbgstr_rect(&monitor_rects.visible), get_driver_window_surface( new_surface, raw_dpi ) );
         user_driver->pWindowPosChanged( hwnd, insert_after, owner_hint, swp_flags, &monitor_rects,
                                         get_driver_window_surface( new_surface, raw_dpi ) );
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-window-pos: stage=after-driver-pos-changed hwnd=%p flags=%08x\n",
+                     hwnd, swp_flags );
         update_client_surfaces( toplevel );
     }
 
@@ -4942,6 +4979,10 @@ static BOOL show_window( HWND hwnd, INT cmd )
         else new_swp = swp;
     }
     swp = new_swp;
+    if (macrunner_trace_create_window())
+        fprintf( stderr, "macrunner-show-window: stage=after-driver-show hwnd=%p cmd=%d show=%d "
+                 "was_visible=%d swp=%08x rect=%s\n", hwnd, cmd, show_flag, was_visible,
+                 swp, wine_dbgstr_rect(&newPos) );
 
     parent = NtUserGetAncestor( hwnd, GA_PARENT );
     if (parent && !is_window_visible( parent ) && !(swp & SWP_STATECHANGED))
@@ -4951,8 +4992,13 @@ static BOOL show_window( HWND hwnd, INT cmd )
         else set_window_style_bits( hwnd, 0, WS_VISIBLE );
     }
     else
+    {
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-show-window: stage=before-set-window-pos hwnd=%p swp=%08x rect=%s\n",
+                     hwnd, swp, wine_dbgstr_rect(&newPos) );
         NtUserSetWindowPos( hwnd, HWND_TOP, newPos.left, newPos.top,
                             newPos.right - newPos.left, newPos.bottom - newPos.top, swp );
+    }
 
     new_style = get_window_long( hwnd, GWL_STYLE );
     if (((style ^ new_style) & WS_MINIMIZE) != 0)
@@ -5738,6 +5784,15 @@ static void map_dpi_create_struct( CREATESTRUCTW *cs, UINT dpi_to )
 /***********************************************************************
  *           NtUserCreateWindowEx (win32u.@)
  */
+struct mr_cwx_scope_t { HWND *hwnd; unsigned n; };
+static void mr_cwx_report( void *p )
+{
+    struct mr_cwx_scope_t *s = p;
+    if (!s || !s->n || !s->hwnd) return;
+    fprintf( stderr, "macrunner-createwnd-итог: n=%u hwnd=%p\n", s->n, *s->hwnd );
+    fflush( stderr );
+}
+
 HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
                                   UNICODE_STRING *version, UNICODE_STRING *window_name,
                                   DWORD style, INT x, INT y, INT cx, INT cy,
@@ -5752,6 +5807,52 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     HWND hwnd, toplevel, owner = 0;
     CREATESTRUCTW cs;
     INT sw = SW_SHOW;
+
+    /* ★ 2026-08-30, лейн УСТАНОВЩИКИ — КАКОЕ ОКНО ПЕРЕСОЗДАЁТСЯ.
+     *
+     * Замер прогона 53: установщик Diablo делает 10 904 `NtUserCreateWindowEx` и 10 903
+     * `NtUserCreateMenu` за 400 с (27 оборотов в секунду) при 218 файловых операциях.
+     * Узор `CreateWindowEx -> обратный вызов -> CreateMenu -> 9x ThunkedMenuItemInfo`
+     * повторяется без конца. Чтобы чинить не наугад, нужно ИМЯ КЛАССА и стили.
+     * Счётчик статический (getenv в этом слое запрещён правилом лейна), потолок 40 —
+     * журнал не утопит. */
+    /* ★ РЕЗУЛЬТАТ создания печатается на выходе (cleanup-атрибут охватывает ВСЕ выходы).
+     * Замер 30.08: диалог класса #32770 создаётся 10 904 раза и НИ РАЗУ не обрастает
+     * дочерними окнами — значит создание не доводится до конца. Без возвращённого HWND
+     * не отличить «создание отказало» от «создали и тут же уничтожили». */
+    struct mr_cwx_scope_t mr_cwx_scope
+        __attribute__((cleanup(mr_cwx_report))) = { &hwnd, 0 };
+    /* ★★ 06.09.2026, лейн ПРИБОРЫ-3 — НА ЭТОМ ПРИБОРЕ СТОИТ ВЕРДИКТ ШЕСТИ ПРОГРАММ.
+     *
+     * `scripts/opora-programm.sh` объявляет «ОКНО_В_ЖУРНАЛЕ» по строкам этого прибора и
+     * СЧИТАЕТ их (строка 133). А `mr_cwx_n++` стоял внутри `if (mr_cwx_n < 400)`, то есть
+     * считал НАПЕЧАТАННОЕ: при 10 904 диалогах класса #32770 (замер 30.08) счёт замирал
+     * на 400 и дальше молчал. Разница между «окон 400» и «окон 400 из десяти тысяч» и
+     * есть тот вывод, ради которого прибор ставили.
+     *
+     * Учёт вынесен из-под потолка; печать по-прежнему ограничена 400 строками, но теперь
+     * состояние EVENTS-TRUNCATED объявляет число нижней границей, а перепись на выходе
+     * даёт ТОЧНЫЙ итог. Поля строки сохранены полностью (потребитель фильтрует по pid=). */
+    {
+        HB_PROBE_LOOKED( &pr_createwnd );
+        /* ★ 30.08: добавлен pid. Без него стенд опоры считал окна ВСЕХ процессов
+         * прогона (explorer, services), у всех шести программ выходило ровно 66 —
+         * то есть вердикт «окно есть» был бы ложным для любой мишени. */
+        HB_PROBE_SAY( &pr_createwnd,
+                      "pid=%d n=%u класс=%s имя=%s style=%08x ex=%08x "
+                      "parent=%p menu=%p inst=%p\n", (int)getpid(),
+                      (unsigned)pr_createwnd.hits,
+                      class_name && class_name->Buffer ? debugstr_us(class_name) : "(нет)",
+                      window_name && window_name->Buffer ? debugstr_us(window_name) : "(нет)",
+                      (unsigned)style, (unsigned)ex_style, parent, menu, instance );
+        fflush( stderr );
+        /* Итог по возврату (macrunner-createwnd-итог) печатается только для тех вызовов,
+         * что попали в печать: иначе на десяти тысячах диалогов он забил бы журнал.
+         * Ограничение названо здесь вслух, потому что раньше оно было побочным следствием
+         * потолка и в журнале никак не объявлялось. */
+        if (pr_createwnd.printed == pr_createwnd.hits)
+            mr_cwx_scope.n = (unsigned)pr_createwnd.hits;
+    }
     RECT surface_rect;
     WND *win;
 
@@ -5759,6 +5860,33 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
            "parent %p, menu %p, class_instance %p, params %p, flags %#x, instance %p, class %s, ansi %u\n",
            ex_style, debugstr_us(class_name), debugstr_us(version), debugstr_us(window_name), style, x, y, cx, cy,
            parent, menu, class_instance, params, flags, instance, debugstr_w(class), ansi );
+
+    /* MacRunner 2026-08-27 — ЧТО ЗА ОКНО И ЧЕМ КОНЧИЛОСЬ.
+     *
+     * Замер Heroes III (без DDrawCompat): 22 501 вызов NtUserCreateWindowEx за 180 секунд
+     * при 95 сообщениях WM_CREATE и НУЛЕ вызовов DestroyWindow/ShowWindow. То есть игра
+     * крутит цикл создания окна, а окна не появляются — вызовы отказывают.
+     *
+     * Из счётчика системных вызовов не видно ни класса, ни причины. Печатаем класс и стиль
+     * на входе, а результат — на выходе, чтобы отличить отказ от успеха. */
+    {
+        static unsigned int cw_n;
+        unsigned int n = ++cw_n;
+        char nm[40];
+        unsigned int i, len = 0;
+
+        if (class_name && class_name->Buffer)
+        {
+            len = class_name->Length / sizeof(WCHAR);
+            if (len > sizeof(nm) - 1) len = sizeof(nm) - 1;
+            for (i = 0; i < len; i++) nm[i] = (char)class_name->Buffer[i];
+        }
+        nm[len] = 0;
+        if (n <= 8 || !(n % 2000))
+            fprintf( stderr, "macrunner-createwindow: n=%u класс=\"%s\" стиль=%#x ex=%#x родитель=%p "
+                 "x=%d y=%d cx=%d cy=%d\n", n, nm, (unsigned)style, (unsigned)ex_style,
+                 parent, x, y, cx, cy );
+    }
 
     /* CW Hack 24557 */
     if (parent && parent != HWND_MESSAGE)
@@ -5824,6 +5952,11 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
         if ((cs.style & (WS_CHILD|WS_POPUP)) == WS_CHILD)
         {
             WARN( "No parent for child window\n" );
+            if (macrunner_trace_create_window())
+                fprintf( stderr, "macrunner-ntuser-createwindowex: stage=no-parent-for-child class=%s "
+                         "name=%s ex=%08x style=%08x xy=%d,%d size=%dx%d parent=%p menu=%p inst=%p params=%p\n",
+                         debugstr_us(class_name), debugstr_us(window_name), ex_style, style,
+                         x, y, cx, cy, parent, menu, instance, params );
             RtlSetLastWin32Error( ERROR_TLW_WITH_WSCHILD );
             return 0;  /* WS_CHILD needs a parent, but WS_POPUP doesn't */
         }
@@ -5845,7 +5978,16 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     ex_style = cs.dwExStyle & ~WS_EX_LAYERED;
     if (!(win = create_window_handle( parent, owner, class_name, class_instance,
                                       cs.hInstance, ansi, style, ex_style )))
+    {
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=create-window-handle-failed class=%s "
+                     "name=%s ex=%08x fixed_ex=%08x style=%08x fixed_style=%08x xy=%d,%d size=%dx%d "
+                     "parent=%p owner=%p menu=%p inst=%p class_inst=%p params=%p last_error=%lu\n",
+                     debugstr_us(class_name), debugstr_us(window_name), ex_style, cs.dwExStyle,
+                     style, cs.style, cs.x, cs.y, cs.cx, cs.cy, parent, owner, menu, instance,
+                     class_instance, params, RtlGetLastWin32Error() );
         return 0;
+    }
     hwnd = win->handle;
 
     /* Fill the window structure */
@@ -5889,10 +6031,21 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     cbtc.lpcs = &cs;
     if (call_hooks( WH_CBT, HCBT_CREATEWND, (WPARAM)hwnd, (LPARAM)&cbtc, sizeof(cbtc) ))
     {
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=cbt-hook-aborted hwnd=%p class=%s "
+                     "name=%s ex=%08x style=%08x xy=%d,%d size=%dx%d parent=%p owner=%p\n",
+                     hwnd, debugstr_us(class_name), debugstr_us(window_name), cs.dwExStyle,
+                     cs.style, cs.x, cs.y, cs.cx, cs.cy, parent, owner );
         free_window_handle( hwnd );
         return 0;
     }
-    if (!(win = get_win_ptr( hwnd ))) return 0;
+    if (!(win = get_win_ptr( hwnd )))
+    {
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=get-win-ptr-after-cbt-failed hwnd=%p class=%s\n",
+                     hwnd, debugstr_us(class_name) );
+        return 0;
+    }
 
     /*
      * Correct the window styles.
@@ -5930,6 +6083,11 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     {
         if (cs.hMenu && !set_window_menu( hwnd, cs.hMenu ))
         {
+            if (macrunner_trace_create_window())
+                fprintf( stderr, "macrunner-ntuser-createwindowex: stage=set-menu-failed hwnd=%p class=%s "
+                         "name=%s menu=%p last_error=%lu\n",
+                         hwnd, debugstr_us(class_name), debugstr_us(window_name), cs.hMenu,
+                         RtlGetLastWin32Error() );
             release_win_ptr( win );
             free_window_handle( hwnd );
             return 0;
@@ -5966,6 +6124,12 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     surface = get_window_surface( hwnd, SWP_NOZORDER | SWP_NOACTIVATE, FALSE, &new_rects, &surface_rect );
     if (!apply_window_pos( hwnd, 0, SWP_NOZORDER | SWP_NOACTIVATE, surface, &new_rects, NULL ))
     {
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=apply-window-pos-initial-failed hwnd=%p class=%s "
+                     "name=%s window=%s client=%s style=%08x ex=%08x surface=%p\n",
+                     hwnd, debugstr_us(class_name), debugstr_us(window_name),
+                     wine_dbgstr_rect(&new_rects.window), wine_dbgstr_rect(&new_rects.client),
+                     cs.style, cs.dwExStyle, surface );
         if (surface) window_surface_release( surface );
         goto failed;
     }
@@ -5977,6 +6141,11 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     if (!send_message_timeout( hwnd, WM_NCCREATE, 0, (LPARAM)&cs, SMTO_NORMAL, 0, ansi ))
     {
         WARN( "%p: aborted by WM_NCCREATE\n", hwnd );
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=wm-nccreate-aborted hwnd=%p class=%s "
+                     "name=%s ex=%08x style=%08x xy=%d,%d size=%dx%d parent=%p params=%p\n",
+                     hwnd, debugstr_us(class_name), debugstr_us(window_name), cs.dwExStyle,
+                     cs.style, cs.x, cs.y, cs.cx, cs.cy, parent, params );
         goto failed;
     }
 
@@ -6006,15 +6175,41 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
         apply_window_pos( hwnd, insert_after, SWP_NOACTIVATE, surface, &new_rects, NULL );
         if (surface) window_surface_release( surface );
     }
-    else goto failed;
+    else
+    {
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=get-window-rect-rel-failed hwnd=%p class=%s name=%s\n",
+                     hwnd, debugstr_us(class_name), debugstr_us(window_name) );
+        goto failed;
+    }
 
     /* send WM_CREATE */
     if (send_message_timeout( hwnd, WM_CREATE, 0, (LPARAM)&cs, SMTO_NORMAL, 0, ansi ) == -1)
+    {
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=wm-create-aborted hwnd=%p class=%s "
+                     "name=%s ex=%08x style=%08x xy=%d,%d size=%dx%d parent=%p params=%p\n",
+                     hwnd, debugstr_us(class_name), debugstr_us(window_name), cs.dwExStyle,
+                     cs.style, cs.x, cs.y, cs.cx, cs.cy, parent, params );
         goto failed;
+    }
 
     /* call the driver */
 
-    if (!user_driver->pCreateWindow( hwnd )) goto failed;
+    if (!user_driver->pCreateWindow( hwnd ))
+    {
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=driver-create-window-failed hwnd=%p class=%s "
+                     "name=%s ex=%08x style=%08x xy=%d,%d size=%dx%d parent=%p\n",
+                     hwnd, debugstr_us(class_name), debugstr_us(window_name), cs.dwExStyle,
+                     cs.style, cs.x, cs.y, cs.cx, cs.cy, parent );
+        goto failed;
+    }
+    if (macrunner_trace_create_window())
+        fprintf( stderr, "macrunner-ntuser-createwindowex: stage=driver-create-window-ok hwnd=%p class=%s "
+                 "name=%s ex=%08x style=%08x xy=%d,%d size=%dx%d parent=%p\n",
+                 hwnd, debugstr_us(class_name), debugstr_us(window_name), cs.dwExStyle,
+                 cs.style, cs.x, cs.y, cs.cx, cs.cy, parent );
 
     NtUserNotifyWinEvent( EVENT_OBJECT_CREATE, hwnd, OBJID_WINDOW, 0 );
 
@@ -6063,6 +6258,9 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
         else if (cs.style & WS_MINIMIZE)
             sw = SW_SHOWMINIMIZED;
 
+        if (macrunner_trace_create_window())
+            fprintf( stderr, "macrunner-ntuser-createwindowex: stage=initial-show hwnd=%p class=%s sw=%d\n",
+                     hwnd, debugstr_us(class_name), sw );
         NtUserShowWindow( hwnd, sw );
         if (cs.dwExStyle & WS_EX_MDICHILD)
         {

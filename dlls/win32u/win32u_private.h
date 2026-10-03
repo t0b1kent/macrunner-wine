@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include "windef.h"
 #include "winbase.h"
+#include "winternl.h"
 #include "ntgdi.h"
 #include "ntuser.h"
 #include "wine/gdi_driver.h"
@@ -32,6 +33,42 @@
 #include "wine/debug.h"
 #include "wine/server.h"
 
+static inline TEB64 *win32u_current_teb64(void)
+{
+#ifdef _WIN64
+    return NULL;
+#else
+    TEB *teb = NtCurrentTeb();
+    ULONG_PTR batch = (ULONG_PTR)teb->GdiBatchCount;
+    LONG offset = teb->WowTebOffset;
+    TEB64 *teb64;
+
+    if (!batch || !offset) return NULL;
+    teb64 = (TEB64 *)((char *)teb + offset);
+    if ((ULONG_PTR)teb64 != batch) return NULL;
+    if ((ULONG_PTR)teb64 & (sizeof(ULONG64) - 1)) return NULL;
+    return teb64;
+#endif
+}
+
+static inline NTSTATUS win32u_map_view_of_section( HANDLE handle, HANDLE process, PVOID *addr_ptr,
+                                                   ULONG_PTR zero_bits, SIZE_T commit_size,
+                                                   const LARGE_INTEGER *offset, SIZE_T *size,
+                                                   SECTION_INHERIT inherit, ULONG alloc_type, ULONG protect )
+{
+#if defined(__aarch64__)
+    typedef NTSTATUS (WINAPI *nt_map_view_of_section_arm64)( HANDLE, HANDLE, PVOID *, ULONG_PTR, SIZE_T,
+                                                             const LARGE_INTEGER *, SIZE_T *,
+                                                             const struct __wine_nt_section_extra * );
+    struct __wine_nt_section_extra extra = { inherit, alloc_type, protect };
+
+    return ((nt_map_view_of_section_arm64)NtMapViewOfSection)( handle, process, addr_ptr, zero_bits,
+                                                               commit_size, offset, size, &extra );
+#else
+    return NtMapViewOfSection( handle, process, addr_ptr, zero_bits, commit_size, offset, size,
+                               inherit, alloc_type, protect );
+#endif
+}
 
 /* clipboard.c */
 extern void release_clipboard_owner( HWND hwnd );
@@ -141,6 +178,9 @@ extern void pack_user_message( void *buffer, size_t size, UINT message,
 
 /* rawinput.c */
 extern BOOL process_rawinput_message( MSG *msg, UINT hw_id, const struct hardware_msg_data *msg_data );
+extern void macrunner_return_route_observe( const char *stage, HWND hwnd, UINT keycode,
+                                            BOOL key_up, UINT flags, UINT event_time,
+                                            UINT message, LONG result );
 
 /* scroll.c */
 extern void draw_nc_scrollbar( HWND hwnd, HDC hdc, BOOL draw_horizontal, BOOL draw_vertical );

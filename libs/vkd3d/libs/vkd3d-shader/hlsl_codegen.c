@@ -1765,30 +1765,82 @@ struct copy_propagation_component_trace
 
 struct copy_propagation_var_def
 {
-    struct rb_entry entry;
     struct hlsl_ir_var *var;
     struct copy_propagation_component_trace traces[];
 };
 
+struct copy_propagation_scope
+{
+    struct copy_propagation_var_def **defs;
+    size_t count, capacity;
+};
+
 struct copy_propagation_state
 {
-    struct rb_tree *scope_var_defs;
+    struct copy_propagation_scope *scope_var_defs;
     size_t scope_count, scopes_capacity;
     struct hlsl_ir_node *stop;
     bool stopped;
 };
 
-static int copy_propagation_var_def_compare(const void *key, const struct rb_entry *entry)
+static size_t copy_propagation_scope_slot(const struct hlsl_ir_var *var, size_t capacity)
 {
-    struct copy_propagation_var_def *var_def = RB_ENTRY_VALUE(entry, struct copy_propagation_var_def, entry);
-    uintptr_t key_int = (uintptr_t)key, entry_int = (uintptr_t)var_def->var;
+    uintptr_t key = (uintptr_t)var >> 4;
 
-    return (key_int > entry_int) - (key_int < entry_int);
+    key ^= key >> 16;
+    key *= 0x9e3779b1u;
+    key ^= key >> 16;
+    return key & (capacity - 1);
 }
 
-static void copy_propagation_var_def_destroy(struct rb_entry *entry, void *context)
+static struct copy_propagation_var_def *copy_propagation_find_var_def(
+        const struct copy_propagation_scope *scope, const struct hlsl_ir_var *var)
 {
-    struct copy_propagation_var_def *var_def = RB_ENTRY_VALUE(entry, struct copy_propagation_var_def, entry);
+    size_t slot;
+
+    if (!scope->capacity)
+        return NULL;
+    slot = copy_propagation_scope_slot(var, scope->capacity);
+    while (scope->defs[slot])
+    {
+        if (scope->defs[slot]->var == var)
+            return scope->defs[slot];
+        slot = (slot + 1) & (scope->capacity - 1);
+    }
+    return NULL;
+}
+
+static bool copy_propagation_scope_grow(struct hlsl_ctx *ctx, struct copy_propagation_scope *scope)
+{
+    struct copy_propagation_var_def **defs;
+    size_t capacity, i, slot;
+
+    if (scope->capacity > ~(size_t)0 / sizeof(*defs) / 2)
+    {
+        ctx->result = VKD3D_ERROR_OUT_OF_MEMORY;
+        return false;
+    }
+    capacity = scope->capacity ? scope->capacity * 2 : 16;
+    if (!(defs = hlsl_calloc(ctx, capacity, sizeof(*defs))))
+        return false;
+
+    for (i = 0; i < scope->capacity; ++i)
+    {
+        if (!scope->defs[i])
+            continue;
+        slot = copy_propagation_scope_slot(scope->defs[i]->var, capacity);
+        while (defs[slot])
+            slot = (slot + 1) & (capacity - 1);
+        defs[slot] = scope->defs[i];
+    }
+    vkd3d_free(scope->defs);
+    scope->defs = defs;
+    scope->capacity = capacity;
+    return true;
+}
+
+static void copy_propagation_var_def_destroy(struct copy_propagation_var_def *var_def)
+{
     unsigned int component_count = hlsl_type_component_count(var_def->var->data_type);
     unsigned int i;
 
@@ -1803,29 +1855,32 @@ static size_t copy_propagation_push_scope(struct copy_propagation_state *state, 
             state->scope_count + 1, sizeof(*state->scope_var_defs))))
         return false;
 
-    rb_init(&state->scope_var_defs[state->scope_count++], copy_propagation_var_def_compare);
-
+    memset(&state->scope_var_defs[state->scope_count++], 0, sizeof(*state->scope_var_defs));
     return state->scope_count;
 }
 
 static size_t copy_propagation_pop_scope(struct copy_propagation_state *state)
 {
-    rb_destroy(&state->scope_var_defs[--state->scope_count], copy_propagation_var_def_destroy, NULL);
+    struct copy_propagation_scope *scope = &state->scope_var_defs[--state->scope_count];
+    size_t i;
 
+    for (i = 0; i < scope->capacity; ++i)
+        if (scope->defs[i])
+            copy_propagation_var_def_destroy(scope->defs[i]);
+    vkd3d_free(scope->defs);
     return state->scope_count;
 }
 
 static bool copy_propagation_state_init(struct copy_propagation_state *state, struct hlsl_ctx *ctx)
 {
     memset(state, 0, sizeof(*state));
-
     return copy_propagation_push_scope(state, ctx);
 }
 
 static void copy_propagation_state_destroy(struct copy_propagation_state *state)
 {
-    while (copy_propagation_pop_scope(state));
-
+    while (state->scope_count)
+        copy_propagation_pop_scope(state);
     vkd3d_free(state->scope_var_defs);
 }
 
@@ -1839,7 +1894,6 @@ static struct copy_propagation_value *copy_propagation_get_value_at_time(
         if (trace->records[r].timestamp < time)
             return &trace->records[r];
     }
-
     return NULL;
 }
 
@@ -1848,50 +1902,47 @@ static struct copy_propagation_value *copy_propagation_get_value(const struct co
 {
     for (size_t i = state->scope_count - 1; i < state->scope_count; i--)
     {
-        struct rb_tree *tree = &state->scope_var_defs[i];
-        struct rb_entry *entry = rb_get(tree, var);
-        if (entry)
+        struct copy_propagation_var_def *var_def = copy_propagation_find_var_def(&state->scope_var_defs[i], var);
+        if (var_def)
         {
-            struct copy_propagation_var_def *var_def = RB_ENTRY_VALUE(entry, struct copy_propagation_var_def, entry);
             unsigned int component_count = hlsl_type_component_count(var->data_type);
             struct copy_propagation_value *value;
 
             VKD3D_ASSERT(component < component_count);
             value = copy_propagation_get_value_at_time(&var_def->traces[component], time);
-
             if (!value)
                 continue;
-
             if (value->node)
                 return value;
             else
                 return NULL;
         }
     }
-
     return NULL;
 }
 
 static struct copy_propagation_var_def *copy_propagation_create_var_def(struct hlsl_ctx *ctx,
         struct copy_propagation_state *state, struct hlsl_ir_var *var)
 {
-    struct rb_tree *tree = &state->scope_var_defs[state->scope_count - 1];
-    struct rb_entry *entry = rb_get(tree, var);
-    struct copy_propagation_var_def *var_def;
+    struct copy_propagation_scope *scope = &state->scope_var_defs[state->scope_count - 1];
+    struct copy_propagation_var_def *var_def = copy_propagation_find_var_def(scope, var);
     unsigned int component_count = hlsl_type_component_count(var->data_type);
-    int res;
+    size_t slot;
 
-    if (entry)
-        return RB_ENTRY_VALUE(entry, struct copy_propagation_var_def, entry);
+    if (var_def)
+        return var_def;
 
+    /* Scopes only gain entries until destruction; keep a free slot for misses. */
+    if (scope->count >= scope->capacity / 2 && !copy_propagation_scope_grow(ctx, scope))
+        return NULL;
     if (!(var_def = hlsl_alloc(ctx, offsetof(struct copy_propagation_var_def, traces[component_count]))))
         return NULL;
-
     var_def->var = var;
-
-    res = rb_put(tree, var, &var_def->entry);
-    VKD3D_ASSERT(!res);
-
+    slot = copy_propagation_scope_slot(var, scope->capacity);
+    while (scope->defs[slot])
+        slot = (slot + 1) & (scope->capacity - 1);
+    scope->defs[slot] = var_def;
+    ++scope->count;
     return var_def;
 }
 
@@ -11891,16 +11942,31 @@ static bool sm4_generate_vsir_instr_resource_store(struct hlsl_ctx *ctx,
         return false;
     }
 
-    if (resource_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
-    {
-        hlsl_fixme(ctx, &store->node.loc, "Structured buffers store is not implemented.");
-        return false;
-    }
-
     if (tgsm && !hlsl_is_numeric_type(resource_type))
     {
         hlsl_fixme(ctx, &store->node.loc, "Store to structured TGSM.");
         return false;
+    }
+
+    if (resource_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+    {
+        struct hlsl_constant_value offset;
+
+        if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, VSIR_OP_STORE_STRUCTURED, 1, 3)))
+            return false;
+
+        if (!sm4_generate_vsir_init_dst_param_from_deref(ctx, program,
+                &ins->dst[0], &store->resource, &instr->loc, store->writemask))
+            return false;
+
+        vsir_src_from_hlsl_node(&ins->src[0], ctx, coords, VKD3DSP_WRITEMASK_0);
+
+        memset(&offset, 0, sizeof(offset));
+        vsir_src_from_hlsl_constant_value(&ins->src[1], ctx, &offset,
+                VSIR_DATA_U32, 1, VKD3DSP_WRITEMASK_0);
+
+        vsir_src_from_hlsl_node(&ins->src[2], ctx, value, VKD3DSP_WRITEMASK_ALL);
+        return true;
     }
 
     if (tgsm || resource_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER)

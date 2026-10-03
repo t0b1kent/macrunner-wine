@@ -1,7 +1,11 @@
+@ stdcall AcquireDDThreadLock()
+@ stdcall CompleteCreateSysmemSurface(ptr)
+@ stdcall D3DParseUnknownCommand(ptr ptr)
+@ stdcall ReleaseDDThreadLock()
 @ stub DDHAL32_VidMemAlloc
 @ stub DDHAL32_VidMemFree
-@ stub DDInternalLock
-@ stub DDInternalUnlock
+@ stdcall DDInternalLock(ptr)
+@ stdcall DDInternalUnlock(ptr)
 @ stub DSoundHelp
 @ stdcall DirectDrawCreate(ptr ptr ptr)
 @ stdcall DirectDrawCreateClipper(long ptr ptr)

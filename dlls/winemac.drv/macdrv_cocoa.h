@@ -325,6 +325,7 @@ enum {
     WINDOW_MINIMIZE_REQUESTED,
     WINDOW_RESIZE_ENDED,
     WINDOW_RESTORE_REQUESTED,
+    MACRUNNER_WINSHOW_ACTIVATE,
     NUM_EVENT_TYPES
 };
 
@@ -487,6 +488,8 @@ extern int macdrv_get_event_queue_fd(macdrv_event_queue queue);
 
 extern int macdrv_copy_event_from_queue(macdrv_event_queue queue,
         macdrv_event_mask mask, macdrv_event **event);
+extern void macdrv_post_event(macdrv_event_queue queue, macdrv_event *event);
+extern void macdrv_post_event_for_window(int type, macdrv_window window);
 extern void macdrv_release_event(macdrv_event *event);
 
 extern macdrv_query* macdrv_create_query(void);
@@ -521,12 +524,26 @@ struct macdrv_window_state {
     unsigned int    maximized:1;
 };
 
+struct macdrv_return_route_window_state {
+    unsigned long long cocoa_window_id;
+    unsigned long long key_window_id;
+    unsigned long long main_window_id;
+    void *window_hwnd;
+    void *key_window_hwnd;
+    void *main_window_hwnd;
+    int app_active;
+    int window_key;
+    int window_main;
+};
+
 struct window_surface;
 
 extern macdrv_window macdrv_create_cocoa_window(const struct macdrv_window_features* wf,
         CGRect frame, void* hwnd, macdrv_event_queue queue);
 extern void macdrv_destroy_cocoa_window(macdrv_window w);
 extern void* macdrv_get_window_hwnd(macdrv_window w);
+extern void macdrv_get_return_route_window_state(
+        macdrv_window w, struct macdrv_return_route_window_state *state);
 extern void macdrv_set_cocoa_window_features(macdrv_window w,
         const struct macdrv_window_features* wf);
 extern void macdrv_set_cocoa_window_state(macdrv_window w,
@@ -535,6 +552,7 @@ extern void macdrv_set_cocoa_window_title(macdrv_window w, const UniChar* title,
         size_t length);
 extern void macdrv_order_cocoa_window(macdrv_window w, macdrv_window prev,
         macdrv_window next, bool activate);
+extern void macdrv_async_show_cocoa_window(macdrv_window w, bool activate);
 extern void macdrv_hide_cocoa_window(macdrv_window w);
 extern void macdrv_set_cocoa_window_frame(macdrv_window w, const CGRect* new_frame);
 extern void macdrv_get_cocoa_window_frame(macdrv_window w, CGRect* out_frame);
@@ -613,5 +631,6 @@ extern int is_skyrim_se_launcher(void);
 extern void macdrv_client_surface_presented(const macdrv_event *event);
 extern void *macdrv_get_view_d3dmetal_client_surface(macdrv_view v);
 void macdrv_set_view_d3dmetal_client_surface(macdrv_view v, void *client_surface);
+
 
 #endif  /* __WINE_MACDRV_COCOA_H */

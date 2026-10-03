@@ -2584,10 +2584,12 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
     {
     case DLL_PROCESS_ATTACH:
         LdrDisableThreadCalloutsForDll( inst );
-        if (__wine_syscall_dispatcher) break;  /* already set through Wow64Transition */
-        LdrGetDllHandle( NULL, 0, &ntdll_name, &ntdll );
-        dispatcher_ptr = RtlFindExportedRoutineByName( ntdll, "__wine_syscall_dispatcher" );
-        __wine_syscall_dispatcher = *dispatcher_ptr;
+        if (!__wine_syscall_dispatcher)
+        {
+            LdrGetDllHandle( NULL, 0, &ntdll_name, &ntdll );
+            dispatcher_ptr = RtlFindExportedRoutineByName( ntdll, "__wine_syscall_dispatcher" );
+            __wine_syscall_dispatcher = *dispatcher_ptr;
+        }
         if (!__wine_init_unix_call()) WINE_UNIX_CALL( 0, NULL );
         break;
     }

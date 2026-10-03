@@ -40,6 +40,690 @@
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
 WINE_DECLARE_DEBUG_CHANNEL(relay);
 
+static const char *crit_section_get_name( const RTL_CRITICAL_SECTION *crit );
+
+/* Diagnostic-only observer for the ABZU heap/loader critical-section inversion.
+ * Keep this allocation-free and fail-closed: it runs from the critical-section
+ * implementation itself and must not recursively perturb unrelated locks. */
+/* NOTE: this runs INSIDE the critical-section implementation, so it must not take a
+ * lock.  RtlQueryEnvironmentVariable_U() acquires the PEB lock, i.e. it re-enters
+ * RtlEnterCriticalSection( peb->FastPebLock ) — and during early ldr init FastPebLock
+ * is still NULL, so wine faults reading crit->SpinCount at NULL+0x20.  That fault is
+ * dispatched through code that locks again => the recursive fault storm that killed
+ * regedit/regsvr32/services (99% CPU, game never started).  Scan the environment
+ * block by hand instead: no lock, no re-entry. */
+static BOOL macrunner_hb_heap_cs_observer_enabled(void)
+{
+    static LONG state;
+    static const WCHAR keyW[] =
+        {'M','A','C','R','U','N','N','E','R','_','H','B','_','H','E','A','P','_','C','S','_',
+         'O','B','S','E','R','V','E','R','=',0};
+    LONG current = state;
+    const WCHAR *p;
+    PEB *peb;
+
+    if (current) return current == 1;
+
+    peb = NtCurrentTeb()->Peb;
+    if (!peb || !peb->ProcessParameters) return FALSE;      /* not ready: do not latch */
+    p = peb->ProcessParameters->Environment;
+    if (!p) return FALSE;
+
+    while (*p)
+    {
+        const WCHAR *a = p, *b = keyW;
+
+        while (b[0] && a[0] && a[0] == b[0]) { a++; b++; }
+        if (!b[0])                                          /* key matched, a = value */
+        {
+            state = (a[0] && a[0] != '0') ? 1 : 2;
+            return state == 1;
+        }
+        while (*p) p++;                                     /* next NUL-separated entry */
+        p++;
+    }
+    state = 2;
+    return FALSE;
+}
+
+/* ПРОВЕРКА САМОГО ПЕЧАТНИКА. Аномалия — гонка: по заказу не возникает, а строка
+ * «ИТОГ … строк_кольца» существует именно для того, чтобы 192 строки нельзя было
+ * прочесть как 192 события. Проверять её на глаз — это снова догадка. Гейт
+ * MACRUNNER_HB_CS_ANOMALY_TEST=1 зовёт печатника один раз на 20-й учтённой операции,
+ * когда в кольце уже есть записи. Окружение читается ТЕМ ЖЕ ручным обходом без
+ * замка: обычное чтение здесь входит повторно и роняет процесс (см. выше). */
+/* Два гейта для ДОКАЗАТЕЛЬСТВА поправки на базу (см. macrunner_hb_cs_hold_add).
+ *   MACRUNNER_HB_CS_BAZA_TEST=1  — пропустить ПЕРВЫЙ вход по каждой паре
+ *                                  «поток+секция»: это и есть «начал считать с
+ *                                  середины», то самое условие из выдачи ABZU;
+ *   MACRUNNER_HB_CS_NO_BAZA=1    — отключить поправку (прежнее поведение).
+ * Парный замер на ОДНОМ двоичном файле: с поправкой аномалий быть не должно,
+ * без неё — должны появиться. Иначе поправка недоказана. */
+static BOOL macrunner_hb_cs_env_flag( const WCHAR *keyW )
+{
+    const WCHAR *p;
+    PEB *peb = NtCurrentTeb()->Peb;
+
+    if (!peb || !peb->ProcessParameters) return FALSE;
+    p = peb->ProcessParameters->Environment;
+    if (!p) return FALSE;
+    while (*p)
+    {
+        const WCHAR *a = p, *b = keyW;
+
+        while (b[0] && a[0] && a[0] == b[0]) { a++; b++; }
+        if (!b[0]) return a[0] && a[0] != '0';
+        while (*p) p++;
+        p++;
+    }
+    return FALSE;
+}
+
+static BOOL macrunner_hb_cs_baza_test_enabled(void)
+{
+    static LONG state;
+    static const WCHAR keyW[] =
+        {'M','A','C','R','U','N','N','E','R','_','H','B','_','C','S','_',
+         'B','A','Z','A','_','T','E','S','T','=',0};
+    if (!state) state = macrunner_hb_cs_env_flag( keyW ) ? 1 : 2;
+    return state == 1;
+}
+
+static BOOL macrunner_hb_cs_no_baza(void)
+{
+    static LONG state;
+    static const WCHAR keyW[] =
+        {'M','A','C','R','U','N','N','E','R','_','H','B','_','C','S','_',
+         'N','O','_','B','A','Z','A','=',0};
+    if (!state) state = macrunner_hb_cs_env_flag( keyW ) ? 1 : 2;
+    return state == 1;
+}
+
+static BOOL macrunner_hb_cs_anomaly_test_enabled(void)
+{
+    static LONG state;
+    static const WCHAR keyW[] =
+        {'M','A','C','R','U','N','N','E','R','_','H','B','_','C','S','_',
+         'A','N','O','M','A','L','Y','_','T','E','S','T','=',0};
+    LONG current = state;
+    const WCHAR *p;
+    PEB *peb;
+
+    if (current) return current == 1;
+
+    peb = NtCurrentTeb()->Peb;
+    if (!peb || !peb->ProcessParameters) return FALSE;
+    p = peb->ProcessParameters->Environment;
+    if (!p) return FALSE;
+
+    while (*p)
+    {
+        const WCHAR *a = p, *b = keyW;
+
+        while (b[0] && a[0] && a[0] == b[0]) { a++; b++; }
+        if (!b[0])
+        {
+            state = (a[0] && a[0] != '0') ? 1 : 2;
+            return state == 1;
+        }
+        while (*p) p++;
+        p++;
+    }
+    state = 2;
+    return FALSE;
+}
+
+/* Process gate.  wineboot / regedit / services are SEPARATE processes that load the
+ * same ntdll, and wine hands out TIDs per process — so a regedit thread can carry the
+ * very same 0x00a4 id as the guest main thread.  Instrumenting them drowned the
+ * registry import (99% CPU, no game).  Only ever observe the game process. */
+/* ★ 01.09.2026: имя мишени было ЗАШИТО как "abzugame". ABZU — 64-битная UE4 через
+ * путь ARM64EC, у нас она сегодня вовсе не стартует, а значит вся ветка наблюдения
+ * за ожиданием мертва для действующих мишеней (Diablo, UT99, Heroes III).
+ * Имя теперь задаётся через MACRUNNER_HB_HEAP_CS_TARGET; умолчание оставлено
+ * прежним, чтобы старые прогоны не изменились. Защита нужна: наблюдение за
+ * wineboot/regedit/services топило импорт реестра (99 % ЦП, игра не стартовала). */
+static BOOL macrunner_hb_heap_cs_target_process(void)
+{
+    static LONG state;
+    static WCHAR targetW[32] = {'a','b','z','u','g','a','m','e',0};
+    static LONG target_read;
+    LONG current = state;
+
+    if (!InterlockedCompareExchange( &target_read, 1, 0 ))
+    {
+        static const WCHAR keyW[] =
+            {'M','A','C','R','U','N','N','E','R','_','H','B','_','H','E','A','P','_',
+             'C','S','_','T','A','R','G','E','T','=',0};
+        PEB *peb = NtCurrentTeb()->Peb;
+        const WCHAR *e = (peb && peb->ProcessParameters)
+                       ? peb->ProcessParameters->Environment : NULL;
+        while (e && *e)
+        {
+            const WCHAR *a = e, *b = keyW;
+
+            while (b[0] && a[0] && a[0] == b[0]) { a++; b++; }
+            if (!b[0] && a[0])
+            {
+                unsigned int i = 0;
+                while (a[i] && i < 31) { targetW[i] = a[i] | 0x20; i++; }
+                targetW[i] = 0;
+                break;
+            }
+            while (*e) e++;
+            e++;
+        }
+    }
+    const UNICODE_STRING *img;
+    const WCHAR *p, *end;
+    PEB *peb;
+
+    if (current > 0) return current == 1;
+
+    peb = NtCurrentTeb()->Peb;
+    if (!peb || !peb->ProcessParameters) return FALSE;      /* not ready: do not latch */
+    img = &peb->ProcessParameters->ImagePathName;
+    if (!img->Buffer || !img->Length) return FALSE;
+
+    end = img->Buffer + img->Length / sizeof(WCHAR);
+    for (p = img->Buffer; p < end; p++)
+    {
+        const WCHAR *a = p, *b = targetW;
+
+        while (b[0] && a < end && (a[0] | 0x20) == b[0]) { a++; b++; }
+        if (!b[0]) { state = 1; return TRUE; }
+    }
+    state = 2;
+    return FALSE;
+}
+
+/* Do NOT gate on a TID: the guest TIDs are not stable across runs (0xa4/0xa8 in one
+ * run, 0x9c/0xa0 in the next), so a hardcoded pair silently observes nothing.  And do
+ * NOT stream every ENTER/LEAVE either: the process heap CS is taken on every
+ * allocation, so any first-N budget burns long before the deadlock.
+ *
+ * Instead keep O(1) state: who currently HOLDS each tracked section (with the caller
+ * PC that acquired it), plus per-section-pointer enter/leave counters.  On contention
+ * we dump the holder — that is exactly the crux: the acquire PC of the thread that is
+ * sitting on the lock.  The counters are the (a)/(b) discriminator: a second, distinct
+ * section pointer with leaves != enters would mean Enter and Leave hit two different
+ * EC/native views of the same logical CS. */
+/* ARM64X ships TWO code bodies of this file — the native aarch64 one and the arm64ec one
+ * (the guest reaches the latter through HB's native import dispatch).  Each body has its
+ * own copy of the statics below, so an acquire made through the other view is invisible
+ * here — which would look exactly like the CS fields moving with no call.  Tag every line
+ * with the view so the log settles it. */
+#ifdef __arm64ec__
+# define MACRUNNER_HB_CS_VIEW "EC"
+#else
+# define MACRUNNER_HB_CS_VIEW "NATIVE"
+#endif
+
+#define MACRUNNER_HB_CS_HOLD_SLOTS 64
+#define MACRUNNER_HB_CS_STAT_SLOTS 8
+
+struct macrunner_hb_cs_hold
+{
+    LONG  tid;
+    void *crit;
+    void *caller;
+    LONG  depth;
+    LONG  baza;      /* насколько секция была занята ДО того, как мы начали считать */
+};
+static struct macrunner_hb_cs_hold macrunner_hb_cs_holds[MACRUNNER_HB_CS_HOLD_SLOTS];
+
+struct macrunner_hb_cs_stat
+{
+    void *crit;
+    LONG  enters;
+    LONG  leaves;
+};
+static struct macrunner_hb_cs_stat macrunner_hb_cs_stats[MACRUNNER_HB_CS_STAT_SLOTS];
+
+static struct macrunner_hb_cs_stat *macrunner_hb_cs_stat_for( void *crit )
+{
+    int i;
+
+    for (i = 0; i < MACRUNNER_HB_CS_STAT_SLOTS; i++)
+    {
+        if (macrunner_hb_cs_stats[i].crit == crit) return &macrunner_hb_cs_stats[i];
+        if (!macrunner_hb_cs_stats[i].crit &&
+            !InterlockedCompareExchangePointer( &macrunner_hb_cs_stats[i].crit, crit, NULL ))
+            return &macrunner_hb_cs_stats[i];
+        if (macrunner_hb_cs_stats[i].crit == crit) return &macrunner_hb_cs_stats[i];
+    }
+    return NULL;
+}
+
+/* ★★★ MacRunner 2026-09-01 — БАЗА УДЕРЖАНИЯ, иначе прибор врёт ровно на единицу.
+ *
+ * Постоянное удержание кучи глубиной 1 устанавливается РАНО (см. примечание к
+ * кольцу head ниже), задолго до того, как наблюдатель начинает считать. Поэтому его
+ * глубина навсегда меньше настоящей на столько, на сколько секция уже была занята,
+ * и условие `RecursionCount != depth` срабатывает на исправном коде.
+ *
+ * Историческая выдача (ABZU, 13.07): все три «аномалии» расходились РОВНО на 1 —
+ * `our_depth=1 BUT rec=2`, `our_depth=0 BUT rec=1`, один поток, одна секция, а в
+ * кольце по ней здоровые пары ENTER/LEAVE. Это была не гонка, а начало счёта с
+ * середины. Теперь при первом появлении пары «поток+секция» запоминаем базу и
+ * сравниваем с её учётом; ложная тревога такого рода стала невозможна.
+ *
+ * return: собственная глубина после операции; *baza — уже занятая до нас глубина. */
+static LONG macrunner_hb_cs_hold_add( LONG tid, void *crit, void *caller, LONG rec, LONG *baza )
+{
+    int i;
+
+    *baza = 0;
+    for (i = 0; i < MACRUNNER_HB_CS_HOLD_SLOTS; i++)
+    {
+        struct macrunner_hb_cs_hold *h = &macrunner_hb_cs_holds[i];
+
+        if (h->tid == tid && h->crit == crit) { *baza = h->baza; return ++h->depth; }
+    }
+    for (i = 0; i < MACRUNNER_HB_CS_HOLD_SLOTS; i++)
+    {
+        struct macrunner_hb_cs_hold *h = &macrunner_hb_cs_holds[i];
+
+        if (!InterlockedCompareExchange( &h->tid, tid, 0 ))
+        {
+            h->crit = crit;
+            h->caller = caller;
+            h->depth = 1;
+            h->baza = (rec > 1 && !macrunner_hb_cs_no_baza()) ? rec - 1 : 0;
+            *baza = h->baza;
+            /* Ненулевая база — это и есть причина прежних «аномалий» на единицу.
+             * Печатаем один раз на пару, чтобы утверждение опиралось на прогон. */
+            if (h->baza)
+                MESSAGE( "macrunner-hb-heap-cs-observer: %s tid=%04lx section=%p %s=%ld rec=%ld\n",
+                         "БАЗА", tid, crit, "база", h->baza, rec );
+            return 1;
+        }
+    }
+    return -1;                                   /* table full */
+}
+
+static LONG macrunner_hb_cs_hold_del( LONG tid, void *crit, LONG *baza )
+{
+    int i;
+
+    *baza = 0;
+    for (i = 0; i < MACRUNNER_HB_CS_HOLD_SLOTS; i++)
+    {
+        struct macrunner_hb_cs_hold *h = &macrunner_hb_cs_holds[i];
+
+        if (h->tid == tid && h->crit == crit)
+        {
+            LONG left = --h->depth;
+
+            *baza = h->baza;
+
+            if (left <= 0)
+            {
+                h->crit = NULL;
+                h->caller = NULL;
+                InterlockedExchange( &h->tid, 0 );
+            }
+            return left;
+        }
+    }
+    return -1;                                   /* leave without a recorded enter */
+}
+
+/* RECORDING must not depend on the PEB.  The env/image gates only become true once
+ * ProcessParameters exist, and the acquisition we are hunting happens BEFORE that: an
+ * early, un-latched ENTER is invisible, and if it is never left the ledger still looks
+ * balanced while the lock stays held — exactly what run g/h showed (heap enters ==
+ * leaves, no hold record, yet OwningThread=main, RecursionCount=1).  So: record from
+ * the very first critical-section op, using nothing but the section name and atomics;
+ * gate only the PRINTING (below) on the env/process checks.  The tables are per-process
+ * statics, so recording inside wineboot/regedit costs a few atomics and prints nothing. */
+static BOOL macrunner_hb_heap_cs_tracked( RTL_CRITICAL_SECTION *crit, const char **name )
+{
+    if (!crit) return FALSE;
+    *name = crit_section_get_name( crit );
+    if (!*name) return FALSE;
+    return strstr( *name, "main process heap section" ) || strstr( *name, "loader_section" );
+}
+
+/* Ring of the last N ops on the tracked sections, with the lock fields sampled BEFORE
+ * and AFTER each one, plus per-TID counters.  The global ledger cannot see a
+ * cross-thread skew (main enters once more, another thread leaves once more => sum
+ * balances while the lock stays held), and it cannot see fields moving without a call.
+ * Discriminator:
+ *   OwningThread changes with no Enter between two samples  => direct memory corruption
+ *   LockCount / RecursionCount inconsistent with the calls  => race on the same CS */
+#define MACRUNNER_HB_CS_RING 64
+#define MACRUNNER_HB_CS_TID_SLOTS 32
+
+/* One sample per hook call.  *_REQ fires BEFORE the mutation, *_OK AFTER it, so a pair
+ * gives before/after; and if the fields differ between an *_OK and the NEXT *_REQ on the
+ * same section, they moved with no call in between => the CS memory is being written
+ * from outside the CS API. */
+struct macrunner_hb_cs_event
+{
+    LONG  seq;
+    LONG  tid;
+    const char *phase;
+    void *crit;
+    void *caller;
+    LONG  lock, rec, own;
+};
+static struct macrunner_hb_cs_event macrunner_hb_cs_ring[MACRUNNER_HB_CS_RING];
+static LONG macrunner_hb_cs_ring_seq;
+
+/* The permanent depth-1 hold on the process heap is established EARLY, long before the
+ * tail ring window.  Keep the first ops too: that is where rec goes 0 -> 1 and never
+ * comes back, and the caller PC there is the answer. */
+#define MACRUNNER_HB_CS_HEAD 96
+static struct macrunner_hb_cs_event macrunner_hb_cs_head[MACRUNNER_HB_CS_HEAD];
+
+struct macrunner_hb_cs_tidstat
+{
+    LONG tid;
+    LONG enters;
+    LONG leaves;
+};
+static struct macrunner_hb_cs_tidstat macrunner_hb_cs_tidstats[MACRUNNER_HB_CS_TID_SLOTS];
+
+static struct macrunner_hb_cs_tidstat *macrunner_hb_cs_tidstat_for( LONG tid )
+{
+    int i;
+
+    for (i = 0; i < MACRUNNER_HB_CS_TID_SLOTS; i++)
+    {
+        if (macrunner_hb_cs_tidstats[i].tid == tid) return &macrunner_hb_cs_tidstats[i];
+        if (!macrunner_hb_cs_tidstats[i].tid &&
+            !InterlockedCompareExchange( &macrunner_hb_cs_tidstats[i].tid, tid, 0 ))
+            return &macrunner_hb_cs_tidstats[i];
+        if (macrunner_hb_cs_tidstats[i].tid == tid) return &macrunner_hb_cs_tidstats[i];
+    }
+    return NULL;
+}
+
+/* Self-triggering trap: fires at the exact op where the lock fields stop agreeing with
+ * the call sequence.  Dumps the ring so the preceding ops (and their caller PCs) are
+ * visible.  One-shot-ish (cap 3) and reentrancy-guarded — it runs on the CS hot path. */
+static void macrunner_hb_cs_anomaly( const char *phase, RTL_CRITICAL_SECTION *crit,
+                                     void *caller, LONG tid, LONG depth )
+{
+    static LONG fired, printing;
+    LONG total, first, s, nomer, strok = 0;
+
+    /* 2026-09-01: прибор печатает ДО 64 строк кольца на ОДНО событие.  Читая журнал,
+     * я принял 192 строки за 192 аномалии — их было три.  Ошибка не в глазах: прибор
+     * нигде не называл ни свой порядковый номер, ни длину своей выдачи.  Теперь
+     * называет и то и другое, и счёт строк больше не выдаёт себя за счёт событий. */
+    nomer = InterlockedIncrement( &fired );
+    if (nomer > 3) return;
+    if (InterlockedCompareExchange( &printing, 1, 0 )) return;
+
+    MESSAGE( "macrunner-hb-heap-cs-observer: *** ANOMALY *** %s=%ld/3 view=%s %s "
+         "tid=%04lx section=%p caller=%p our_depth=%ld  BUT lock=%ld rec=%ld own=%04lx\n",
+         "аномалия", nomer, MACRUNNER_HB_CS_VIEW, phase, tid, crit, caller, depth,
+         crit->LockCount, crit->RecursionCount,
+         (LONG)HandleToULong( crit->OwningThread ) );
+
+    total = macrunner_hb_cs_ring_seq;
+    first = total > MACRUNNER_HB_CS_RING ? total - MACRUNNER_HB_CS_RING + 1 : 1;
+    for (s = first; s <= total; s++)
+    {
+        struct macrunner_hb_cs_event *e = &macrunner_hb_cs_ring[(s - 1) % MACRUNNER_HB_CS_RING];
+
+        if (e->seq != s) continue;
+        MESSAGE( "macrunner-hb-heap-cs-observer:   ANOM-RING view=%s seq=%ld tid=%04lx %s section=%p "
+             "lock=%ld rec=%ld own=%04lx caller=%p\n",
+             MACRUNNER_HB_CS_VIEW, e->seq, e->tid, e->phase, e->crit, e->lock, e->rec, e->own,
+             e->caller );
+        strok++;
+    }
+    /* Итог СВОЕЙ выдачи — чтобы «строк в журнале» нельзя было прочесть как «событий». */
+    MESSAGE( "macrunner-hb-heap-cs-observer: %s %s=%ld/3 %s=%ld (%s=%ld, %s %ld)\n",
+         "ИТОГ", "аномалия", nomer, "строк_кольца", strok,
+         "событий", nomer, "НЕ", strok + 1 );
+    InterlockedExchange( &printing, 0 );
+}
+
+static void macrunner_hb_heap_cs_observe( const char *phase, RTL_CRITICAL_SECTION *crit,
+                                          void *caller )
+{
+    struct macrunner_hb_cs_tidstat *ts;
+    struct macrunner_hb_cs_stat *stat;
+    struct macrunner_hb_cs_event *ev;
+    const char *name;
+    LONG tid, seq, depth, baza = 0;
+    BOOL done;
+
+    /* Проверка печатника — см. macrunner_hb_cs_anomaly_test_enabled выше. */
+    if (macrunner_hb_cs_anomaly_test_enabled())
+    {
+        static LONG uchtjono, probano;
+        if (InterlockedIncrement( &uchtjono ) >= 20 &&
+            !InterlockedCompareExchange( &probano, 1, 0 ))
+            macrunner_hb_cs_anomaly( "PROBA_OK", crit, caller,
+                                     (LONG)GetCurrentThreadId(), 7 );
+    }
+
+    if (!macrunner_hb_heap_cs_tracked( crit, &name )) return;
+    if (phase[0] != 'E' && phase[0] != 'L') return;
+    done = (phase[6] == 'O');                    /* ENTER_OK / LEAVE_OK vs *_REQ */
+
+
+    tid = (LONG)GetCurrentThreadId();
+
+    /* sample the fields FIRST — for *_REQ this is the true "before" */
+    seq = InterlockedIncrement( &macrunner_hb_cs_ring_seq );
+    ev = &macrunner_hb_cs_ring[(seq - 1) % MACRUNNER_HB_CS_RING];
+    ev->seq    = seq;
+    ev->tid    = tid;
+    ev->phase  = phase;
+    ev->crit   = crit;
+    ev->caller = caller;
+    ev->lock   = crit->LockCount;
+    ev->rec    = crit->RecursionCount;
+    ev->own    = (LONG)HandleToULong( crit->OwningThread );
+
+    if (seq <= MACRUNNER_HB_CS_HEAD) macrunner_hb_cs_head[seq - 1] = *ev;
+
+    if (!done) return;                           /* counters only on the completed op */
+
+    stat = macrunner_hb_cs_stat_for( crit );
+    ts = macrunner_hb_cs_tidstat_for( tid );
+
+    /* Испытание поправки: пропускаем ПЕРВЫЙ вход по паре, имитируя поздний старт. */
+    if (phase[0] == 'E' && done && macrunner_hb_cs_baza_test_enabled())
+    {
+        static struct { LONG tid; void *crit; } propushcheno[16];
+        int i;
+
+        for (i = 0; i < 16; i++)
+            if (propushcheno[i].tid == tid && propushcheno[i].crit == crit) break;
+        if (i == 16)
+        {
+            for (i = 0; i < 16; i++)
+                if (!InterlockedCompareExchange( &propushcheno[i].tid, tid, 0 ))
+                {
+                    propushcheno[i].crit = crit;
+                    return;                       /* первый вход НЕ учитываем */
+                }
+        }
+    }
+
+    if (phase[0] == 'E')
+    {
+        if (stat) InterlockedIncrement( &stat->enters );
+        if (ts) InterlockedIncrement( &ts->enters );
+        depth = macrunner_hb_cs_hold_add( tid, crit, caller, crit->RecursionCount, &baza );
+
+        /* after a completed Enter the lock must reflect our depth ПЛЮС базу */
+        if (depth > 0 && (crit->RecursionCount != depth + baza ||
+                          (LONG)HandleToULong( crit->OwningThread ) != tid))
+            macrunner_hb_cs_anomaly( "ENTER_OK", crit, caller, tid, depth );
+    }
+    else
+    {
+        if (stat) InterlockedIncrement( &stat->leaves );
+        if (ts) InterlockedIncrement( &ts->leaves );
+        depth = macrunner_hb_cs_hold_del( tid, crit, &baza );
+
+        /* ★★★ MacRunner 2026-08-29 — ПРОВЕРКА БЫЛА НЕВЕРНА ПО СУЩЕСТВУ.
+         *
+         * Прежнее условие исходило из «мы отпустили последнюю рекурсию => секция
+         * ОБЯЗАНА быть свободна». Это не так: как только LeaveCriticalSection
+         * обнулила OwningThread и уменьшила LockCount, ЛЮБОЙ другой поток вправе
+         * немедленно захватить секцию. Наблюдатель же читает поля ПОСЛЕ этого
+         * момента и видит законного нового владельца.
+         *
+         * Прибор выдал ровно такую последовательность и был принят за гонку:
+         *   seq=12060 tid=013c LEAVE_REQ own=013c
+         *   seq=12061 tid=0138 ENTER_OK  own=0138   <- законный захват
+         *   seq=12062 tid=013c LEAVE_OK  own=0138   <- «аномалия»
+         * Полдня ушло бы на поиск несуществующей гонки в куче ntdll.
+         *
+         * Настоящая аномалия здесь только одна: секция ещё числится за НАМИ,
+         * хотя мы вышли из последней рекурсии. Чужой владелец — не наше дело. */
+        if (depth == 0 && baza == 0 &&
+            (LONG)HandleToULong( crit->OwningThread ) == tid)
+            macrunner_hb_cs_anomaly( "LEAVE_OK", crit, caller, tid, depth );
+    }
+}
+
+static void macrunner_hb_heap_cs_observe_wait( RTL_CRITICAL_SECTION *crit, void *caller );
+
+/* ARM64EC uses x18 as the TEB platform register, while the diagnostic observer can
+ * cross into host C code which follows the macOS ABI and does not preserve x18.
+ * Keep the save value live across the complete helper call; restoring only at the
+ * outer PE-call bridge is too early for observer calls made from inside PE code. */
+#if defined(__aarch64__) || defined(__arm64ec__)
+static inline ULONG_PTR macrunner_hb_save_teb_x18(void)
+{
+    ULONG_PTR teb;
+
+    __asm__ volatile( "mov %0, x18" : "=r" (teb) : : "memory" );
+    return teb;
+}
+
+static inline void macrunner_hb_restore_teb_x18( ULONG_PTR teb )
+{
+    __asm__ volatile( "mov x18, %0" : : "r" (teb) : "x18", "memory" );
+}
+
+static void macrunner_hb_heap_cs_observe_preserving_x18( const char *phase,
+                                                          RTL_CRITICAL_SECTION *crit,
+                                                          void *caller )
+{
+    ULONG_PTR teb = macrunner_hb_save_teb_x18();
+
+    macrunner_hb_heap_cs_observe( phase, crit, caller );
+    macrunner_hb_restore_teb_x18( teb );
+}
+
+static void macrunner_hb_heap_cs_observe_wait_preserving_x18( RTL_CRITICAL_SECTION *crit,
+                                                               void *caller )
+{
+    ULONG_PTR teb = macrunner_hb_save_teb_x18();
+
+    macrunner_hb_heap_cs_observe_wait( crit, caller );
+    macrunner_hb_restore_teb_x18( teb );
+}
+#else
+#define macrunner_hb_heap_cs_observe_preserving_x18 macrunner_hb_heap_cs_observe
+#define macrunner_hb_heap_cs_observe_wait_preserving_x18 macrunner_hb_heap_cs_observe_wait
+#endif
+
+/* Contention capture — this is where the crux is answered.  Print the waiter, then the
+ * HOLDER's acquire caller PC (from the hold table), then the enter/leave ledger for
+ * every section pointer we have seen. */
+static void macrunner_hb_heap_cs_observe_wait( RTL_CRITICAL_SECTION *crit, void *caller )
+{
+    static LONG waits, printing;
+    const char *name;
+    LONG owner, seq;
+    int i;
+
+    if (!macrunner_hb_heap_cs_tracked( crit, &name )) return;
+    if (!macrunner_hb_heap_cs_observer_enabled()) return;   /* printing is gated, not recording */
+    if (!macrunner_hb_heap_cs_target_process()) return;
+    if (InterlockedCompareExchange( &printing, 1, 0 )) return;
+    seq = InterlockedIncrement( &waits );
+    if (seq > 200) { InterlockedExchange( &printing, 0 ); return; }
+
+    owner = (LONG)HandleToULong( crit->OwningThread );
+    /* state=%p exposes an ARM64X dual-.data split: if two threads print different
+     * table addresses, the native and EC views have separate copies of this state —
+     * which is hypothesis (b), mixed EC/native view, in its purest form. */
+    MESSAGE( "macrunner-hb-heap-cs-observer: seq=%ld phase=WAIT_BLOCK tid=%04lx caller=%p "
+         "section=%p name=%s lock=%ld recursion=%ld owner=%04lx state=%p\n",
+         seq, GetCurrentThreadId(), caller, crit, name,
+         crit->LockCount, crit->RecursionCount, owner, macrunner_hb_cs_stats );
+
+    for (i = 0; i < MACRUNNER_HB_CS_HOLD_SLOTS; i++)
+    {
+        struct macrunner_hb_cs_hold *h = &macrunner_hb_cs_holds[i];
+
+        if (!h->tid || !h->crit) continue;
+        MESSAGE( "macrunner-hb-heap-cs-observer:   HOLD tid=%04lx section=%p depth=%ld "
+             "acquired_at=%p%s\n", h->tid, h->crit, h->depth, h->caller,
+             h->tid == owner ? "   <== BLOCKER" : "" );
+    }
+    for (i = 0; i < MACRUNNER_HB_CS_STAT_SLOTS; i++)
+    {
+        struct macrunner_hb_cs_stat *s = &macrunner_hb_cs_stats[i];
+
+        if (!s->crit) continue;
+        MESSAGE( "macrunner-hb-heap-cs-observer:   LEDGER section=%p enters=%ld leaves=%ld "
+             "unmatched=%ld\n", s->crit, s->enters, s->leaves, s->enters - s->leaves );
+    }
+    /* per-TID: the global ledger balances even when one thread entered once more and
+     * another left once more — that skew only shows up here */
+    for (i = 0; i < MACRUNNER_HB_CS_TID_SLOTS; i++)
+    {
+        struct macrunner_hb_cs_tidstat *t = &macrunner_hb_cs_tidstats[i];
+
+        if (!t->tid) continue;
+        MESSAGE( "macrunner-hb-heap-cs-observer:   PERTID tid=%04lx enters=%ld leaves=%ld "
+             "skew=%ld\n", t->tid, t->enters, t->leaves, t->enters - t->leaves );
+    }
+    /* FIRST ops — where the permanent hold is born */
+    {
+        LONG total = macrunner_hb_cs_ring_seq;
+        LONG n = total < MACRUNNER_HB_CS_HEAD ? total : MACRUNNER_HB_CS_HEAD;
+
+        for (i = 0; i < n; i++)
+        {
+            struct macrunner_hb_cs_event *e = &macrunner_hb_cs_head[i];
+
+            if (!e->seq) continue;
+            MESSAGE( "macrunner-hb-heap-cs-observer:   HEAD seq=%ld tid=%04lx %s section=%p "
+                 "lock=%ld rec=%ld own=%04lx caller=%p\n",
+                 e->seq, e->tid, e->phase, e->crit, e->lock, e->rec, e->own, e->caller );
+        }
+    }
+    /* last ops, oldest first */
+    {
+        LONG total = macrunner_hb_cs_ring_seq;
+        LONG first = total > MACRUNNER_HB_CS_RING ? total - MACRUNNER_HB_CS_RING + 1 : 1;
+        LONG s, strok = 0;
+
+        for (s = first; s <= total; s++)
+        {
+            struct macrunner_hb_cs_event *e =
+                &macrunner_hb_cs_ring[(s - 1) % MACRUNNER_HB_CS_RING];
+
+            if (e->seq != s) continue;           /* overwritten mid-dump */
+            MESSAGE( "macrunner-hb-heap-cs-observer:   RING seq=%ld tid=%04lx %s section=%p "
+                 "lock=%ld rec=%ld own=%04lx caller=%p\n",
+                 e->seq, e->tid, e->phase, e->crit, e->lock, e->rec, e->own, e->caller );
+            strok++;
+        }
+        /* Своё число — иначе строки журнала читаются как события. Тот же изъян
+         * уже стоил разбора: 192 строки были приняты за 192 аномалии. */
+        MESSAGE( "macrunner-hb-heap-cs-observer: %s %s=%ld/200 %s=%ld (%s=%ld, %s %ld)\n",
+             "ИТОГ", "ожидание", seq, "строк_кольца", strok,
+             "событий", seq, "НЕ", strok );
+    }
+    InterlockedExchange( &printing, 0 );
+}
+
 static const char *debugstr_timeout( const LARGE_INTEGER *timeout )
 {
     if (!timeout) return "(infinite)";
@@ -315,6 +999,22 @@ NTSTATUS WINAPI RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit )
         if (status == STATUS_WAIT_0) break;
         if (status != WAIT_TIMEOUT) return status;
 
+        /* Recover from orphaned state: no owner, and only this waiter left.
+         * This can happen if a fault/async unwind interrupts lock acquisition
+         * after LockCount increment but before OwningThread assignment. */
+        if (!crit->OwningThread)
+        {
+            LONG lock_count = crit->LockCount;
+            if (lock_count > 0 &&
+                InterlockedCompareExchange( &crit->LockCount, 0, lock_count ) == lock_count)
+            {
+                WARN( "recovered orphan critical section %p %s in thread %04lx (lock_count=%ld)\n",
+                      crit, debugstr_a(crit_section_get_name(crit)),
+                      GetCurrentThreadId(), lock_count );
+                break;
+            }
+        }
+
         timeout = (TRACE_ON(relay) ? 300 : 60);
 
         ERR( "section %p %s wait timed out in thread %04lx, blocked by %04lx, retrying (%u sec)\n",
@@ -349,13 +1049,40 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
 /******************************************************************************
  *      RtlEnterCriticalSection   (NTDLL.@)
  */
+/* raw acquire, no observation — RtlTryEnterCriticalSection wraps this and observes */
+static BOOL macrunner_try_enter_crit( RTL_CRITICAL_SECTION *crit )
+{
+    BOOL ret = FALSE;
+
+    if (InterlockedCompareExchange( &crit->LockCount, 0, -1 ) == -1)
+    {
+        crit->OwningThread   = ULongToHandle(GetCurrentThreadId());
+        crit->RecursionCount = 1;
+        ret = TRUE;
+    }
+    else if (crit->OwningThread == ULongToHandle(GetCurrentThreadId()))
+    {
+        InterlockedIncrement( &crit->LockCount );
+        crit->RecursionCount++;
+        ret = TRUE;
+    }
+    return ret;
+}
+
 NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
+    void *caller = __builtin_return_address( 0 );
+
+    macrunner_hb_heap_cs_observe_preserving_x18( "ENTER_REQ", crit, caller );
     if (crit->SpinCount)
     {
         ULONG count;
 
-        if (RtlTryEnterCriticalSection( crit )) return STATUS_SUCCESS;
+        if (macrunner_try_enter_crit( crit ))
+        {
+            macrunner_hb_heap_cs_observe_preserving_x18( "ENTER_OK", crit, caller );
+            return STATUS_SUCCESS;
+        }
         for (count = crit->SpinCount; count > 0; count--)
         {
             if (crit->LockCount > 0) break;  /* more than one waiter, don't bother spinning */
@@ -374,15 +1101,25 @@ NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
         if (crit->OwningThread == ULongToHandle(GetCurrentThreadId()))
         {
             crit->RecursionCount++;
+            macrunner_hb_heap_cs_observe_preserving_x18( "ENTER_OK", crit, caller );
             return STATUS_SUCCESS;
         }
 
-        /* Now wait for it */
-        if ((status = RtlpWaitForCriticalSection( crit ))) RtlRaiseStatus( status );
+        /* Now wait for it.
+         * If wait fails (e.g. APC/interruption), undo the waiter increment
+         * done above, otherwise the critical section can stay permanently
+         * contended with OwningThread == 0. */
+        macrunner_hb_heap_cs_observe_wait_preserving_x18( crit, caller );
+        if ((status = RtlpWaitForCriticalSection( crit )))
+        {
+            InterlockedDecrement( &crit->LockCount );
+            RtlRaiseStatus( status );
+        }
     }
 done:
     crit->OwningThread   = ULongToHandle(GetCurrentThreadId());
     crit->RecursionCount = 1;
+    macrunner_hb_heap_cs_observe_preserving_x18( "ENTER_OK", crit, caller );
     return STATUS_SUCCESS;
 }
 
@@ -392,19 +1129,13 @@ done:
  */
 BOOL WINAPI RtlTryEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
-    BOOL ret = FALSE;
-    if (InterlockedCompareExchange( &crit->LockCount, 0, -1 ) == -1)
-    {
-        crit->OwningThread   = ULongToHandle(GetCurrentThreadId());
-        crit->RecursionCount = 1;
-        ret = TRUE;
-    }
-    else if (crit->OwningThread == ULongToHandle(GetCurrentThreadId()))
-    {
-        InterlockedIncrement( &crit->LockCount );
-        crit->RecursionCount++;
-        ret = TRUE;
-    }
+    void *caller = __builtin_return_address( 0 );
+    BOOL ret = macrunner_try_enter_crit( crit );
+
+    /* RtlEnterCriticalSection observes its own success (and uses the raw helper above,
+     * so this does not double count).  This entry point is the OTHER writer of
+     * OwningThread: an external caller of it is invisible to the Enter hook. */
+    if (ret) macrunner_hb_heap_cs_observe_preserving_x18( "ENTER_OK", crit, caller );
     return ret;
 }
 
@@ -433,6 +1164,9 @@ BOOL WINAPI RtlIsCriticalSectionLockedByThread( RTL_CRITICAL_SECTION *crit )
  */
 NTSTATUS WINAPI RtlLeaveCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
+    void *caller = __builtin_return_address( 0 );
+
+    macrunner_hb_heap_cs_observe_preserving_x18( "LEAVE_REQ", crit, caller );
     if (--crit->RecursionCount)
     {
         if (crit->RecursionCount > 0) InterlockedDecrement( &crit->LockCount );
@@ -447,6 +1181,7 @@ NTSTATUS WINAPI RtlLeaveCriticalSection( RTL_CRITICAL_SECTION *crit )
             RtlpUnWaitCriticalSection( crit );
         }
     }
+    macrunner_hb_heap_cs_observe_preserving_x18( "LEAVE_OK", crit, caller );
     return STATUS_SUCCESS;
 }
 

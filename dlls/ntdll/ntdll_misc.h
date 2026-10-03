@@ -81,6 +81,10 @@ extern void set_native_thread_name( DWORD tid, const char *name );
 
 /* init routines */
 extern void loader_init( CONTEXT *context, void **entry );
+extern void macrunner_observe_initial_guest_peb(void);
+/* ШАГ-2 08.09.2026 (договор T8): владелец CPU процесса, каким его видит PE-половина.
+ * Определена в loader.c, читает MACRUNNER_CPU_BACKEND один раз и кеширует. */
+extern BOOL macrunner_cpu_backend_is_hb(void);
 extern void version_init(void);
 extern void debug_init(void);
 extern void actctx_init(void);
@@ -104,7 +108,19 @@ extern struct _KUSER_SHARED_DATA *user_shared_data;
 #ifdef _WIN64
 static inline TEB64 *NtCurrentTeb64(void) { return NULL; }
 #else
-static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiBatchCount; }
+static inline TEB64 *NtCurrentTeb64(void)
+{
+    TEB *teb = NtCurrentTeb();
+    ULONG_PTR batch = (ULONG_PTR)teb->GdiBatchCount;
+    LONG offset = teb->WowTebOffset;
+    TEB64 *teb64;
+
+    if (!batch || !offset) return NULL;
+    teb64 = (TEB64 *)((char *)teb + offset);
+    if ((ULONG_PTR)teb64 != batch) return NULL;
+    if ((ULONG_PTR)teb64 & (sizeof(ULONG64) - 1)) return NULL;
+    return teb64;
+}
 #endif
 
 static inline void *get_rva( HMODULE module, DWORD va )

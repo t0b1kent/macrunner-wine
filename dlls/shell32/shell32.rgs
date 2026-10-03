@@ -11,6 +11,13 @@ HKCR
             val LocalizedString = s '@%MODULE%,-8964'
             DefaultIcon = s '%MODULE%,-33'
         }
+        '{713AACC8-3B71-435C-A3A1-BE4E53621AB1}' = s 'AnimateWindowSize Object'
+        {
+            InProcServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Apartment'
+            }
+        }
         '{00021401-0000-0000-C000-000000000046}' { shellex { MayChangeDefaultMenu } }
     }
 }

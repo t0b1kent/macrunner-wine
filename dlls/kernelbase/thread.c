@@ -21,6 +21,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <limits.h>
+#include <stdlib.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -799,32 +800,78 @@ LPVOID WINAPI DECLSPEC_HOTPATCH TlsGetValue( DWORD index )
 }
 
 
+
+/* MacRunner 2026-08-22, лейн ЛЕСТНИЦА, итерация 2647 — ГЕЙТ НА ЗОНД TlsSetValue.
+ * Зонд стоял БЕЗУСЛОВНО на одной из самых горячих функций Win32. Замер по журналу
+ * прогона Diablo ab2640: 82 570 печатей за 76 с — 75 % ВСЕХ строк журнала (109 362).
+ * Это тот же класс, что поблочные зонды координатора (MACRUNNER_HB_BLOCK_PROBES,
+ * +24,9 % на чистом стенде): цена не в самом условии, а в работе ДО него — здесь это
+ * varargs-печать и вызовы GetLastError() в аргументах, которые под гейтом исчезают.
+ * Умолчание ВЫКЛ; значение читается ОДИН раз, а не на каждый вызов. */
+static int macrunner_tls_trace(void)
+{
+    static int on = -1;
+    if (on < 0)
+    {
+        /* ★ 23.08: getenv в kernelbase НЕДОСТУПЕН — ld.lld даёт undefined symbol на
+         * i386-windows. Та же ловушка 210, что уже обойдена в volume.c:715.
+         * Всплыло только сейчас: PE-часть не собиралась с 17.08 (mingw GCC вместо clang). */
+        char v[8];
+        DWORD n = GetEnvironmentVariableA( "MACRUNNER_KERNELBASE_TLS_TRACE", v, sizeof(v) );
+        on = (n >= 1 && v[0] != '0') ? 1 : 0;
+    }
+    return on;
+}
+
 /**********************************************************************
  *           TlsSetValue   (kernelbase.@)
  */
 BOOL WINAPI DECLSPEC_HOTPATCH TlsSetValue( DWORD index, LPVOID value )
 {
+    TEB *teb = NtCurrentTeb();
+#ifdef __aarch64__
+    register TEB *x18_teb __asm__("x18");
+#endif
+
+    if (macrunner_tls_trace())
+    MESSAGE( "macrunner-kernelbase-tlsset: entry index=%lu value=%p teb=%p"
+#ifdef __aarch64__
+             " x18=%p"
+#endif
+             "\n", index, value, teb
+#ifdef __aarch64__
+             , x18_teb
+#endif
+    );
     if (index < TLS_MINIMUM_AVAILABLE)
     {
-        NtCurrentTeb()->TlsSlots[index] = value;
+        teb->TlsSlots[index] = value;
     }
     else
     {
         index -= TLS_MINIMUM_AVAILABLE;
-        if (index >= 8 * sizeof(NtCurrentTeb()->Peb->TlsExpansionBitmapBits))
+        if (index >= 8 * sizeof(teb->Peb->TlsExpansionBitmapBits))
         {
             SetLastError( ERROR_INVALID_PARAMETER );
+            if (macrunner_tls_trace())
+                MESSAGE( "macrunner-kernelbase-tlsset: fail invalid index=%lu teb=%p last_error=%lu\n",
+                         index, teb, GetLastError() );
             return FALSE;
         }
-        if (!NtCurrentTeb()->TlsExpansionSlots &&
-            !(NtCurrentTeb()->TlsExpansionSlots = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
-                         8 * sizeof(NtCurrentTeb()->Peb->TlsExpansionBitmapBits) * sizeof(void*) )))
+        if (!teb->TlsExpansionSlots &&
+            !(teb->TlsExpansionSlots = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
+                         8 * sizeof(teb->Peb->TlsExpansionBitmapBits) * sizeof(void*) )))
         {
             SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+            if (macrunner_tls_trace())
+                MESSAGE( "macrunner-kernelbase-tlsset: fail alloc index=%lu teb=%p last_error=%lu\n",
+                         index, teb, GetLastError() );
             return FALSE;
         }
-        NtCurrentTeb()->TlsExpansionSlots[index] = value;
+        teb->TlsExpansionSlots[index] = value;
     }
+    if (macrunner_tls_trace())
+        MESSAGE( "macrunner-kernelbase-tlsset: success teb=%p last_error=%lu\n", teb, GetLastError() );
     return TRUE;
 }
 

@@ -26,6 +26,7 @@
 #define VKD3D_NO_WIN32_TYPES
 #include "initguid.h"
 #include "wined3d_private.h"
+#include "wine/macrunner_modmap.h"
 #include "wined3d_gl.h"
 #include "d3d12.h"
 #define VK_NO_PROTOTYPES
@@ -313,13 +314,48 @@ static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
 
     if (!RegisterClassA(&wc))
     {
-        ERR("Failed to register window class 'WineD3D_OpenGL'!\n");
-        if (!TlsFree(wined3d_context_tls_idx))
+        /* MacRunner 2026-08-27, Heroes of Might & Magic III — ПОВТОРНАЯ РЕГИСТРАЦИЯ НЕ ОТКАЗ.
+         *
+         * Замер (первый прогон HoMM III, прибор macrunner-hb-regclass-ret):
+         *   n=1 atom=0000c030 err=0          — класс зарегистрирован
+         *   n=2 atom=00000000 err=00000582   — ERROR_CLASS_ALREADY_EXISTS
+         * и на второй попытке весь wined3d_dll_init возвращал FALSE, из-за чего падала
+         * загрузка ddraw и следом всей игры («xdd.dll failed to initialize, aborting»).
+         *
+         * Инициализация идёт дважды потому, что GOG-сборка грузит ddraw через обёртку
+         * DDrawCompat (xdd.dll) поверх обычного пути. В апстримном Wine такого не бывает,
+         * оттого там отказ и считается фатальным.
+         *
+         * Класс с этим именем уже существует и полностью пригоден — падать не на чем.
+         * Отличаем ИМЕННО этот случай: любая другая ошибка регистрации остаётся отказом. */
+        /* MacRunner 2026-08-27 — СУДИТЬ ПО НАЛИЧИЮ КЛАССА, А НЕ ПО КОДУ ОШИБКИ.
+         *
+         * Первая редакция проверяла GetLastError() == ERROR_CLASS_ALREADY_EXISTS. Замер
+         * показал, что код ПЛАВАЕТ: два одинаковых прогона подряд дали 0x582 (класс уже
+         * есть, игра доходит до 48 193 строк журнала) и 0xb7 (ERROR_ALREADY_EXISTS, игра
+         * падает на 13 158). Прибор на 64-битной стороне при этом всегда печатал 0x582 —
+         * то есть теряется код где-то на пути к гостю, и гонка это или потеря, для решения
+         * неважно.
+         *
+         * Важно другое: нам нужен РАБОЧИЙ класс, а не конкретный код ошибки. Спрашиваем
+         * прямо — если класс с этим именем зарегистрирован, продолжать можно, каким бы
+         * кодом ни закончилась попытка. Это и надёжнее, и ближе к смыслу проверки. */
+        WNDCLASSEXA macrunner_existing = { .cbSize = sizeof(macrunner_existing) };
+        unsigned int macrunner_rc_err = GetLastError();
+        BOOL macrunner_class_ok = GetClassInfoExA( hInstDLL, WINED3D_OPENGL_WINDOW_CLASS_NAME,
+                                                   &macrunner_existing );
+
+        if (!macrunner_class_ok)
         {
-            unsigned int err = GetLastError();
-            ERR("Failed to free context TLS index, err %#x.\n", err);
+            ERR("Failed to register window class 'WineD3D_OpenGL'! err=%#x\n", macrunner_rc_err);
+            if (!TlsFree(wined3d_context_tls_idx))
+            {
+                unsigned int err = GetLastError();
+                ERR("Failed to free context TLS index, err %#x.\n", err);
+            }
+            return FALSE;
         }
-        return FALSE;
+        WARN("Window class 'WineD3D_OpenGL' уже зарегистрирован (err=%#x), продолжаем.\n", macrunner_rc_err);
     }
 
     DisableThreadLibraryCalls(hInstDLL);
@@ -558,6 +594,31 @@ static BOOL wined3d_dll_destroy(HINSTANCE hInstDLL)
     return TRUE;
 }
 
+/* ★ MacRunner 2026-08-28 — КТО ОТПУСКАЕТ ЧУЖОЙ МЬЮТЕКС.
+ *
+ * Diablo впервые дошёл до отрисовки (Lock -> CS_OP_MAP -> CS_OP_UNMAP прошли), и
+ * сразу за этим wine говорит:
+ *   RtlLeaveCriticalSection section 7763C440 "wined3d_cs" is not acquired
+ * то есть кто-то отпускает мьютекс, которого не захватывал, а следом — отказ
+ * чтения в стороннем ddraw.
+ *
+ * Собственный счётчик глубины здесь не сделать: `__thread` в этом модуле не
+ * линкуется (нет TLS на PE-стороне). Но считать и не нужно — сама секция знает
+ * своего владельца и глубину рекурсии. Спрашиваем ЕЁ, это и точнее, и дешевле.
+ *
+ * Гейт по умолчанию ВЫКЛЮЧЕН: горячий путь.
+ * Включать: MACRUNNER_WINED3D_MUTEX_BALANCE=1 */
+static int macrunner_mutex_balance_on(void)
+{
+    static int cached = -1;
+    if (cached < 0)
+    {
+        const char *v = getenv( "MACRUNNER_WINED3D_MUTEX_BALANCE" );
+        cached = (v && *v && *v != '0') ? 1 : 0;
+    }
+    return cached;
+}
+
 void WINAPI wined3d_mutex_lock(void)
 {
     EnterCriticalSection(&wined3d_cs);
@@ -565,8 +626,36 @@ void WINAPI wined3d_mutex_lock(void)
 
 void WINAPI wined3d_mutex_unlock(void)
 {
+    if (macrunner_mutex_balance_on())
+    {
+        HANDLE me = NtCurrentTeb()->ClientId.UniqueThread;
+
+        if (wined3d_cs.OwningThread != me || wined3d_cs.RecursionCount <= 0)
+        {
+            static LONG said;
+            if (InterlockedIncrement( &said ) <= 16)
+            {
+                char mod[96];
+                void *frames[8];
+                USHORT n, i;
+
+                ERR( "macrunner-mutex-чужой: поток=%04lx владелец=%04lx глубина=%ld возврат=%p (%s)\n",
+                     (unsigned long)(ULONG_PTR)me,
+                     (unsigned long)(ULONG_PTR)wined3d_cs.OwningThread,
+                     (long)wined3d_cs.RecursionCount,
+                     __builtin_return_address(0),
+                     macrunner_addr_module( __builtin_return_address(0), mod, sizeof(mod) ) );
+
+                n = RtlCaptureStackBackTrace( 0, 8, frames, NULL );
+                for (i = 0; i < n; i++)
+                    ERR( "macrunner-mutex-цепь[%u] %p (%s)\n", i, frames[i],
+                         macrunner_addr_module( frames[i], mod, sizeof(mod) ) );
+            }
+        }
+    }
     LeaveCriticalSection(&wined3d_cs);
 }
+
 
 static void wined3d_wndproc_mutex_lock(void)
 {

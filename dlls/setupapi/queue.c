@@ -1162,8 +1162,8 @@ static BOOL do_file_copyW( LPCWSTR source, LPCWSTR target, DWORD style,
             docopy = FALSE;
         }
     }
-    if (style & (SP_COPY_NODECOMP | SP_COPY_LANGUAGEAWARE | SP_COPY_FORCE_IN_USE |
-                 SP_COPY_NOSKIP | SP_COPY_WARNIFSKIP))
+    /* copy_file() copies normal files as-is, so SP_COPY_NODECOMP is already the default path. */
+    if (style & (SP_COPY_LANGUAGEAWARE | SP_COPY_FORCE_IN_USE | SP_COPY_NOSKIP | SP_COPY_WARNIFSKIP))
     {
         ERR("Unsupported style(s) 0x%lx\n",style);
     }

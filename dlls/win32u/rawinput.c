@@ -486,6 +486,23 @@ UINT WINAPI NtUserGetRawInputBuffer( RAWINPUT *data, UINT *data_size, UINT heade
     }
     SERVER_END_REQ;
 
+    if (data && count != (UINT)-1)
+    {
+        RAWINPUT *current = data;
+        UINT index;
+
+        for (index = 0; index < count; index++, current = NEXTRAWINPUTBLOCK( current ))
+        {
+            if (current->header.dwType == RIM_TYPEKEYBOARD &&
+                current->data.keyboard.VKey == VK_RETURN)
+                macrunner_return_route_observe(
+                    "unity-raw-buffer-read", 0, VK_RETURN,
+                    !!(current->data.keyboard.Flags & RI_KEY_BREAK),
+                    current->data.keyboard.Flags, thread_info->client_info.message_time,
+                    current->data.keyboard.Message, count );
+        }
+    }
+
     return count;
 }
 
@@ -544,6 +561,12 @@ UINT WINAPI NtUserGetRawInputData( HRAWINPUT handle, UINT command, void *data, U
     {
         if (size != sizeof(RAWKEYBOARD)) goto failed;
         rawinput->data.keyboard = *(RAWKEYBOARD *)(msg_data + 1);
+        if (rawinput->data.keyboard.VKey == VK_RETURN)
+            macrunner_return_route_observe(
+                "unity-raw-data-read", 0, VK_RETURN,
+                !!(rawinput->data.keyboard.Flags & RI_KEY_BREAK),
+                rawinput->data.keyboard.Flags, thread_info->client_info.message_time,
+                rawinput->data.keyboard.Message, rawinput->header.dwSize );
     }
     else if (msg_data->rawinput.type == RIM_TYPEHID)
     {
@@ -595,6 +618,16 @@ BOOL process_rawinput_message( MSG *msg, UINT hw_id, const struct hardware_msg_d
         memcpy( tmp, msg_data, msg_data->size );
         thread_info->rawinput = tmp;
         msg->lParam = (LPARAM)hw_id;
+        if (msg_data->rawinput.type == RIM_TYPEKEYBOARD)
+        {
+            const RAWKEYBOARD *keyboard = (const RAWKEYBOARD *)(msg_data + 1);
+
+            if (keyboard->VKey == VK_RETURN)
+                macrunner_return_route_observe(
+                    "unity-wm-input-dequeue", msg->hwnd, VK_RETURN,
+                    !!(keyboard->Flags & RI_KEY_BREAK), keyboard->Flags,
+                    thread_info->client_info.message_time, keyboard->Message, hw_id );
+        }
     }
 
     msg->pt = point_phys_to_win_dpi( msg->hwnd, msg->pt );

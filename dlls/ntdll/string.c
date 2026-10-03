@@ -33,6 +33,7 @@
 #include "winnls.h"
 #include "winternl.h"
 #include "ntdll_misc.h"
+#include "wine/debug.h"
 
 
 /* same as wctypes except for TAB, which doesn't have C1_BLANK for some reason... */
@@ -583,9 +584,33 @@ char * __cdecl strrchr( const char *str, int c )
 /*********************************************************************
  *                  strspn   (NTDLL.@)
  */
+/* 2026-09-01 macrunner: strspn walks `accept` with an inlined strchr until it hits the
+ * terminating NUL.  A caller that hands over a set without a terminator makes that scan
+ * run into the next page; the reported fault sits at _strspn+0x21, right on `mov (%edi),%dh`.
+ * Nothing inside ntdll calls strspn, so the caller is external and the unwind through the
+ * i386 frames has been unreliable.  This reporter stops at the page boundary — before the
+ * read that would fault — and names the return address, which is exact for a leaf export.
+ * ASCII only on purpose: this file is the PE-side ntdll with its own printf. */
+static void macrunner_hb_strspn_report( const char *str, const char *accept, void *caller )
+{
+    size_t do_konca = 0x1000 - ((ULONG_PTR)accept & 0xfff);
+    size_t i;
+    unsigned char hvost[8];
+
+    for (i = 0; i < do_konca; i++) if (!accept[i]) return;   /* terminated: nothing to say */
+
+    for (i = 0; i < 8; i++) hvost[i] = (unsigned char)accept[do_konca - 8 + i];
+    MESSAGE( "macrunner-hb-strspn: UNTERMINATED accept caller=%p str=%p accept=%p "
+             "scanned=%u tail=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+             caller, str, accept, (unsigned int)do_konca,
+             hvost[0], hvost[1], hvost[2], hvost[3],
+             hvost[4], hvost[5], hvost[6], hvost[7] );
+}
+
 size_t __cdecl strspn( const char *str, const char *accept )
 {
     const char *ptr;
+    macrunner_hb_strspn_report( str, accept, __builtin_return_address(0) );
     for (ptr = str; *ptr; ptr++) if (!strchr( accept, *ptr )) break;
     return ptr - str;
 }

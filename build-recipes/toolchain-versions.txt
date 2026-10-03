@@ -1,0 +1,16 @@
+# Historical record copied by meaning from published 1.0.7 build-recipes.
+# September 29 observations are not necessarily the tools used for September builds.
+Apple clang observed       : 21.0.0 (clang-2100.3.34.2)
+SDK in historical objects  : 26.5; later host default 27.0 (not byte-equivalent)
+llvm-mingw                 : 20260505-ucrt-macos-universal; clang 22.1.5
+llvm-project revision      : 5ea218a153f4d2f815b8244eab3e4b4ba5e00e6c
+llvm-mingw archive SHA256   : 050379de888f0c843787819dadf183df3693330a5724643919e9121f16355295
+GNU Bison / Flex           : 3.8.2 / 2.6.4
+GNU Autoconf               : 2.73 (already-generated configure is included)
+ccache                     : 4.13.6
+pkg-config                 : pkgconf 3.0.7
+msgfmt                     : GNU gettext-tools 1.0
+Historical dependencies    : glib 2.88.2, gstreamer 1.28.3, ffmpeg 8.1.1,
+                             libusb 1.0.29, freetype 2.14.3, gnutls 3.8.13_2, sdl2 2.32.10
+Wine base                  : CrossOver 26.1.0, Wine 11.0
+# Cloud jobs record their actual versions; Homebrew dependency revisions are not pinned.

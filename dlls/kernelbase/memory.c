@@ -41,6 +41,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(heap);
 WINE_DECLARE_DEBUG_CHANNEL(virtual);
 WINE_DECLARE_DEBUG_CHANNEL(globalmem);
 
+#ifndef WINE_NT_MAP_VIEW
+#define WINE_NT_MAP_VIEW(mapping, process, ptr, zero_bits, commit_size, offset, size, inherit_, alloc_type_, protect_) \
+    NtMapViewOfSection( mapping, process, ptr, zero_bits, commit_size, offset, size, inherit_, alloc_type_, protect_ )
+#endif
 
 static CRITICAL_SECTION memstatus_section;
 static CRITICAL_SECTION_DEBUG critsect_debug =
@@ -310,7 +314,7 @@ LPVOID WINAPI DECLSPEC_HOTPATCH MapViewOfFileEx( HANDLE handle, DWORD access, DW
         protect = exec ? PAGE_EXECUTE_READ : PAGE_READONLY;
     else protect = PAGE_NOACCESS;
 
-    if ((status = NtMapViewOfSection( handle, GetCurrentProcess(), &addr, 0, 0, &offset,
+    if ((status = WINE_NT_MAP_VIEW( handle, GetCurrentProcess(), &addr, 0, 0, &offset,
                                       &count, ViewShare, 0, protect )) < 0)
     {
         SetLastError( RtlNtStatusToDosError(status) );
@@ -1009,7 +1013,7 @@ void init_global_data(void)
  */
 void *WINAPI KernelBaseGetGlobalData(void)
 {
-    WARN_(globalmem)( "semi-stub!\n" );
+    TRACE_(globalmem)( "returning process global data %p\n", &global_data );
     return &global_data;
 }
 

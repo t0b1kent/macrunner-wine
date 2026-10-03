@@ -55,6 +55,24 @@ ALL_SYSCALLS
  */
 __ASM_GLOBAL_FUNC( __chkstk, "ret" );
 
+/**************************************************************************
+ *		___chkstk_ms
+ *
+ * Clang can emit the MinGW stack-probe helper for large local frames even
+ * in ntdll itself. Match Wine's no-op __chkstk behavior so PE targets link
+ * when the bundled compiler-rt archive does not provide this alias.
+ */
+__ASM_GLOBAL_FUNC( ___chkstk_ms, "ret" );
+
+/**************************************************************************
+ *		__chkstk_arm64ec (NTDLL.@)
+ *
+ * Some x64 Wine PE DLLs built in the ARM64EC-aware tree import this helper
+ * even when running as regular x86_64. Keep it in the x64 ntdll export
+ * table and route it to the same stack probe implementation as __chkstk.
+ */
+__ASM_GLOBAL_FUNC( __chkstk_arm64ec, "ret" );
+
 
 #ifdef __arm64ec_x64__
 

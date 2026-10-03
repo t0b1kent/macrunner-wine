@@ -5901,6 +5901,28 @@ BOOL WINAPI NtGdiExtTextOutW( HDC hdc, INT x, INT y, UINT flags, const RECT *lpr
     if (!dc) return FALSE;
     if (count > INT_MAX) return FALSE;
 
+    /* MacRunner 2026-08-14, лейн ЛЕСТНИЦА, итерация 863: ЧТО НАПИСАНО В ДИАЛОГЕ.
+     *
+     * Ступень 1 доходит до окна сообщения Storm (`SDlgDialog 280x144` + OK/Cancel +
+     * `SDlgStatic 240x80`, итерация 862) и штатно выходит со статусом 0. Причину гадать
+     * нельзя — надо прочитать текст. Имя окна при создании пустое, значит текст ставится
+     * позже; зато любой видимый текст проходит здесь. Печатаем первые 64 строки, до 96
+     * знаков, только печатные ASCII — этого хватит на сообщение и не зальёт журнал. */
+    {
+        static int text_seen;
+        if (text_seen < 64 && str && count)
+        {
+            char buf[100];
+            UINT i, n = count > 96 ? 96 : count;
+            for (i = 0; i < n; i++)
+                buf[i] = (str[i] >= 0x20 && str[i] < 0x7f) ? (char)str[i] : '?';
+            buf[n] = 0;
+            text_seen++;
+            fprintf( stderr, "macrunner-текст: n=%d знаков=%u x=%d y=%d [%s]\n",
+                     text_seen, count, x, y, buf );
+        }
+    }
+
     align = dc->attr->text_align;
     breakRem = dc->breakRem;
     layout = dc->attr->layout;

@@ -19,6 +19,7 @@
  */
 
 #include <stdarg.h>
+#include <string.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -34,6 +35,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(wow);
 
 
 static FILE_OBJECTID_BUFFER windir_id, sysdir_id;
+static BOOL wow6432bprefix_mode;
 
 static inline NTSTATUS get_file_id( HANDLE handle, FILE_OBJECTID_BUFFER *id )
 {
@@ -62,8 +64,12 @@ void init_file_redirects(void)
     OBJECT_ATTRIBUTES attr;
     UNICODE_STRING windows = RTL_CONSTANT_STRING( L"\\??\\C:\\windows" );
     UNICODE_STRING system32 = RTL_CONSTANT_STRING( L"\\??\\C:\\windows\\system32" );
+    UNICODE_STRING val_str, prefix_mode = RTL_CONSTANT_STRING( L"WINEWOW6432BPREFIXMODE" );
     IO_STATUS_BLOCK io;
     HANDLE handle;
+
+    val_str.MaximumLength = 0;
+    wow6432bprefix_mode = (RtlQueryEnvironmentVariable_U( NULL, &prefix_mode, &val_str ) != STATUS_VARIABLE_NOT_FOUND);
 
     InitializeObjectAttributes( &attr, &windows, OBJ_CASE_INSENSITIVE, 0, NULL );
     if (!NtOpenFile( &handle, SYNCHRONIZE | FILE_LIST_DIRECTORY, &attr, &io,
@@ -81,6 +87,30 @@ void init_file_redirects(void)
         get_file_id( handle, &sysdir_id );
         NtClose( handle );
     }
+}
+
+static BOOL wow64_buffer_readable( const void *ptr, SIZE_T size )
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    ULONG_PTR start = (ULONG_PTR)ptr, end = start + size;
+    ULONG_PTR region_end;
+    DWORD protect;
+
+    if (!ptr) return FALSE;
+    if (!size) return TRUE;
+    if (end < start) return FALSE;
+    if (NtQueryVirtualMemory( NtCurrentProcess(), (void *)ptr, MemoryBasicInformation,
+                              &mbi, sizeof(mbi), NULL ) != STATUS_SUCCESS)
+        return FALSE;
+    if (mbi.State != MEM_COMMIT) return FALSE;
+    if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) return FALSE;
+    protect = mbi.Protect & 0xff;
+    if (protect != PAGE_READONLY && protect != PAGE_READWRITE &&
+        protect != PAGE_WRITECOPY && protect != PAGE_EXECUTE_READ &&
+        protect != PAGE_EXECUTE_READWRITE && protect != PAGE_EXECUTE_WRITECOPY)
+        return FALSE;
+    region_end = (ULONG_PTR)mbi.BaseAddress + mbi.RegionSize;
+    return end <= region_end;
 }
 
 
@@ -135,21 +165,19 @@ BOOL get_file_redirect( OBJECT_ATTRIBUTES *attr )
         L"system32\\drivers\\etc", L"system32\\logfiles", L"system32\\spool"
     };
     static const WCHAR windirW[] = L"\\??\\C:\\windows\\";
-    const WCHAR *name = attr->ObjectName->Buffer;
-    unsigned int i, prefix_len = 0, len = attr->ObjectName->Length / sizeof(WCHAR);
+    const WCHAR *name;
+    unsigned int i, prefix_len = 0, len;
     const WCHAR *syswow64dir;
     UNICODE_STRING redir;
 
+    if (!attr || !attr->ObjectName || !attr->ObjectName->Buffer) return FALSE;
+    name = attr->ObjectName->Buffer;
+    len = attr->ObjectName->Length / sizeof(WCHAR);
     if (!len) return FALSE;
+    if (!wow64_buffer_readable( name, attr->ObjectName->Length )) return FALSE;
 
     /* CW HACK 20810: disable FS redirection when 32-bit-only bottle is being used */
-    {
-        UNICODE_STRING val_str, name_str = RTL_CONSTANT_STRING( L"WINEWOW6432BPREFIXMODE" );
-
-        val_str.MaximumLength = 0;
-        if (RtlQueryEnvironmentVariable_U( NULL, &name_str, &val_str ) != STATUS_VARIABLE_NOT_FOUND)
-            return FALSE;
-    }
+    if (wow6432bprefix_mode) return FALSE;
 
     if (!attr->RootDirectory)
     {
@@ -277,12 +305,41 @@ NTSTATUS WINAPI wow64_NtCreateFile( UINT *args )
     HANDLE handle = 0;
     NTSTATUS status;
 
+    OBJECT_ATTRIBUTES *attr64;
+
     *handle_ptr = 0;
-    status = NtCreateFile( &handle, access, objattr_32to64_redirect( &attr, attr32 ),
+    attr64 = objattr_32to64_redirect( &attr, attr32 );
+    status = NtCreateFile( &handle, access, attr64,
                            iosb_32to64( &io, io32 ), alloc_size, attributes,
                            sharing, disposition, options, ea_buffer, ea_length );
     put_handle( handle_ptr, handle );
     put_iosb( io32, &io );
+    /* Итерация 292: последняя непроверенная точка проверки компакт-диска. Тип привода (5),
+     * сведения о томе (CDFS) и наличие D:\diabdat.mpq уже подтверждены прогонами, а диалог
+     * остаётся — значит смотреть надо на ОТКРЫТИЕ файла, которого мы не печатали ни разу. */
+    {
+        static LONG cf_n;
+        LONG k = InterlockedIncrement( &cf_n );
+        if (k <= 4000 && attr64 && attr64->ObjectName && attr64->ObjectName->Buffer)
+        {
+            char buf[300];
+            unsigned int i, n = attr64->ObjectName->Length / sizeof(WCHAR);
+            if (n > sizeof(buf) - 1) n = sizeof(buf) - 1;
+            for (i = 0; i < n; i++)
+            {
+                WCHAR c = attr64->ObjectName->Buffer[i];
+                buf[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '?';
+            }
+            buf[n] = 0;
+            /* Итерация 293: потолок поднят с 60 до 4000, но окно съедала загрузка DLL из
+             * системного каталога — поэтому системные пути отсеиваются ЗДЕСЬ, а не грепом
+             * после. Иначе «файла не открывали» означало бы только «окно кончилось». */
+            if (!strstr( buf, "C:\\windows" ) && !strstr( buf, "MountPointManager" ))
+                MESSAGE( "macrunner-createfile: n=%d status=%08x access=%08x share=%08x disp=%u name=%s\n",
+                         (int)k, (unsigned)status, (unsigned)access, (unsigned)sharing,
+                         (unsigned)disposition, buf );
+        }
+    }
     return status;
 }
 
@@ -341,10 +398,10 @@ NTSTATUS WINAPI wow64_NtCreateNamedPipeFile( UINT *args )
     NTSTATUS status;
 
     *handle_ptr = 0;
-    status = NtCreateNamedPipeFile( &handle, access, objattr_32to64( &attr, attr32 ),
-                                    iosb_32to64( &io, io32 ), sharing, dispo, options,
-                                    pipe_type, read_mode, completion_mode, max_inst,
-                                    inbound_quota, outbound_quota, timeout );
+    status = WINE_NT_CREATE_NAMED_PIPE_FILE( &handle, access, objattr_32to64( &attr, attr32 ),
+                                             iosb_32to64( &io, io32 ), sharing, dispo, options,
+                                             pipe_type, read_mode, completion_mode, max_inst,
+                                             inbound_quota, outbound_quota, timeout );
     put_handle( handle_ptr, handle );
     put_iosb( io32, &io );
     return status;
@@ -538,11 +595,37 @@ NTSTATUS WINAPI wow64_NtOpenFile( UINT *args )
     HANDLE handle = 0;
     NTSTATUS status;
 
+    OBJECT_ATTRIBUTES *attr64;
+
     *handle_ptr = 0;
-    status = NtOpenFile( &handle, access, objattr_32to64_redirect( &attr, attr32 ),
+    attr64 = objattr_32to64_redirect( &attr, attr32 );
+    status = NtOpenFile( &handle, access, attr64,
                          iosb_32to64( &io, io32 ), sharing, options );
     put_handle( handle_ptr, handle );
     put_iosb( io32, &io );
+    /* Итерация 294: последний непокрытый путь открытия. NtCreateFile уже под зондом и показал,
+     * что игра трогает вне системного каталога ровно один файл — свою пробу записи. Пока этот
+     * путь не закрыт, «архив не открывается» доказано лишь наполовину. Системные пути
+     * отсеиваются ЗДЕСЬ же, чтобы окно счётчика не съедала загрузка DLL. */
+    {
+        static LONG of_n;
+        LONG k = InterlockedIncrement( &of_n );
+        if (k <= 4000 && attr64 && attr64->ObjectName && attr64->ObjectName->Buffer)
+        {
+            char buf[300];
+            unsigned int i, n = attr64->ObjectName->Length / sizeof(WCHAR);
+            if (n > sizeof(buf) - 1) n = sizeof(buf) - 1;
+            for (i = 0; i < n; i++)
+            {
+                WCHAR c = attr64->ObjectName->Buffer[i];
+                buf[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '?';
+            }
+            buf[n] = 0;
+            if (!strstr( buf, "C:\\windows" ) && !strstr( buf, "MountPointManager" ))
+                MESSAGE( "macrunner-openfile2: n=%d status=%08x access=%08x name=%s\n",
+                         (int)k, (unsigned)status, (unsigned)access, buf );
+        }
+    }
     return status;
 }
 
@@ -552,12 +635,87 @@ NTSTATUS WINAPI wow64_NtOpenFile( UINT *args )
  */
 NTSTATUS WINAPI wow64_NtQueryAttributesFile( UINT *args )
 {
-    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
-    FILE_BASIC_INFORMATION *info = get_ptr( &args );
-
+    BOOL trace = (native_machine == IMAGE_FILE_MACHINE_ARM64 && current_machine == IMAGE_FILE_MACHINE_I386);
+    UINT *raw_args = args;
+    OBJECT_ATTRIBUTES32 *attr32;
+    FILE_BASIC_INFORMATION *info;
+    UNICODE_STRING32 *name32 = NULL;
+    BOOL attr32_ok = FALSE, name32_ok = FALSE;
     struct object_attr64 attr;
+    OBJECT_ATTRIBUTES *attr64;
 
-    return NtQueryAttributesFile( objattr_32to64_redirect( &attr, attr32 ), info );
+    if (trace)
+        MESSAGE( "macrunner-wow64: NtQueryAttributesFile stage=entry args=%p guest32_base=%p tls_guest32_base=%p\n",
+                 raw_args, (void *)macrunner_wow64_guest32_base,
+                 NtCurrentTeb()->TlsSlots[MACRUNNER_WOW64_TLS_GUEST32_BASE] );
+
+    attr32 = get_ptr( &args );
+    attr32_ok = wow64_buffer_readable( attr32, sizeof(*attr32) );
+    if (trace)
+        MESSAGE( "macrunner-wow64: NtQueryAttributesFile stage=after-attr raw_args=%p next_args=%p attr32=%p attr32_ok=%u "
+                 "len=%08x root=%08x obj=%08x flags=%08x sd=%08x sqos=%08x\n",
+                 raw_args, args, attr32, attr32_ok,
+                 attr32_ok ? (unsigned int)attr32->Length : 0,
+                 attr32_ok ? (unsigned int)attr32->RootDirectory : 0,
+                 attr32_ok ? (unsigned int)attr32->ObjectName : 0,
+                 attr32_ok ? (unsigned int)attr32->Attributes : 0,
+                 attr32_ok ? (unsigned int)attr32->SecurityDescriptor : 0,
+                 attr32_ok ? (unsigned int)attr32->SecurityQualityOfService : 0 );
+
+    info = get_ptr( &args );
+    if (trace)
+        MESSAGE( "macrunner-wow64: NtQueryAttributesFile stage=after-info next_args=%p info=%p info_ok=%u\n",
+                 args, info, wow64_buffer_readable( info, sizeof(*info) ) );
+
+    if (attr32_ok && attr32->ObjectName)
+    {
+        name32 = guest32_host_ptr( attr32->ObjectName );
+        name32_ok = wow64_buffer_readable( name32, sizeof(*name32) );
+    }
+    if (trace)
+        MESSAGE( "macrunner-wow64: NtQueryAttributesFile stage=after-name name32=%p name32_ok=%u nlen=%04x nmax=%04x nbuf=%08x\n",
+                 name32, name32_ok, name32_ok ? name32->Length : 0,
+                 name32_ok ? name32->MaximumLength : 0,
+                 name32_ok ? (unsigned int)name32->Buffer : 0 );
+
+    attr64 = objattr_32to64_redirect( &attr, attr32 );
+
+    if (trace)
+        MESSAGE( "macrunner-wow64: NtQueryAttributesFile attr32=%p len=%08x root=%08x obj=%08x flags=%08x sd=%08x sqos=%08x "
+                 "name32=%p nlen=%04x nmax=%04x nbuf=%08x attr64=%p name64=%p buf64=%p info=%p\n",
+                 attr32, attr32_ok ? (unsigned int)attr32->Length : 0,
+                 attr32_ok ? (unsigned int)attr32->RootDirectory : 0,
+                 attr32_ok ? (unsigned int)attr32->ObjectName : 0,
+                 attr32_ok ? (unsigned int)attr32->Attributes : 0,
+                 attr32_ok ? (unsigned int)attr32->SecurityDescriptor : 0,
+                 attr32_ok ? (unsigned int)attr32->SecurityQualityOfService : 0,
+                 name32, name32_ok ? name32->Length : 0, name32_ok ? name32->MaximumLength : 0,
+                 name32_ok ? (unsigned int)name32->Buffer : 0, attr64, attr64 ? attr64->ObjectName : NULL,
+                 attr64 && attr64->ObjectName ? attr64->ObjectName->Buffer : NULL, info );
+
+    /* Итерация 292, лейн ЛЕСТНИЦА: ступень 1 Diablo стоит на диалоге «Please insert the Diablo
+     * CD». Диск D уже отдаётся как DRIVE_CDROM (тип=5) и опрос тома успешен, обращений к MPQ
+     * ноль — значит игра проверяет НАЛИЧИЕ ФАЙЛА атрибутами, а имени мы не печатали ни разу.
+     * Печать безусловная (гейт trace выше молчит по умолчанию) и ограничена по числу. */
+    {
+        static LONG qa_n;
+        LONG k = InterlockedIncrement( &qa_n );
+        NTSTATUS st = NtQueryAttributesFile( attr64, info );
+        if (k <= 60 && attr64 && attr64->ObjectName && attr64->ObjectName->Buffer)
+        {
+            char buf[300];
+            unsigned int i, n = attr64->ObjectName->Length / sizeof(WCHAR);
+            if (n > sizeof(buf) - 1) n = sizeof(buf) - 1;
+            for (i = 0; i < n; i++)
+            {
+                WCHAR c = attr64->ObjectName->Buffer[i];
+                buf[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '?';
+            }
+            buf[n] = 0;
+            MESSAGE( "macrunner-queryattr: n=%d статус=%08x имя=%s\n", (int)k, (unsigned)st, buf );
+        }
+        return st;
+    }
 }
 
 
@@ -629,6 +787,7 @@ NTSTATUS WINAPI wow64_NtQueryFullAttributesFile( UINT *args )
 }
 
 
+
 /**********************************************************************
  *           wow64_NtQueryInformationFile
  */
@@ -645,6 +804,7 @@ NTSTATUS WINAPI wow64_NtQueryInformationFile( UINT *args )
 
     status = NtQueryInformationFile( handle, iosb_32to64( &io, io32 ), info, len, class );
     put_iosb( io32, &io );
+
     return status;
 }
 
@@ -691,6 +851,65 @@ NTSTATUS WINAPI wow64_NtReadFile( UINT *args )
     status = NtReadFile( handle, event, apc_32to64( apc ), apc_param_32to64( apc, apc_param ),
                          iosb_32to64( &io, io32 ), buffer, len, offset, key );
     if (pBTCpuNotifyReadFile) pBTCpuNotifyReadFile( handle, buffer, len, TRUE, status );
+
+
+    /* ★★★★★ ИТЕРАЦИЯ 66 — ПИШЕТ ЛИ ЭТО ЧТЕНИЕ ВНУТРЬ ХОЗЯЙСКОГО TEB.
+     *
+     * Замер 65: посыльная сверка на каждом из 72 682 вызовов гостя дала РОВНО ОДНУ смену
+     * `WowTebOffset` (0x2000 -> 0xAA64), и произошла она в череде вызовов номер 0x6 =
+     * NtReadFile. Версия: `IO_STATUS_BLOCK32` уехал на `teb+0x1808`, тогда `Status`
+     * ложится в `LockCount` (0x1808), а `Information` — в `WowTebOffset` (0x180C),
+     * и 0xAA64 = 43 620 это просто число прочитанных байт.
+     *
+     * Гостевое окно накрывает хозяйский TEB: guest32_host_ptr(0x001F1808) = 0x3001F1808,
+     * а TEB64 лежит в 0x3001F0000..0x3001F2000. То есть достаточно, чтобы гость подал
+     * такой указатель, — перевод честно отдаст адрес внутри TEB.
+     *
+     * Печатаем ДО `put_iosb`, то есть до самой записи, и только при попадании в TEB —
+     * иначе журнал вырастет на десятки тысяч строк. Счётчик чтений печатаем тут же,
+     * чтобы было видно, какое по счёту чтение оказалось опасным. */
+    {
+        static unsigned mr_rd_seq, mr_rd_hits;
+        TEB *mr_teb = NtCurrentTeb();
+        ULONG_PTR mr_t = (ULONG_PTR)mr_teb, mr_p = (ULONG_PTR)io32;
+
+        /* 66: версия «io32 уехал в TEB» ОТВЕРГНУТА замером — 0 попаданий за прогон.
+         * Осталcя второй переведённый указатель того же вызова: САМ БУФЕР. Он тоже
+         * `get_ptr`, и ядро пишет в него `Information` байт. Проверяем перекрытие
+         * [buffer, buffer+len) с [teb, teb+0x2000) — и отдельно, накрывает ли оно
+         * слово 0x180C. Печать ограничена 40 попаданиями. */
+        ULONG_PTR mr_b = (ULONG_PTR)buffer;
+        int mr_io_hit, mr_buf_hit;
+
+        mr_rd_seq++;
+        /* ★★★★★ ИТЕРАЦИЯ 104 — ЧТО ЧИТАЕТ УСТАНОВЩИК В СВОЁМ ЦИКЛЕ.
+         *
+         * Замер 103: 68 664 `NtReadFile` против 102 `NtWriteFile` — 673 к 1. Распаковка
+         * при этом ПРОШЛА (файлы NSIS в `AppData\Local\Temp\$inst`), значит цикл идёт
+         * ПОСЛЕ неё. Чтобы понять, цикл это или мелкие чтения, нужны дескриптор,
+         * смещение и длина. Печатаем первые 40 и каждое тысячное. */
+        if (mr_rd_seq <= 40 || mr_rd_seq % 1000 == 0)
+        {
+            MESSAGE( "macrunner-readfile: n=%u дескр=%p смещ=%s%llx len=%lu прочитано=%lu "
+                     "статус=%08lx\n", mr_rd_seq, handle,
+                     offset ? "" : "нет:", offset ? (unsigned long long)offset->QuadPart : 0ull,
+                     (unsigned long)len, (unsigned long)io.Information,
+                     (unsigned long)status );
+        }
+        mr_io_hit = (mr_teb && mr_p >= mr_t && mr_p < mr_t + 0x2000);
+        mr_buf_hit = (mr_teb && buffer && mr_b < mr_t + 0x2000 && mr_b + len > mr_t);
+        if ((mr_io_hit || mr_buf_hit) && mr_rd_hits < 40)
+        {
+            mr_rd_hits++;
+            MESSAGE( "macrunner-wow64-readfile-В-TEB: чтение=%u попадание=%u где=%s io32=%p "
+                     "буфер=%p len=%lu teb=%p статус=%08lx инфо=%08lx накрывает_wowoff=%d\n",
+                     mr_rd_seq, mr_rd_hits, mr_io_hit ? (mr_buf_hit ? "оба" : "iosb") : "буфер",
+                     io32, buffer, (unsigned long)len, mr_teb,
+                     (unsigned long)io.Status, (unsigned long)io.Information,
+                     (int)((mr_io_hit && mr_p - mr_t <= 0x180c && mr_p - mr_t + 8 > 0x180c) ||
+                           (mr_buf_hit && mr_b <= mr_t + 0x180c && mr_b + len > mr_t + 0x180c)) );
+        }
+    }
     put_iosb( io32, &io );
     return status;
 }
@@ -811,6 +1030,7 @@ NTSTATUS WINAPI wow64_NtSetInformationFile( UINT *args )
 
     IO_STATUS_BLOCK io;
     NTSTATUS status;
+
 
     switch (class)
     {

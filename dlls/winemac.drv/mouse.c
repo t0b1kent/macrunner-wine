@@ -26,11 +26,25 @@
 
 #include "config.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #define OEMRESOURCE
 #include "macdrv.h"
 #include "wine/server.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(cursor);
+
+static BOOL trace_ui_input_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
 
 
 static pthread_mutex_t cursor_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -138,6 +152,13 @@ static void send_mouse_input(HWND hwnd, macdrv_window cocoa_window, UINT flags, 
         cocoa_window != macdrv_thread_data()->capture_window)
     {
         /* update the wine server Z-order */
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=send_mouse_input_zorder_enter hwnd=%p top=%p x=%d y=%d\n",
+                    hwnd, top_level_hwnd, x, y);
+            fflush(stderr);
+        }
         SERVER_START_REQ(update_window_zorder)
         {
             req->window      = wine_server_user_handle(top_level_hwnd);
@@ -148,6 +169,13 @@ static void send_mouse_input(HWND hwnd, macdrv_window cocoa_window, UINT flags, 
             wine_server_call(req);
         }
         SERVER_END_REQ;
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=send_mouse_input_zorder_exit hwnd=%p top=%p\n",
+                    hwnd, top_level_hwnd);
+            fflush(stderr);
+        }
     }
 
     input.type              = INPUT_MOUSE;
@@ -158,7 +186,29 @@ static void send_mouse_input(HWND hwnd, macdrv_window cocoa_window, UINT flags, 
     input.mi.time           = time;
     input.mi.dwExtraInfo    = 0;
 
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=send_mouse_input hwnd=%p top=%p flags=0x%x x=%d y=%d data=%u drag=%d time=%lu\n",
+                hwnd, top_level_hwnd, flags, x, y, mouse_data, drag, time);
+        fflush(stderr);
+    }
+
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=send_mouse_input_hardware_enter hwnd=%p top=%p\n",
+                hwnd, top_level_hwnd);
+        fflush(stderr);
+    }
     NtUserSendHardwareInput(top_level_hwnd, 0, &input, 0);
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=send_mouse_input_hardware_exit hwnd=%p top=%p\n",
+                hwnd, top_level_hwnd);
+        fflush(stderr);
+    }
 }
 
 
@@ -751,6 +801,31 @@ void macdrv_SetCursor(HWND hwnd, HCURSOR cursor)
 
     TRACE("%p %p\n", hwnd, cursor);
 
+    /* MacRunner 04.08 — ПРИБОР НА КУРСОР.
+     *
+     * Появление курсора игры на экране — наш самый заметный признак того, что
+     * отрисовка дошла до экрана, и до сих пор мы смотрели на него ГЛАЗАМИ:
+     * в журналах не было ни строки. Из-за этого прогоны нельзя было сравнивать
+     * по нему, а `screencapture` курсор не берёт вовсе.
+     *
+     * Печатается один раз на КАЖДЫЙ новый хендл курсора (не на каждый вызов —
+     * SetCursor зовётся на каждое движение мыши). Ноль строк = игра курсор
+     * не ставила; строка с cursor=NULL = курсор скрыт.
+     *
+     * Без гейта: одна строка на смену курсора, шума нет, а «прибор был выключен»
+     * уже стоил нам дня. */
+    {
+        static HCURSOR last_reported;
+        static LONG reported_count;
+        if (cursor != last_reported)
+        {
+            last_reported = cursor;
+            fprintf(stderr, "macrunner-ui-cursor: stage=set_cursor hwnd=%p cursor=%p n=%ld\n",
+                    hwnd, cursor, (long)++reported_count);
+            fflush(stderr);
+        }
+    }
+
     if (cursor)
     {
         ICONINFOEXW info;
@@ -863,6 +938,15 @@ void macdrv_mouse_button(HWND hwnd, const macdrv_event *event)
           event->mouse_button.x, event->mouse_button.y,
           event->mouse_button.time_ms, (NtGetTickCount() - event->mouse_button.time_ms));
 
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=macdrv_mouse_button hwnd=%p window=%p button=%d pressed=%d x=%d y=%d\n",
+                hwnd, event->window, event->mouse_button.button, event->mouse_button.pressed,
+                event->mouse_button.x, event->mouse_button.y);
+        fflush(stderr);
+    }
+
     if (event->mouse_button.pressed)
     {
         switch (event->mouse_button.button)
@@ -893,6 +977,13 @@ void macdrv_mouse_button(HWND hwnd, const macdrv_event *event)
     send_mouse_input(hwnd, event->window, flags | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE,
                      event->mouse_button.x, event->mouse_button.y,
                      data, FALSE, event->mouse_button.time_ms);
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=macdrv_mouse_button_exit hwnd=%p window=%p button=%d pressed=%d\n",
+                hwnd, event->window, event->mouse_button.button, event->mouse_button.pressed);
+        fflush(stderr);
+    }
 }
 
 

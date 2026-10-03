@@ -2154,19 +2154,22 @@ DWORD RPC_Init(void)
         return GetLastError();
     }
 
-    if ((err = RpcServerUseProtseqEpW(transport, 0, endpoint, NULL)) != ERROR_SUCCESS)
+    err = RpcServerUseProtseqEpW(transport, 0, endpoint, NULL);
+    if (err != ERROR_SUCCESS)
     {
         WINE_ERR("RpcServerUseProtseq failed with error %lu\n", err);
         return err;
     }
 
-    if ((err = RpcServerRegisterIf(svcctl_v2_0_s_ifspec, 0, 0)) != ERROR_SUCCESS)
+    err = RpcServerRegisterIf(svcctl_v2_0_s_ifspec, 0, 0);
+    if (err != ERROR_SUCCESS)
     {
         WINE_ERR("RpcServerRegisterIf failed with error %lu\n", err);
         return err;
     }
 
-    if ((err = RpcServerListen(1, RPC_C_LISTEN_MAX_CALLS_DEFAULT, TRUE)) != ERROR_SUCCESS)
+    err = RpcServerListen(1, RPC_C_LISTEN_MAX_CALLS_DEFAULT, TRUE);
+    if (err != ERROR_SUCCESS)
     {
         WINE_ERR("RpcServerListen failed with error %lu\n", err);
         return err;

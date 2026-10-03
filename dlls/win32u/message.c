@@ -25,6 +25,8 @@
 #endif
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "winternl.h"
@@ -42,11 +44,150 @@ WINE_DEFAULT_DEBUG_CHANNEL(msg);
 WINE_DECLARE_DEBUG_CHANNEL(key);
 WINE_DECLARE_DEBUG_CHANNEL(relay);
 
+static BOOL trace_ui_input_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) enabled = getenv("MACRUNNER_TRACE_UI_INPUT") != NULL;
+    return enabled;
+}
+
+static ULONG_PTR trace_ui_input_thread_id(void)
+{
+    return (ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread;
+}
+
+/* MacRunner 2026-07-29 (HK master lane iter 9) — the OTHER half of the key-drain probe.
+ *
+ * winemac.drv's ProcessEvents_drain counter can only ever tick when process_driver_events()
+ * below actually calls pProcessEvents, and it does that ONLY when check_internal_bits(QS_DRIVER)
+ * is set.  So a low ProcessEvents_drain count does NOT mean "the guest barely pumps" -- it means
+ * QS_DRIVER was raised that few times.  I read it the other way first; this probe exists so the
+ * next reader cannot.  With the driver-side probe alone, "the guest stopped pumping" and
+ * "the guest pumps constantly but is never told an event is waiting" are indistinguishable, and
+ * they have completely different fixes.
+ *
+ * Measured context: keys reach the queue (postKey_posted 18/15) and are never copied out
+ * (ProcessEvents_key_dequeued 0/0, macdrv_key_event 0/0).
+ *
+ * Gate: MACRUNNER_TRACE_QS_DRIVER, falling back to MACRUNNER_TRACE_WINEMAC_KEYS so a run already
+ * armed for keyboard evidence gets it without a new env var.  Deliberately NOT on
+ * MACRUNNER_TRACE_UI_INPUT, which also lights HyperBridge's per-guest-call tracing and buries the
+ * run.  Bounded to one line per thread per 10 s plus decade-spaced call counts. */
+static BOOL macrunner_qsdriver_probe_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *value = getenv("MACRUNNER_TRACE_QS_DRIVER");
+
+        if (value) enabled = value[0] && value[0] != '0';
+        else enabled = getenv("MACRUNNER_TRACE_WINEMAC_KEYS") != NULL;
+    }
+    return enabled;
+}
+
+#define MACRUNNER_QSDRIVER_BUCKET_MS 10000
+
+static void macrunner_note_driver_events( UINT events_mask, BOOL driver_signaled, BOOL drained )
+{
+    static struct { ULONG_PTR tid; ULONG64 calls; ULONG bucket; ULONG64 signaled; } seen[64];
+    static LONG used;
+    ULONG_PTR tid = trace_ui_input_thread_id();
+    ULONG bucket = NtGetTickCount() / MACRUNNER_QSDRIVER_BUCKET_MS;
+    BOOL first = FALSE, new_bucket = FALSE;
+    ULONG64 calls, signaled;
+    LONG i, count;
+
+    if (!macrunner_qsdriver_probe_enabled()) return;
+
+    /* Racy across threads by design: each entry is only ever written by its own thread, and a
+     * torn read of another thread's slot can at worst duplicate a log line. */
+    count = used;
+    for (i = 0; i < count; i++) if (seen[i].tid == tid) break;
+    if (i == count)
+    {
+        if (count >= 64) return;
+        used = count + 1;
+        seen[i].tid = tid;
+        seen[i].calls = 0;
+        seen[i].signaled = 0;
+        seen[i].bucket = bucket - 1;
+        first = TRUE;
+    }
+    calls = ++seen[i].calls;
+    if (driver_signaled) seen[i].signaled++;
+    signaled = seen[i].signaled;
+    if (seen[i].bucket != bucket) { seen[i].bucket = bucket; new_bucket = TRUE; }
+
+    if (first || new_bucket || calls == 10 || calls == 100 || calls == 1000 ||
+        calls == 10000 || calls == 100000 || calls == 1000000)
+    {
+        fprintf(stderr,
+                /* pid is NOT optional: every process in a run writes to ONE log, so a tid alone
+                 * cannot be attributed, and thread ids collide across processes.  In this run the
+                 * only run_cocoa_app_entry and the only ProcessEvents_drain belonged to pid 65959,
+                 * a helper that had already exited, while HK was pid 52275 -- unattributable
+                 * without this. Note tid here is HEX while winemac.drv's window_tid is DECIMAL.
+                 * Labelled wine_pid, NOT pid: this is the WINE pid (TEB ClientId), whereas
+                 * winemac.drv's markers print the UNIX getpid().  `stage=driver_load_display_
+                 * driver_enter` prints `unix_pid=... wine_pid=... tid=...` together, so the two
+                 * namespaces stay correlatable -- calling both of them "pid" would not. */
+                "macrunner-ui-input: stage=process_driver_events wine_pid=%04x tid=%lx calls=%llu qs_driver=%d "
+                "signaled_total=%llu events_mask=0x%x qs_key=%d drained=%d\n",
+                /* check_internal_bits() returns the RAW masked bit (internal_bits & QS_DRIVER =
+                 * 0x80000000), not 0/1, and BOOL is int -- so this printed -2147483648 and a
+                 * grep for `qs_driver=1` matched nothing and read as a clean zero. Normalise. */
+                (unsigned int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess,
+                (unsigned long)tid, (unsigned long long)calls, driver_signaled != 0,
+                (unsigned long long)signaled, events_mask, (events_mask & QS_KEY) != 0, drained);
+        fflush(stderr);
+    }
+}
+
+static const char *trace_ui_input_msg_name(UINT msg)
+{
+    switch (msg)
+    {
+    case WM_MOUSEMOVE: return "WM_MOUSEMOVE";
+    case WM_LBUTTONDOWN: return "WM_LBUTTONDOWN";
+    case WM_LBUTTONUP: return "WM_LBUTTONUP";
+    case WM_NCLBUTTONDOWN: return "WM_NCLBUTTONDOWN";
+    case WM_NCLBUTTONUP: return "WM_NCLBUTTONUP";
+    case WM_DESTROY: return "WM_DESTROY";
+    case WM_CLOSE: return "WM_CLOSE";
+    case WM_QUIT: return "WM_QUIT";
+    case WM_ACTIVATE: return "WM_ACTIVATE";
+    case WM_ACTIVATEAPP: return "WM_ACTIVATEAPP";
+    case WM_SETFOCUS: return "WM_SETFOCUS";
+    case WM_KILLFOCUS: return "WM_KILLFOCUS";
+    case WM_CANCELMODE: return "WM_CANCELMODE";
+    case WM_NCACTIVATE: return "WM_NCACTIVATE";
+    case WM_NCDESTROY: return "WM_NCDESTROY";
+    case WM_INITMENU: return "WM_INITMENU";
+    case WM_INITMENUPOPUP: return "WM_INITMENUPOPUP";
+    default: return "other";
+    }
+}
+
+static BOOL trace_ui_input_interesting_msg(UINT msg)
+{
+    return msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ||
+           msg == WM_NCLBUTTONDOWN || msg == WM_NCLBUTTONUP ||
+           msg == WM_DESTROY || msg == WM_CLOSE || msg == WM_QUIT ||
+           msg == WM_ACTIVATE || msg == WM_ACTIVATEAPP ||
+           msg == WM_SETFOCUS || msg == WM_KILLFOCUS ||
+           msg == WM_CANCELMODE || msg == WM_NCACTIVATE ||
+           msg == WM_NCDESTROY ||
+           msg == WM_INITMENU || msg == WM_INITMENUPOPUP;
+}
+
 #define QS_DRIVER       0x80000000
 #define QS_HARDWARE     0x40000000
 #define QS_INTERNAL     (QS_DRIVER | QS_HARDWARE)
 
-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)WINE_USER_SHARED_DATA_ADDRESS;
 
 static LONG atomic_load_long( const volatile LONG *ptr )
 {
@@ -2190,6 +2331,43 @@ static LRESULT handle_internal_message( HWND hwnd, UINT msg, WPARAM wparam, LPAR
         return set_window_pos( (WINDOWPOS *)lparam, 0, 0 );
     case WM_WINE_SHOWWINDOW:
         if (is_desktop_window( hwnd )) return 0;
+        /* ★★★★★★ MacRunner 04.09.2026 — ВИТОК, СЪЕДАЮЩИЙ СТЕК.
+         *
+         * Два отчёта macOS о падении совпадают ПОБАЙТНО, из разных игр и разных
+         * дней: Setup.tmp-2026-09-03-095506 (GTA Vice City) и
+         * Diablo.exe-2026-09-04-203829 (пойман серией 04.09).
+         *   pc = get_shared_queue+4, команда `stp x22,x21,[sp,#0xb0]`,
+         *   адрес отказа = sp+0xb0, а сам sp — на 0x110 НИЖЕ нижней границы
+         *   16-МБ области стека, то есть в сторожевой странице PROT_NONE;
+         *   в стеке ШЕСТЬ полных витков
+         *   NtUserShowWindow -> send_message -> ... -> handle_internal_message.
+         *
+         * ЭТО ПЕРЕПОЛНЕНИЕ СТЕКА РЕКУРСИЕЙ, А НЕ НЕГОДНЫЙ УКАЗАТЕЛЬ. Прежний вывод
+         * («мусорный указатель просто не возник») опровергнут: адрес отказа не
+         * вычисляется из данных, он равен sp+0xb0 и попадает в собственный стек.
+         *
+         * ПОЧЕМУ ВИТОК ЗАМЫКАЕТСЯ. NtUserShowWindow (window.c:5107) шлёт
+         * WM_WINE_SHOWWINDOW, когда окно не признано своим. Сюда сообщение
+         * приходит, а общая проверка владельца (ниже, в той же функции-родителе)
+         * стоит ПОСЛЕ ветки внутренних сообщений и их не защищает. Если у
+         * ПОЛУЧАТЕЛЯ окно тоже «не своё», он шлёт то же сообщение снова.
+         *
+         * Здесь окно ОБЯЗАНО принадлежать текущему потоку — таков инвариант
+         * апстрима. Не принадлежит — виноват не ShowWindow, а доставка. Поэтому
+         * не рекурсируем, а печатаем ОБОИХ владельцев: одна строка делит две
+         * причины — сообщение доставлено не тому потоку (сервером) против
+         * «GetCurrentThreadId возвращает не тот номер» (известный класс TEB32/TEB64).
+         *
+         * Гейта нет намеренно: ветка исполняется только там, где сейчас
+         * гарантированно гибнет процесс. */
+        if (!is_current_thread_window( hwnd ))
+        {
+            MESSAGE( "macrunner-showwindow-чужое-окно: hwnd=%p cmd=%08x владелец_tid=%04x текущий_tid=%04x\n",
+                     hwnd, (unsigned int)wparam,
+                     (unsigned int)get_window_thread( hwnd, NULL ),
+                     (unsigned int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread );
+            return FALSE;
+        }
         return NtUserShowWindow( hwnd, wparam );
     case WM_WINE_SETPARENT:
         if (is_desktop_window( hwnd )) return 0;
@@ -2632,6 +2810,14 @@ static BOOL process_mouse_message( MSG *msg, UINT hw_id, ULONG_PTR extra_info, H
 
     if (!msg->hwnd || !is_current_thread_window( msg->hwnd ))
     {
+        if (trace_ui_input_enabled() && trace_ui_input_interesting_msg( msg->message ))
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=process_mouse_message_drop raw=%s hwnd=%p hittest=%d pt=%d,%d filter=%p first=0x%x last=0x%x remove=%d\n",
+                    trace_ui_input_msg_name( msg->message ), msg->hwnd, hittest,
+                    msg->pt.x, msg->pt.y, hwnd_filter, first, last, remove);
+            fflush(stderr);
+        }
         accept_hardware_message( hw_id );
         return FALSE;
     }
@@ -2794,6 +2980,15 @@ static BOOL process_mouse_message( MSG *msg, UINT hw_id, ULONG_PTR extra_info, H
     if (!remove || info.hwndCapture)
     {
         msg->message = message;
+        if (trace_ui_input_enabled() && trace_ui_input_interesting_msg( msg->message ))
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=process_mouse_message_return raw=%s final=%s hwnd=%p hittest=%d wparam=%lx lparam=%lx pt=%d,%d remove=%d capture=%p\n",
+                    trace_ui_input_msg_name( event.message ), trace_ui_input_msg_name( msg->message ),
+                    msg->hwnd, hittest, (unsigned long)msg->wParam, (unsigned long)msg->lParam, msg->pt.x, msg->pt.y,
+                    remove, info.hwndCapture);
+            fflush(stderr);
+        }
         return TRUE;
     }
 
@@ -2849,6 +3044,15 @@ static BOOL process_mouse_message( MSG *msg, UINT hw_id, ULONG_PTR extra_info, H
     send_message( msg->hwnd, WM_SETCURSOR, (WPARAM)msg->hwnd, MAKELONG( hittest, msg->message ));
 
     msg->message = message;
+    if (trace_ui_input_enabled() && trace_ui_input_interesting_msg( msg->message ))
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=process_mouse_message_final raw=%s final=%s hwnd=%p hittest=%d wparam=%lx lparam=%lx pt=%d,%d remove=%d eat=%d\n",
+                trace_ui_input_msg_name( event.message ), trace_ui_input_msg_name( msg->message ),
+                msg->hwnd, hittest, (unsigned long)msg->wParam, (unsigned long)msg->lParam,
+                msg->pt.x, msg->pt.y, remove, eat_msg);
+        fflush(stderr);
+    }
     return !eat_msg;
 }
 
@@ -3337,8 +3541,22 @@ static BOOL check_internal_bits( UINT mask )
 static BOOL process_driver_events( UINT events_mask, UINT wake_mask, UINT changed_mask )
 {
     BOOL drained = FALSE;
+    BOOL driver_signaled = check_internal_bits( QS_DRIVER );
+    BOOL hardware_signaled;
+    BOOL signaled;
 
-    if (check_internal_bits( QS_DRIVER )) drained = user_driver->pProcessEvents( events_mask );
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=process_driver_events_enter tid=%lx events_mask=0x%x wake_mask=0x%x changed_mask=0x%x qs_driver=%d\n",
+                trace_ui_input_thread_id(), events_mask, wake_mask, changed_mask,
+                driver_signaled);
+        fflush(stderr);
+    }
+
+    if (driver_signaled) drained = user_driver->pProcessEvents( events_mask );
+
+    macrunner_note_driver_events( events_mask, driver_signaled, drained );
 
     if (drained || !check_queue_masks( wake_mask, changed_mask ))
     {
@@ -3353,14 +3571,24 @@ static BOOL process_driver_events( UINT events_mask, UINT wake_mask, UINT change
     }
 
     /* process every pending internal hardware messages */
-    if (check_internal_bits( QS_HARDWARE ))
+    hardware_signaled = check_internal_bits( QS_HARDWARE );
+    if (hardware_signaled)
     {
         struct peek_message_filter filter = {.internal = TRUE};
         MSG msg;
         peek_message( &msg, &filter );
     }
 
-    return is_queue_signaled();
+    signaled = is_queue_signaled();
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=process_driver_events_exit tid=%lx events_mask=0x%x driver=%d drained=%d hardware=%d signaled=%d\n",
+                trace_ui_input_thread_id(), events_mask, driver_signaled, drained,
+                hardware_signaled, signaled);
+        fflush(stderr);
+    }
+    return signaled;
 }
 
 void check_for_events( UINT flags )
@@ -3405,11 +3633,21 @@ static DWORD wait_message( DWORD count, const HANDLE *handles, DWORD timeout, DW
     ULONG ret_len;
     HANDLE event;
     DWORD ret;
+    BOOL pre_signaled;
 
     if ((abs = get_nt_timeout( &time, timeout )))
     {
         NtQuerySystemTime( &now );
         abs->QuadPart = now.QuadPart - abs->QuadPart;
+    }
+
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=wait_message_enter tid=%lx count=%lu timeout=%lu wake_mask=0x%x changed_mask=0x%x flags=0x%x\n",
+                trace_ui_input_thread_id(), (unsigned long)count, (unsigned long)timeout,
+                wake_mask, changed_mask, flags);
+        fflush(stderr);
     }
 
     if (!KeUserDispatchCallback( &params.dispatch, sizeof(params), &ret_ptr, &ret_len ) &&
@@ -3419,11 +3657,48 @@ static DWORD wait_message( DWORD count, const HANDLE *handles, DWORD timeout, DW
         params.restore = TRUE;
     }
 
-    process_driver_events( QS_ALLINPUT, wake_mask, changed_mask );
+    pre_signaled = process_driver_events( QS_ALLINPUT, wake_mask, changed_mask );
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=wait_message_after_pre_driver tid=%lx pre_signaled=%d count=%lu\n",
+                trace_ui_input_thread_id(), pre_signaled, (unsigned long)count);
+        fflush(stderr);
+    }
     if (!(changed_mask & QS_SMRESULT) && (event = get_user_thread_info()->idle_event)) NtSetEvent( event, NULL );
 
-    do ret = NtWaitForMultipleObjects( count, handles, type, !!(flags & MWMO_ALERTABLE), abs );
-    while (ret == count - 1 && !process_driver_events( QS_ALLINPUT, wake_mask, changed_mask ));
+    for (;;)
+    {
+        BOOL post_signaled;
+
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=wait_message_before_NtWait tid=%lx count=%lu server_index=%lu\n",
+                    trace_ui_input_thread_id(), (unsigned long)count, (unsigned long)(count - 1));
+            fflush(stderr);
+        }
+
+        ret = NtWaitForMultipleObjects( count, handles, type, !!(flags & MWMO_ALERTABLE), abs );
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=wait_message_after_NtWait tid=%lx ret=0x%lx count=%lu\n",
+                    trace_ui_input_thread_id(), (unsigned long)ret, (unsigned long)count);
+            fflush(stderr);
+        }
+
+        if (ret != count - 1) break;
+        post_signaled = process_driver_events( QS_ALLINPUT, wake_mask, changed_mask );
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=wait_message_after_post_driver tid=%lx ret=0x%lx post_signaled=%d\n",
+                    trace_ui_input_thread_id(), (unsigned long)ret, post_signaled);
+            fflush(stderr);
+        }
+        if (post_signaled) break;
+    }
 
     if (HIWORD(ret)) /* is it an error code? */
     {
@@ -3435,6 +3710,14 @@ static DWORD wait_message( DWORD count, const HANDLE *handles, DWORD timeout, DW
     if (ret == count - 1) get_user_thread_info()->last_driver_time = get_driver_check_time();
 
     KeUserDispatchCallback( &params.dispatch, sizeof(params), &ret_ptr, &ret_len );
+
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=wait_message_exit tid=%lx ret=0x%lx count=%lu\n",
+                trace_ui_input_thread_id(), (unsigned long)ret, (unsigned long)count);
+        fflush(stderr);
+    }
 
     return ret;
 }
@@ -3474,6 +3757,7 @@ DWORD WINAPI NtUserMsgWaitForMultipleObjectsEx( DWORD count, const HANDLE *handl
 {
     HANDLE wait_handles[MAXIMUM_WAIT_OBJECTS];
     DWORD i;
+    DWORD ret;
 
     if (count > MAXIMUM_WAIT_OBJECTS-1)
     {
@@ -3481,12 +3765,29 @@ DWORD WINAPI NtUserMsgWaitForMultipleObjectsEx( DWORD count, const HANDLE *handl
         return WAIT_FAILED;
     }
 
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=NtUserMsgWait_enter tid=%lx count=%lu timeout=%lu mask=0x%x flags=0x%x\n",
+                trace_ui_input_thread_id(), (unsigned long)count, (unsigned long)timeout,
+                mask, flags);
+        fflush(stderr);
+    }
+
     /* add the queue to the handle list */
     for (i = 0; i < count; i++) wait_handles[i] = normalize_std_handle( handles[i] );
     wait_handles[count] = get_server_queue_handle();
 
-    return wait_objects( count+1, wait_handles, timeout,
-                         (flags & MWMO_INPUTAVAILABLE) ? mask : 0, mask, flags );
+    ret = wait_objects( count+1, wait_handles, timeout,
+                        (flags & MWMO_INPUTAVAILABLE) ? mask : 0, mask, flags );
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=NtUserMsgWait_exit tid=%lx ret=0x%lx count=%lu\n",
+                trace_ui_input_thread_id(), (unsigned long)ret, (unsigned long)count);
+        fflush(stderr);
+    }
+    return ret;
 }
 
 /***********************************************************************
@@ -3595,6 +3896,14 @@ BOOL WINAPI NtUserPeekMessage( MSG *msg_out, HWND hwnd, UINT first, UINT last, U
         return FALSE;
     }
     *msg_out = msg;
+    if (trace_ui_input_enabled() && trace_ui_input_interesting_msg( msg.message ))
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=NtUserPeekMessage_return tid=%lx msg=0x%x/%s hwnd=%p wparam=0x%lx lparam=0x%lx flags=0x%x\n",
+                trace_ui_input_thread_id(), msg.message, trace_ui_input_msg_name( msg.message ),
+                msg.hwnd, (unsigned long)msg.wParam, (unsigned long)msg.lParam, flags);
+        fflush(stderr);
+    }
     return TRUE;
 }
 
@@ -3632,7 +3941,16 @@ BOOL WINAPI NtUserGetMessage( MSG *msg, HWND hwnd, UINT first, UINT last )
 
     check_for_driver_events();
 
-    return msg->message != WM_QUIT;
+    ret = msg->message != WM_QUIT;
+    if (trace_ui_input_enabled() && (trace_ui_input_interesting_msg( msg->message ) || !ret))
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=NtUserGetMessage_return tid=%lx ret=%d msg=0x%x/%s hwnd=%p wparam=0x%lx lparam=0x%lx first=0x%x last=0x%x\n",
+                trace_ui_input_thread_id(), ret, msg->message, trace_ui_input_msg_name( msg->message ),
+                msg->hwnd, (unsigned long)msg->wParam, (unsigned long)msg->lParam, first, last);
+        fflush(stderr);
+    }
+    return ret;
 }
 
 /***********************************************************************
@@ -3918,6 +4236,15 @@ NTSTATUS send_hardware_message( HWND hwnd, UINT flags, const INPUT *input, LPARA
     if (input->type == INPUT_MOUSE && (input->mi.dwFlags & (MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_RIGHTDOWN)))
         clip_fullscreen_window( hwnd, FALSE );
 
+    if (trace_ui_input_enabled() && input->type == INPUT_MOUSE)
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=send_hardware_message hwnd=%p flags=0x%x x=%d y=%d mouse_flags=0x%x data=%u time=%u\n",
+                hwnd, flags, input->mi.dx, input->mi.dy, input->mi.dwFlags,
+                input->mi.mouseData, input->mi.time);
+        fflush(stderr);
+    }
+
     SERVER_START_REQ( send_hardware_message )
     {
         req->win        = wine_server_user_handle( hwnd );
@@ -3956,6 +4283,12 @@ NTSTATUS send_hardware_message( HWND hwnd, UINT flags, const INPUT *input, LPARA
             req->input.kbd.flags = input->ki.dwFlags & ~KEYEVENTF_SCANCODE;
             req->input.kbd.time  = input->ki.time;
             req->input.kbd.info  = input->ki.dwExtraInfo;
+            if (req->input.kbd.vkey == VK_RETURN)
+                macrunner_return_route_observe( "win32u-send-request", hwnd, VK_RETURN,
+                                                !!(req->input.kbd.flags & KEYEVENTF_KEYUP),
+                                                req->input.kbd.flags, req->input.kbd.time,
+                                                req->input.kbd.flags & KEYEVENTF_KEYUP
+                                                    ? WM_KEYUP : WM_KEYDOWN, 0 );
             break;
         case INPUT_HARDWARE:
             req->input.hw.msg    = input->hi.uMsg;
@@ -4002,6 +4335,14 @@ NTSTATUS send_hardware_message( HWND hwnd, UINT flags, const INPUT *input, LPARA
  */
 BOOL WINAPI NtUserPostQuitMessage( INT exit_code )
 {
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=NtUserPostQuitMessage tid=%lx exit_code=%d\n",
+                trace_ui_input_thread_id(), exit_code);
+        fflush(stderr);
+    }
+
     SERVER_START_REQ( post_quit_message )
     {
         req->exit_code = exit_code;
@@ -4018,6 +4359,15 @@ LRESULT WINAPI NtUserDispatchMessage( const MSG *msg )
 {
     struct win_proc_params params;
     LRESULT retval = 0;
+
+    if (trace_ui_input_enabled() && trace_ui_input_interesting_msg( msg->message ))
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=NtUserDispatchMessage_enter tid=%lx msg=0x%x/%s hwnd=%p wparam=0x%lx lparam=0x%lx\n",
+                trace_ui_input_thread_id(), msg->message, trace_ui_input_msg_name( msg->message ),
+                msg->hwnd, (unsigned long)msg->wParam, (unsigned long)msg->lParam);
+        fflush(stderr);
+    }
 
     /* Process timer messages */
     if (msg->lParam && msg->message == WM_TIMER)
@@ -4060,6 +4410,14 @@ LRESULT WINAPI NtUserDispatchMessage( const MSG *msg )
         HRGN hrgn = NtGdiCreateRectRgn( 0, 0, 0, 0 );
         NtUserGetUpdateRgn( msg->hwnd, hrgn, TRUE );
         NtGdiDeleteObjectApp( hrgn );
+    }
+    if (trace_ui_input_enabled() && trace_ui_input_interesting_msg( msg->message ))
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=NtUserDispatchMessage_exit tid=%lx msg=0x%x/%s hwnd=%p retval=0x%lx\n",
+                trace_ui_input_thread_id(), msg->message, trace_ui_input_msg_name( msg->message ),
+                msg->hwnd, (unsigned long)retval);
+        fflush(stderr);
     }
     return retval;
 }
@@ -4729,6 +5087,15 @@ BOOL WINAPI NtUserPostThreadMessage( DWORD thread, UINT msg, WPARAM wparam, LPAR
 LRESULT WINAPI NtUserMessageCall( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
                                   void *result_info, DWORD type, BOOL ansi )
 {
+    if (trace_ui_input_enabled() && trace_ui_input_interesting_msg( msg ))
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=NtUserMessageCall hwnd=%p msg=%s wparam=%lx lparam=%lx type=%lu ansi=%d\n",
+                hwnd, trace_ui_input_msg_name( msg ), (unsigned long)wparam,
+                (unsigned long)lparam, (unsigned long)type, ansi);
+        fflush(stderr);
+    }
+
     switch (type)
     {
     case NtUserScrollBarWndProc:

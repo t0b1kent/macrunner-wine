@@ -351,6 +351,12 @@ static BOOL is_special_env_var( const char *var )
 static BOOL is_ignored_env_var( const char *var )
 {
     return (STARTS_WITH( var, "NIXPKGS_" ) ||
+            STARTS_WITH( var, "MACRUNNER_GUEST_PEB_OBSERVER_ENABLE=" ) ||
+            STARTS_WITH( var, "MACRUNNER_GUEST_PEB_OBSERVER_DIR=" ) ||
+            STARTS_WITH( var, "MACRUNNER_GUEST_PEB_OBSERVER_RUN_ID=" ) ||
+            STARTS_WITH( var, "MACRUNNER_GUEST_PEB_OBSERVER_EXPECTED_IMAGE_SHA256=" ) ||
+            STARTS_WITH( var, "MACRUNNER_GUEST_PEB_OBSERVER_EXPECTED_VIEW=" ) ||
+            STARTS_WITH( var, "MACRUNNER_GUEST_PEB_OBSERVER_EXPECTED_WINE_SHA256=" ) ||
             STARTS_WITH( var, "QT_" ) ||
             STARTS_WITH( var, "SDL_AUDIODRIVER=" ) ||
             STARTS_WITH( var, "SDL_AUDIO_DRIVER=" ) ||
@@ -1552,17 +1558,33 @@ static void run_wineboot( WCHAR *env, SIZE_T size )
     RTL_USER_PROCESS_PARAMETERS params = { sizeof(params), sizeof(params) };
     PS_ATTRIBUTE_LIST ps_attr;
     PS_CREATE_INFO create_info;
-    HANDLE process, thread, handles[2];
+    HANDLE process = 0, thread = 0, handles[2];
     UNICODE_STRING nameW;
     OBJECT_ATTRIBUTES attr;
     LARGE_INTEGER timeout;
-    unsigned int status;
+    NTSTATUS status;
+    PROCESS_BASIC_INFORMATION pbi;
     int count = 1;
+    const char *macrunner_skip = getenv( "MACRUNNER_HB_SKIP_WINEBOOT" );
+
+    if (macrunner_skip && macrunner_skip[0] && macrunner_skip[0] != '0')
+    {
+        fprintf( stderr, "MacRunner HyperBridge skipping automatic wineboot for focused Phase G run\n" );
+        return;
+    }
 
     init_unicode_string( &nameW, eventW );
     InitializeObjectAttributes( &attr, &nameW, OBJ_OPENIF, 0, NULL );
     status = NtCreateEvent( &handles[0], EVENT_ALL_ACCESS, &attr, NotificationEvent, 0 );
-    if (status == STATUS_OBJECT_NAME_EXISTS) goto wait;
+    if (status == STATUS_OBJECT_NAME_EXISTS)
+    {
+        /* Another process is already handling the prefix bootstrap.  Do not
+         * block here: explicit wineboot --init reaches this path in its
+         * bootstrap child, and even a short wait serializes service setup into
+         * apparent loop-wineboot hangs on cold prefixes. */
+        NtClose( handles[0] );
+        return;
+    }
     if (status)
     {
         ERR( "failed to create wineboot event, expect trouble\n" );
@@ -1593,20 +1615,38 @@ static void run_wineboot( WCHAR *env, SIZE_T size )
                                   &create_info, &ps_attr );
     NtClose( params.hStdError );
 
-    if (status)
+    if (!NT_SUCCESS(status))
     {
         ERR( "failed to start wineboot %x\n", status );
+        if (thread) NtClose( thread );
+        if (process) NtClose( process );
         NtClose( handles[0] );
         return;
     }
+    if (status) WARN( "wineboot started with warning status %x\n", status );
     NtResumeThread( thread, NULL );
     NtClose( thread );
     handles[count++] = process;
 
-wait:
-    timeout.QuadPart = (ULONGLONG)5 * 60 * 1000 * -10000;
-    if (NtWaitForMultipleObjects( count, handles, WaitAny, FALSE, &timeout ) == WAIT_TIMEOUT)
+    timeout.QuadPart = (ULONGLONG)300 * 1000 * -10000;
+    status = NtWaitForMultipleObjects( count, handles, WaitAny, FALSE, &timeout );
+    if (status == WAIT_TIMEOUT)
+    {
         ERR( "boot event wait timed out\n" );
+        NtTerminateProcess( process, STATUS_TIMEOUT );
+    }
+    else if (status == STATUS_WAIT_1 &&
+             !NtQueryInformationProcess( process, ProcessBasicInformation, &pbi, sizeof(pbi), NULL ))
+    {
+        if (pbi.ExitStatus == STATUS_CONFLICTING_ADDRESSES)
+        {
+            ERR( "wineboot child failed with c0000018; aborting bootstrap without retry\n" );
+            while (count) NtClose( handles[--count] );
+            _exit(1);
+        }
+        if (pbi.ExitStatus)
+            WARN( "wineboot child exited with status %x\n", pbi.ExitStatus );
+    }
     while (count) NtClose( handles[--count] );
 }
 
@@ -1784,9 +1824,72 @@ static void *build_wow64_parameters( const RTL_USER_PROCESS_PARAMETERS *params )
                    + ((params->RuntimeInfo.MaximumLength + 1) & ~1)
                    + params->EnvironmentSize);
 
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+    status = macrunner_hb_wow64_guest32_alloc( size, PAGE_READWRITE, (void **)&wow64_params );
+    if (status)
+#endif
+    {
     status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&wow64_params, limit_2g - 1, &size,
                                       MEM_COMMIT, PAGE_READWRITE );
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+    /* ★★★★ ПАКЕТ-2 08.09.2026 — ПЕРВАЯ СТЕНА i386 ПОСЛЕ СНЯТИЯ НАШЕЙ АРЕНЫ, НАЗВАННАЯ ЧИСЛОМ.
+     *
+     * Здесь отказ был АНОНИМНЫМ: `assert(!status)` печатает только имя файла и строку, а
+     * ЧТО именно не удалось и по какому адресу — нет. Пока арена HyperBridge работала,
+     * ветвь вообще не достигалась (первый вызов её и обслуживал), поэтому цена молчания
+     * не всплывала.
+     *
+     * Блок параметров процесса ОБЯЗАН быть адресуем 32 битами, отсюда `limit_2g - 1`.
+     * На macOS ARM64 низ адресного пространства недоступен без права подписи
+     * `com.apple.developer.cross-architecture-support` (мягкий __PAGEZERO), и запрос
+     * законно отказывает. Это ВНЕШНЕЕ ограничение (ядро + подпись), а не наше устройство.
+     *
+     * Печать безусловная и ДО assert: тогда отказ называет себя сам, а не оставляет
+     * читателю номер строки. */
+    if (status)
+    {
+        void *mr_p4 = NULL;
+        SIZE_T mr_s4 = size;
+        NTSTATUS mr_st4;
+
+        fprintf( stderr, "macrunner-paket2-stena: build_wow64_parameters НЕ ВЫДЕЛИЛ блок "
+                 "параметров: status=%08x size=%llx predel=%llx. Арена guest32 погашена "
+                 "владельцем CPU.\n",
+                 (unsigned)status, (unsigned long long)size,
+                 (unsigned long long)(limit_2g - 1) );
+
+        /* ★★★★ ЗАМЕР, А НЕ ДОГАДКА: стена на 2 ГБ или на всех нижних 4 ГБ?
+         *
+         * Третий довод `NtAllocateVirtualMemory` — это `zero_bits`, и значение больше 32
+         * трактуется как ПРЕДЕЛЬНЫЙ АДРЕС. Апстрим ставит `limit_2g - 1` из осторожности
+         * (старые программы полагаются на низ 2 ГБ), но блоку параметров нужна только
+         * АДРЕСУЕМОСТЬ 32 БИТАМИ — то есть годится всё до 4 ГБ.
+         *
+         * Один лишний вызов того же API отвечает на вопрос числом. Если он проходит —
+         * ограничение НАШЕ (осторожный предел), и стена снимается здесь же. Если нет —
+         * ограничение ВНЕШНЕЕ (ядро + подпись: низ 4 ГБ открывает право
+         * `com.apple.developer.cross-architecture-support`), и это не наш потолок, а факт
+         * платформы.
+         *
+         * Ветвь достижима ТОЛЬКО когда арена погашена, то есть на руке не-HyperBridge:
+         * при работающей арене первый вызов выше уже выдал блок. Рука hb не задета. */
+        mr_st4 = NtAllocateVirtualMemory( NtCurrentProcess(), &mr_p4, 0xffffffffu, &mr_s4,
+                                          MEM_COMMIT, PAGE_READWRITE );
+        fprintf( stderr, "macrunner-paket2-stena: povtor s predelom 4GB: status=%08x addr=%p "
+                 "size=%llx -> %s\n", (unsigned)mr_st4, mr_p4, (unsigned long long)mr_s4,
+                 mr_st4 ? "STENA VNESHNYAYA (nizh 4 GB zakryt)" : "STENA BYLA NASHA (predel 2 GB)" );
+        fflush( stderr );
+
+        if (!mr_st4 && mr_p4)
+        {
+            wow64_params = mr_p4;
+            size = mr_s4;
+            status = 0;
+        }
+    }
+#endif
     assert( !status );
+    }
 
     wow64_params->AllocationSize  = size;
     wow64_params->Size            = size;
@@ -1820,6 +1923,52 @@ static void *build_wow64_parameters( const RTL_USER_PROCESS_PARAMETERS *params )
 
     wow64_params->Environment = PtrToUlong( dst );
     wow64_params->EnvironmentSize = params->EnvironmentSize;
+
+    /* MacRunner 2026-08-16, лейн ЛЕСТНИЦА, итерация 1266 — ЗОНД КОРНЯ C2.
+     *
+     * Набор Wine (ступень 9, рука r9-D) даёт 16 отказов класса «32-битные PEB и параметры», и
+     * восемь из них — вида `wrong ImagePathName ptr 0 / 0-5000`: у 32-битного блока параметров
+     * ВСЕ указатели строк нулевые. Причина может быть ровно одна из двух, и они лечатся
+     * по-разному:
+     *   1) источник пуст — `dup_unicode_string` (env.c:1723) при `!src->Buffer` выходит СРАЗУ,
+     *      не тронув поле; тогда чинить надо того, кто заполняет 64-битные параметры;
+     *   2) перевод адреса даёт ноль — тогда чинить `PtrToUlong` на этом пути.
+     * Зонд печатает обе стороны разом, поэтому различает их одним прогоном.
+     *
+     * Гейт `MACRUNNER_HB_WOW64_PARAMS_PROBE`, умолчание ВЫКЛ: это чистая диагностика, поведения
+     * не меняет. Печать один раз за процесс. */
+    {
+        static int probe = -1;
+        if (probe < 0)
+        {
+            const char *v = getenv( "MACRUNNER_HB_WOW64_PARAMS_PROBE" );
+            probe = v && v[0] && v[0] != '0';
+        }
+        if (probe)
+        {
+            fprintf( stderr, "macrunner-hb-wow64params: блок=%p -> 32бит=%08x размер=%llu\n",
+                     wow64_params, (unsigned)PtrToUlong( wow64_params ),
+                     (unsigned long long)size );
+#define MR_PROBE_STR(поле) \
+            fprintf( stderr, "macrunner-hb-wow64params: %-14s src=%p len=%u -> 32бит=%08x\n", \
+                     #поле, params->поле.Buffer, (unsigned)params->поле.Length, \
+                     (unsigned)wow64_params->поле.Buffer )
+            MR_PROBE_STR( ImagePathName );
+            MR_PROBE_STR( CommandLine );
+            MR_PROBE_STR( WindowTitle );
+            MR_PROBE_STR( Desktop );
+            MR_PROBE_STR( ShellInfo );
+            MR_PROBE_STR( DllPath );
+#undef MR_PROBE_STR
+            fprintf( stderr, "macrunner-hb-wow64params: CurrentDirectory src=%p -> 32бит=%08x  "
+                             "Environment=%08x размер_окружения=%llu\n",
+                     params->CurrentDirectory.DosPath.Buffer,
+                     (unsigned)wow64_params->CurrentDirectory.DosPath.Buffer,
+                     (unsigned)wow64_params->Environment,
+                     (unsigned long long)params->EnvironmentSize );
+            fflush( stderr );
+        }
+    }
     memcpy( dst, params->Environment, params->EnvironmentSize );
     return wow64_params;
 }
@@ -1843,9 +1992,77 @@ static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, void *module )
 #ifdef _WIN64
     if (!is_machine_64bit( main_image_info.Machine ))
     {
+        /* ★ ИТЕРАЦИЯ 87 — ЧТО ИМЕННО ПИШУТ ЗАКОННЫЕ ПИСАТЕЛИ ЭТОГО ПОЛЯ.
+         * Порча TEB+0x180C идёт значениями 0xAA64 и 0x030E (итерации 64-86). init_teb
+         * пишет teb_offset = 0x2000 и подозрений не вызывает; у этих двух значения
+         * НИКОГДА не снимались — только читался код. Печать разовая. */
+        {
+            static unsigned mr_n;
+            if (mr_n++ < 8)
+                fprintf( stderr, "macrunner-wowoff-писатель: место=env teb=%p было=%08lx "
+                         "пишем=%08lx\n", NtCurrentTeb(),
+                         (unsigned long)(ULONG)NtCurrentTeb()->WowTebOffset,
+                         (unsigned long)(ULONG)teb_offset );
+        }
         NtCurrentTeb()->WowTebOffset = teb_offset;
         NtCurrentTeb()->Tib.ExceptionList = (void *)((char *)NtCurrentTeb() + teb_offset);
         wow_peb = (PEB32 *)((char *)peb + page_size);
+        /* MacRunner 2026-08-16, лейн ЛЕСТНИЦА, итерация 1268 — PEB32 В ЗЕРКАЛО.
+         *
+         * ИЗМЕРЕНО (прогон r9-F, парный зонд): `wow_peb` штатно ложится по `peb + 4096`, то есть
+         * ВЫШЕ 4 ГБ (0x7ffd01f1000). 32-битный гость такой адрес не адресует: он видит усечение
+         * 0xd01f1000 — ровно то, что печатает отказ набора `wow64.c:947 wrong peb 0xd01f1000 /
+         * 0x7ffd01f0000`. Всё, что читается ЧЕРЕЗ peb32 (в том числе ProcessParameters и восемь
+         * строк), читается не оттуда и даёт нули: это 16 отказов класса C из 34.
+         *
+         * Блок TEB/PEB стоит высоко НАМЕРЕННО: `virtual.c:5806-5815` на aarch64 снимает
+         * ограничение `limit_2g`, и причина названа в комментарии — низ адресного пространства
+         * на macOS недостижим из-за `__PAGEZERO`. Значит опустить его нельзя, а можно положить
+         * в ЗЕРКАЛО guest32, где хостовый адрес это `база | адрес32`: тогда и хост видит блок,
+         * и гость адресует его младшими 32 битами. Механизм уже работает на блоке параметров
+         * (`build_wow64_parameters`, env.c:1828) — там `0x36fff0000 -> 6fff0000`.
+         *
+         * Гейт `MACRUNNER_HB_WOW64_PEB_IN_MIRROR`, умолчание ВЫКЛ: правка меняет РАЗМЕЩЕНИЕ, а
+         * межпроцессная ветвь `process.c:1952` по-прежнему считает PEB32 как `peb + 0x1000` —
+         * то есть для ЧУЖОГО процесса ответ разъедется. Пока это не сведено, включать по
+         * умолчанию нельзя. База сравнения для проверки: 34 отказа в 31 месте, воспроизведено
+         * тремя прогонами (r9-D, r9-E, r9-F). */
+        {
+            const char *v = getenv( "MACRUNNER_HB_WOW64_PEB_IN_MIRROR" );
+
+            if (v && v[0] && v[0] != '0')
+            {
+                void *mirror = NULL;
+                SIZE_T peb32_size = page_size;
+
+                if (!macrunner_hb_wow64_guest32_alloc( peb32_size, PAGE_READWRITE, &mirror ) && mirror)
+                {
+                    memcpy( mirror, wow_peb, page_size );
+                    fprintf( stderr, "macrunner-hb-wow64peb: ПЕРЕНОС в зеркало было=%p стало=%p "
+                                     "32бит=%08x\n", wow_peb, mirror, (unsigned)PtrToUlong( mirror ) );
+                    fflush( stderr );
+                    wow_peb = (PEB32 *)mirror;
+                    /* Итерация 1299: перенос обязан дойти до TEB. `init_teb` для уже созданного
+                     * потока отработал РАНЬШЕ и положил туда усечённый адрес; новые потоки
+                     * возьмут его из этой же глобальной. */
+                    macrunner_hb_wow_peb32_mirror = mirror;
+                    {
+                        TEB32 *cur32 = (TEB32 *)((char *)NtCurrentTeb() + teb_offset);
+                        unsigned old32 = cur32->Peb;
+
+                        cur32->Peb = PtrToUlong( mirror );
+                        fprintf( stderr, "macrunner-hb-wow64peb: TEB32 текущего потока было=%08x "
+                                         "стало=%08x\n", old32, (unsigned)cur32->Peb );
+                        fflush( stderr );
+                    }
+                }
+                else
+                {
+                    fprintf( stderr, "macrunner-hb-wow64peb: ПЕРЕНОС не состоялся — зеркало не дало страницу\n" );
+                    fflush( stderr );
+                }
+            }
+        }
         set_thread_id( NtCurrentTeb(), GetCurrentProcessId(), GetCurrentThreadId() );
     }
 #endif
@@ -1859,6 +2076,25 @@ static void init_peb( RTL_USER_PROCESS_PARAMETERS *params, void *module )
 
         wow_peb->ImageBaseAddress                = PtrToUlong( peb->ImageBaseAddress );
         wow_peb->ProcessParameters               = PtrToUlong( wow64_params );
+        /* Итерация 1267: вторая половина зонда корня C2. Первая (в build_wow64_parameters)
+         * доказала, что блок заполнен. Значит вопрос не «чем заполнен», а «на какой PEB32
+         * смотрит гость»: этот `wow_peb` лежит СРАЗУ ЗА 64-битным PEB (`peb + page_size`,
+         * строка 1940), а `wow64.dll` берёт свой через `ProcessWow64Information`. Печатаем
+         * оба адреса, чтобы сверить их одним прогоном. Гейт тот же. */
+        {
+            static int probe = -1;
+            if (probe < 0)
+            {
+                const char *v = getenv( "MACRUNNER_HB_WOW64_PARAMS_PROBE" );
+                probe = v && v[0] && v[0] != '0';
+            }
+            if (probe)
+                fprintf( stderr, "macrunner-hb-wow64peb: init_peb wow_peb=%p (peb=%p + %llu) "
+                                 "ProcessParameters=%08x ImageBase=%08x\n",
+                         wow_peb, peb, (unsigned long long)page_size,
+                         (unsigned)wow_peb->ProcessParameters,
+                         (unsigned)wow_peb->ImageBaseAddress );
+        }
         wow_peb->NumberOfProcessors              = peb->NumberOfProcessors;
         wow_peb->NtGlobalFlag                    = peb->NtGlobalFlag;
         wow_peb->CriticalSectionTimeout.QuadPart = peb->CriticalSectionTimeout.QuadPart;

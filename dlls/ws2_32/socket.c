@@ -2590,7 +2590,7 @@ INT WINAPI WSAIoctl(SOCKET s, DWORD code, LPVOID in_buff, DWORD in_size, LPVOID 
             }
         }
 
-        FIXME("SIO_GET_EXTENSION_FUNCTION_POINTER %s: stub\n", debugstr_guid(in_buff));
+        TRACE("SIO_GET_EXTENSION_FUNCTION_POINTER %s: unknown extension function\n", debugstr_guid(in_buff));
         SetLastError( WSAEINVAL );
         return -1;
     }
@@ -2624,7 +2624,7 @@ INT WINAPI WSAIoctl(SOCKET s, DWORD code, LPVOID in_buff, DWORD in_size, LPVOID 
         }
         if (daddr->sa_family != AF_INET)
         {
-            FIXME("unsupported address family %d\n", daddr->sa_family);
+            TRACE("unsupported address family %d\n", daddr->sa_family);
             SetLastError( WSAEAFNOSUPPORT );
             return -1;
         }

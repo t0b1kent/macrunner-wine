@@ -28,10 +28,29 @@
 #include "winternl.h"
 #include "rtlsupportapi.h"
 #include "wow64win_private.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(wow);
+
+BOOL macrunner_wow64win_cpu_hb = TRUE;
 
 static void DECLSPEC_NORETURN stub_syscall( const char *name )
 {
     EXCEPTION_RECORD record;
+
+    /* ★ MacRunner 2026-08-28 — НАЗВАТЬ НЕРЕАЛИЗОВАННЫЙ ВЫЗОВ.
+     *
+     * Diablo умирал так: поток команд wined3d получает `c0000025`
+     * (NONCONTINUABLE) сразу после `WINED3D_CS_OP_UNLOAD_RESOURCE`, раскрутка
+     * стека не находит НИ ОДНОГО обработчика, и процесс уходит. Виновника
+     * пришлось искать по карте модулей — `wow64win.dll + 0x1584FC`, — потому
+     * что штатное сообщение wine «Call from %p to unimplemented function» до
+     * журнала не доходит: до обработчика, который его печатает
+     * (`ntdll/exception.c`), управление не добирается.
+     *
+     * Печатаем имя ПРЯМО ЗДЕСЬ, до подъёма исключения. Иначе «нет такого
+     * системного вызова» неотличимо от любого другого падения потока команд. */
+    MESSAGE( "macrunner-wow64win-заглушка: НЕРЕАЛИЗОВАН системный вызов win32u.%s\n", name );
 
     record.ExceptionCode    = EXCEPTION_WINE_STUB;
     record.ExceptionFlags   = EXCEPTION_NONCONTINUABLE;
@@ -71,7 +90,23 @@ const SYSTEM_SERVICE_TABLE sdwhwin32 =
 
 BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
 {
+    BOOL (*is_hb)(void);
+    UNICODE_STRING name;
+    HMODULE ntdll = NULL;
+
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
+
+    RtlInitUnicodeString( &name, L"ntdll.dll" );
+    if (LdrGetDllHandle( NULL, 0, &name, &ntdll ) ||
+        !(is_hb = RtlFindExportedRoutineByName( ntdll, "macrunner_cpu_backend_is_hb" )))
+    {
+        MESSAGE( "macrunner-wow64win-owner: sel=MISSING — mismatched runtime\n" );
+        return FALSE;
+    }
+    macrunner_wow64win_cpu_hb = is_hb();
+    MESSAGE( "macrunner-wow64win-owner: sel=%s alias_tls=%s\n",
+             macrunner_wow64win_cpu_hb ? "hb" : "ne-hb",
+             macrunner_wow64win_cpu_hb ? "OWNED" : "NOT_USED" );
     LdrDisableThreadCalloutsForDll( inst );
     NtCurrentTeb()->Peb->KernelCallbackTable = user_callbacks;
     return TRUE;

@@ -410,6 +410,7 @@ static void test_VirtualAlloc(void)
     addr2 = VirtualAlloc( addr1, 0x1000, MEM_RESET, PAGE_NOACCESS );
     ok( addr2 == addr1, "VirtualAlloc failed err %lu\n", GetLastError() );
     ok( *(DWORD *)addr1 == 0x55555555 || *(DWORD *)addr1 == 0, "wrong data %lx\n", *(DWORD *)addr1 );
+
     ok(VirtualQuery(addr1, &info, sizeof(info)) == sizeof(info),
        "VirtualQuery failed\n");
     ok(info.RegionSize == 0x1000, "%Ix != 0x1000\n", info.RegionSize);

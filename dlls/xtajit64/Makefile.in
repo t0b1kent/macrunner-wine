@@ -1,8 +1,13 @@
 MODULE    = xtajit64.dll
+UNIXLIB   = xtajit64.so
 IMPORTS   = ntdll
 EXTRADEFS = -D_CRTIMP=
+EXTRAINCL = -I$(top_srcdir)/../hyperbridge/include
+UNIX_CFLAGS = -I$(top_srcdir)/../hyperbridge/include
+UNIX_LIBS = $(top_srcdir)/../hyperbridge/libhyperbridge.a
 
 EXTRADLLFLAGS = -nodefaultlibs
 
 SOURCES = \
-	cpu.c
+	cpu.c \
+	unixlib.c

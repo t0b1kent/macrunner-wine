@@ -2289,7 +2289,24 @@ static void wined3d_cs_exec_callback(struct wined3d_cs *cs, const void *data)
 {
     const struct wined3d_cs_callback *op = data;
 
-    op->callback(op->object);
+    /* ★★★★ 28.08.2026 — КАКОЙ ИМЕННО ОБРАТНЫЙ ВЫЗОВ УБИВАЕТ ПОТОК КОМАНД.
+     *
+     * Замер Diablo: поток команд разбирает очередь исправно, семь команд WINED3D_CS_OP_CALLBACK
+     * проходят целиком, а на восьмой поднимается c000000d без обработчика и поток умирает.
+     * Все восемь — CALLBACK, то есть отличаются только адресом функции; печатаем его вместе с
+     * отметкой «готово», чтобы непарная запись назвала виновника. Среди кандидатов —
+     * `wined3d_device_gl_create_primary_opengl_context_cs` (adapter_gl.c), и класс окна
+     * WineD3D_OpenGL в итогах прогона говорит, что путь именно GL. */
+    {
+        static unsigned int cb_n;
+        unsigned int cn = ++cb_n;
+
+        if (cn <= 20)
+            ERR("macrunner-cs-callback: n=%u функция=%p объект=%p\n", cn, op->callback, op->object);
+        op->callback(op->object);
+        if (cn <= 20)
+            ERR("macrunner-cs-callback: n=%u готово\n", cn);
+    }
 }
 
 static void wined3d_cs_emit_callback(struct wined3d_cs *cs, void (*callback)(void *object), void *object)
@@ -3406,6 +3423,18 @@ static void *wined3d_cs_mt_require_space(struct wined3d_device_context *context,
     return wined3d_cs_queue_require_space(&cs->queue[queue_id], size, cs);
 }
 
+/* ★★★★ 28.08.2026 — СЧЁТЧИК ВИТКОВ ПОТОКА КОМАНД, ВИДИМЫЙ ИЗВНЕ.
+ *
+ * Замер серии из 4 прогонов на одной сборке: три штатных (по 23 исполненных команды,
+ * ~5,5 тыс. вызовов Sleep) и один сбойный — НОЛЬ исполненных команд и 678 706 вызовов Sleep
+ * за 82 секунды. В сбойном поток команд стартовал, сделал два витка при пустой очереди и
+ * дальше не печатал ничего, хотя команда появилась (head=16, tail=0).
+ *
+ * Из одного лишь `cs-op=0` не различить «поток встал» и «поток крутится, но не видит команду».
+ * Счётчик витков различает: ждущая сторона печатает его дважды с задержкой — растёт значит
+ * крутится, стоит значит заблокирован. */
+static volatile unsigned int macrunner_cs_loops;
+
 static void wined3d_cs_mt_finish(struct wined3d_device_context *context, enum wined3d_cs_queue_id queue_id)
 {
     struct wined3d_cs *cs = wined3d_cs_from_context(context);
@@ -3415,8 +3444,47 @@ static void wined3d_cs_mt_finish(struct wined3d_device_context *context, enum wi
         return wined3d_cs_st_finish(context, queue_id);
 
     TRACE_(d3d_perf)("Waiting for queue %u to be empty.\n", queue_id);
-    while (cs->queue[queue_id].head != *(volatile ULONG *)&cs->queue[queue_id].tail)
-        wined3d_pause(&spin_count);
+
+    /* MacRunner 2026-08-27 — ПОЧЕМУ ОЧЕРЕДЬ НЕ РАЗБИРАЕТСЯ.
+     *
+     * Замер Diablo: после CreatePalette главный поток делает 4394 вызова
+     * NtDelayExecution за 0,32 секунды — 15 773 в секунду. Прибор в xtajit назвал
+     * источник: этот самый цикл (wined3d_cs_mt_finish + 0xb7 -> wined3d_pause).
+     * То есть ждём мы, а поток команд tail не двигает.
+     *
+     * Из счётчика витков не видно, ЖИВ ли поток команд и что с очередью. Печатаем
+     * состояние: голову и хвост очереди, идентификатор потока команд и флаг
+     * ожидания. Порог в 1000 витков, чтобы не шуметь на здоровых ожиданиях. */
+    {
+        unsigned int probe_spins = 0;
+        static unsigned int probe_n;
+
+        while (cs->queue[queue_id].head != *(volatile ULONG *)&cs->queue[queue_id].tail)
+        {
+            if (++probe_spins == 1000)
+            {
+                unsigned int pn = ++probe_n;
+
+                if (pn <= 4 || !(pn % 100))
+                {
+                    unsigned int l0 = macrunner_cs_loops;
+                    unsigned int i;
+                    for (i = 0; i < 200000; i++) YieldProcessor();   /* дать потоку команд шанс */
+                    ERR("macrunner-cs-loops: витки %u -> %u (%s)\n", l0, macrunner_cs_loops,
+                        macrunner_cs_loops != l0 ? "КРУТИТСЯ" : "СТОИТ");
+                }
+                if (pn <= 4 || !(pn % 100))
+                    ERR("macrunner-cs-finish-stall: n=%u очередь=%u head=%lu tail=%lu "
+                        "поток_cs=%#lx мы=%#lx ждёт_события=%ld thread=%p &head=%p &cs=%p\n",
+                        pn, queue_id, (unsigned long)*(volatile ULONG *)&cs->queue[queue_id].head,
+                        (unsigned long)*(volatile ULONG *)&cs->queue[queue_id].tail,
+                        (unsigned long)cs->thread_id, (unsigned long)GetCurrentThreadId(),
+                        (long)cs->waiting_for_event, cs->thread,
+                        &cs->queue[queue_id].head, cs);
+            }
+            wined3d_pause(&spin_count);
+        }
+    }
     TRACE_(d3d_perf)("Queue is now empty.\n");
 }
 
@@ -3510,7 +3578,26 @@ static inline bool wined3d_cs_execute_next(struct wined3d_cs *cs, struct wined3d
         }
 
         wined3d_cs_command_lock(cs);
-        wined3d_cs_op_handlers[opcode](cs, packet->data);
+        /* ★★★★ 28.08.2026 — КАКАЯ КОМАНДА УБИВАЕТ ПОТОК.
+         *
+         * Замер Diablo: поток команд ЖИВ и очередь разбирает (tail 0 -> 112 за 8 команд),
+         * а на девятой поднимается c000000d (STATUS_INVALID_PARAMETER) без обработчика, поток
+         * умирает и игра выходит. Прежний вывод «tail не двигается» неверен — двигается.
+         *
+         * Печатаем код команды ДО вызова обработчика и отметку ПОСЛЕ: последняя команда без
+         * парной отметки «готово» и есть та, что убивает поток. Потолок 40 записей, чтобы не
+         * менять поведение прогона (замер 27.08 показал: печать на каждом витке настолько
+         * замедляет, что игра не доходит до CreateSurface). */
+        {
+            static unsigned int op_n;
+            unsigned int on = ++op_n;
+
+            if (on <= 40)
+                ERR("macrunner-cs-op: n=%u код=%u %s\n", on, (unsigned)opcode, debug_cs_op(opcode));
+            wined3d_cs_op_handlers[opcode](cs, packet->data);
+            if (on <= 40)
+                ERR("macrunner-cs-op: n=%u готово\n", on);
+        }
         wined3d_cs_command_unlock(cs);
         TRACE("%s at %p executed.\n", debug_cs_op(opcode), packet);
     }
@@ -3566,8 +3653,81 @@ static DWORD WINAPI wined3d_cs_run(void *ctx)
 
     list_init(&cs->query_poll_list);
     cs->thread_id = GetCurrentThreadId();
-    while (run)
+
+    /* MacRunner 2026-08-27 — ЖИВ ЛИ ПОТОК КОМАНД.
+     *
+     * Замер Diablo: главный поток висит в wined3d_cs_mt_finish с head=16, tail=0 — то
+     * есть команда в очереди есть, а этот поток её не разбирает. Из главного потока
+     * видно только, что дескриптор ненулевой; работает поток или стоит — нет.
+     * Под трассой зависание пропадает (650 снов против 5636), значит это гонка, и
+     * счётчик витков здесь её и разделит: ноль витков — поток не дошёл до цикла,
+     * витки есть, а tail стоит — не видит команду. */
+    ERR("macrunner-cs-thread: старт tid=%#lx\n", (unsigned long)cs->thread_id);
     {
+        static volatile unsigned int loop_n;   /* ★ volatile: читает ДРУГОЙ поток в cs-finish-stall */
+        /* ★ MacRunner 2026-08-28 — ГЕЙТ НА СЧЁТЧИКИ ВИТКОВ.
+         *
+         * Отказ памяти, убивавший Diablo, приходится РОВНО на эти два счётчика:
+         * `guest_addr=0x7763c548 size=4 READ pc=0x773eb564`, а по этому pc лежит
+         * `8b 35 48 c5 63 77` = `MOV ESI,[0x7763c548]`, то есть чтение `loop_n`.
+         * Оба лежат в `.data` модуля (wined3d.dll+0x28C548 и +0x28C544).
+         *
+         * Прежде чем винить .data 32-битных модулей, надо проверить самое дешёвое:
+         * не наш ли это прибор. Гейт выключает ОБА счётчика и печать, ничего больше
+         * не трогая. `MACRUNNER_CS_LOOP_COUNTERS=1` возвращает их. */
+        static int loop_counters_on = -1;
+        if (loop_counters_on < 0)
+        {
+            const char *v = getenv( "MACRUNNER_CS_LOOP_COUNTERS" );
+            loop_counters_on = (v && *v && *v != '0') ? 1 : 0;
+        }
+
+        while (run)
+        {
+            unsigned int ln = loop_counters_on ? ++loop_n : 0;
+
+            if (loop_counters_on) macrunner_cs_loops++;   /* виден ждущей стороне */
+
+            /* ★ ДВЕ ПОПРАВКИ ПОДРЯД, обе от замера.
+             *
+             * 1) Интервал 100 000 витков не напечатал НИ ОДНОГО витка после четвёртого.
+             *    Первые четыре пришлись на 9,916 с, зависание главного — на 10,025 с, то
+             *    есть на 100 мс позже: числа были несопоставимы по времени, и «поток видит
+             *    head=0» относилось к моменту ДО появления команды.
+             * 2) Интервал 1000 витков замедлил прогон настолько, что игра не дошла даже до
+             *    CreateSurface (2 вехи вместо 10) — прибор изменил поведение.
+             *
+             * Печатаем по СОСТОЯНИЮ, а не по счётчику: только когда команда в очереди есть,
+             * а этот поток её не разобрал. Это ровно искомое состояние, и в здоровом прогоне
+             * оно почти не встречается. */
+            {
+                ULONG probe_head = *(volatile ULONG *)&cs->queue[WINED3D_CS_QUEUE_DEFAULT].head;
+                ULONG probe_tail = *(volatile ULONG *)&cs->queue[WINED3D_CS_QUEUE_DEFAULT].tail;
+                static unsigned int busy_n;
+
+                if (probe_head != probe_tail && ++busy_n <= 8)
+                    ERR("macrunner-cs-thread: ЕСТЬ КОМАНДА n=%u виток=%u head=%lu tail=%lu ждёт=%ld\n",
+                        busy_n, ln, (unsigned long)probe_head, (unsigned long)probe_tail,
+                        (long)cs->waiting_for_event);
+            }
+            /* ★ MacRunner 2026-08-28 — ПЕЧАТЬ ТОЛЬКО ПРИ ЖИВОМ СЧЁТЧИКЕ.
+             * Когда счётчики выключены гейтом, `ln` равен нулю ВСЕГДА, и условие
+             * `ln <= 4` истинно на каждом витке: журнал забивался тысячами строк
+             * «виток n=0», а число в них ничего не значило. Прибор выключен —
+             * печати быть не должно. */
+            if (loop_counters_on && ln <= 4)
+                /* ★ ПОПРАВКА ТОГО ЖЕ ЧАСА: читать через volatile, как читает сам цикл.
+                 *
+                 * Первая редакция брала cs->queue[...].head напрямую, а поле объявлено без
+                 * volatile — компилятор вправе держать его в регистре весь цикл. Прибор
+                 * печатал head=0 при head=16 у главного потока, и я едва не объявил это
+                 * расхождением памяти между потоками. Настоящий цикл читает через
+                 * *(volatile ULONG *)&..., прибор обязан читать так же. */
+                ERR("macrunner-cs-thread: виток n=%u head=%lu tail=%lu ждёт=%ld &head=%p &cs=%p\n",
+                    ln, (unsigned long)*(volatile ULONG *)&cs->queue[WINED3D_CS_QUEUE_DEFAULT].head,
+                    (unsigned long)*(volatile ULONG *)&cs->queue[WINED3D_CS_QUEUE_DEFAULT].tail,
+                    (long)cs->waiting_for_event,
+                    &cs->queue[WINED3D_CS_QUEUE_DEFAULT].head, cs);
         if (++poll == WINED3D_CS_QUERY_POLL_INTERVAL)
         {
             wined3d_cs_command_lock(cs);
@@ -3595,7 +3755,8 @@ static DWORD WINAPI wined3d_cs_run(void *ctx)
         }
         spin_count = 0;
 
-        run = wined3d_cs_execute_next(cs, queue);
+            run = wined3d_cs_execute_next(cs, queue);
+        }
     }
 
     cs->queue[WINED3D_CS_QUEUE_MAP].tail = cs->queue[WINED3D_CS_QUEUE_MAP].head;

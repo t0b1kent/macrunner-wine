@@ -32,6 +32,15 @@
 # endif
 #endif
 
+#ifndef __has_attribute
+# define __has_attribute(x) 0
+#endif
+#if defined(WINE_UNIX_LIB) && defined(__APPLE__) && defined(__aarch64__) && __has_attribute(ms_abi)
+# define MACRUNNER_ARM64_MS_SYSCALL_ABI __attribute__((ms_abi))
+#else
+# define MACRUNNER_ARM64_MS_SYSCALL_ABI
+#endif
+
 typedef struct _GDI_HANDLE_ENTRY
 {
     UINT64 Object;
@@ -295,16 +304,16 @@ W32KAPI HANDLE   WINAPI NtGdiAddFontMemResourceEx( void *ptr, DWORD size, void *
                                                    DWORD *count );
 W32KAPI INT      WINAPI NtGdiAddFontResourceW( const WCHAR *str, ULONG size, ULONG files, DWORD flags,
                                                DWORD tid, void *dv );
-W32KAPI BOOL     WINAPI NtGdiAlphaBlend( HDC hdc_dst, int x_dst, int y_dst, int width_dst, int height_dst,
-                                         HDC hdc_src, int x_src, int y_src, int width_src, int height_src,
-                                         DWORD blend_function, HANDLE xform );
+W32KAPI BOOL     MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiAlphaBlend( HDC hdc_dst, int x_dst, int y_dst, int width_dst, int height_dst,
+                                                                        HDC hdc_src, int x_src, int y_src, int width_src, int height_src,
+                                                                        DWORD blend_function, HANDLE xform );
 W32KAPI BOOL     WINAPI NtGdiAngleArc( HDC hdc, INT x, INT y, DWORD radius, DWORD start_angle,
                                        DWORD sweep_angle );
 W32KAPI BOOL     WINAPI NtGdiArcInternal( UINT type, HDC hdc, INT left, INT top, INT right, INT bottom,
                                           INT xstart, INT ystart, INT xend, INT yend );
 W32KAPI BOOL     WINAPI NtGdiBeginPath( HDC hdc );
-W32KAPI BOOL     WINAPI NtGdiBitBlt( HDC hdc_dst, INT x_dst, INT y_dst, INT width, INT height, HDC hdc_src,
-                                     INT x_src, INT y_src, DWORD rop, DWORD bk_color, FLONG fl );
+W32KAPI BOOL     MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiBitBlt( HDC hdc_dst, INT x_dst, INT y_dst, INT width, INT height, HDC hdc_src,
+                                                                     INT x_src, INT y_src, DWORD rop, DWORD bk_color, FLONG fl );
 W32KAPI BOOL     WINAPI NtGdiCancelDC( HDC hdc );
 W32KAPI BOOL     WINAPI NtGdiCloseFigure( HDC hdc );
 W32KAPI INT      WINAPI NtGdiCombineRgn( HRGN dest, HRGN src1, HRGN src2, INT mode );
@@ -429,9 +438,9 @@ W32KAPI INT      WINAPI NtGdiIntersectClipRect( HDC hdc, INT left, INT top, INT 
 W32KAPI BOOL     WINAPI NtGdiInvertRgn( HDC hdc, HRGN hrgn );
 W32KAPI BOOL     WINAPI NtGdiLineTo( HDC hdc, INT x, INT y );
 W32KAPI ULONG    WINAPI NtGdiMakeFontDir( DWORD embed, BYTE *buffer, UINT size, const WCHAR *path, UINT len );
-W32KAPI BOOL     WINAPI NtGdiMaskBlt( HDC hdc, INT x_dst, INT y_dst, INT width_dst, INT height_dst,
-                                      HDC hdc_src, INT x_src, INT y_src, HBITMAP mask,
-                                      INT x_mask, INT y_mask, DWORD rop, DWORD bk_color );
+W32KAPI BOOL     MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiMaskBlt( HDC hdc, INT x_dst, INT y_dst, INT width_dst, INT height_dst,
+                                                                     HDC hdc_src, INT x_src, INT y_src, HBITMAP mask,
+                                                                     INT x_mask, INT y_mask, DWORD rop, DWORD bk_color );
 W32KAPI BOOL     WINAPI NtGdiModifyWorldTransform( HDC hdc, const XFORM *xform, DWORD mode );
 W32KAPI BOOL     WINAPI NtGdiMoveTo( HDC hdc, INT x, INT y, POINT *pt );
 W32KAPI INT      WINAPI NtGdiOffsetClipRgn( HDC hdc, INT x, INT y );
@@ -441,9 +450,9 @@ W32KAPI HDC      WINAPI NtGdiOpenDCW( UNICODE_STRING *device, const DEVMODEW *de
                                       HANDLE hspool, DRIVER_INFO_2W *driver_info, void *pdev );
 W32KAPI BOOL     WINAPI NtGdiPatBlt( HDC hdc, INT left, INT top, INT width, INT height, DWORD rop );
 W32KAPI HRGN     WINAPI NtGdiPathToRegion( HDC hdc );
-W32KAPI BOOL     WINAPI NtGdiPlgBlt( HDC hdc, const POINT *point, HDC hdc_src, INT x_src, INT y_src,
-                                     INT width, INT height, HBITMAP mask, INT x_mask, INT y_mask,
-                                     DWORD bk_color );
+W32KAPI BOOL     MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiPlgBlt( HDC hdc, const POINT *point, HDC hdc_src, INT x_src, INT y_src,
+                                                                    INT width, INT height, HBITMAP mask, INT x_mask, INT y_mask,
+                                                                    DWORD bk_color );
 W32KAPI BOOL     WINAPI NtGdiPolyDraw(HDC hdc, const POINT *points, const BYTE *types, DWORD count );
 W32KAPI ULONG    WINAPI NtGdiPolyPolyDraw( HDC hdc, const POINT *points, const ULONG *counts,
                                            DWORD count, UINT function );
@@ -476,11 +485,11 @@ W32KAPI BOOL     WINAPI NtGdiSetBitmapDimension( HBITMAP hbitmap, INT x, INT y, 
 W32KAPI BOOL     WINAPI NtGdiSetBrushOrg( HDC hdc, INT x, INT y, POINT *prev_org );
 W32KAPI UINT     WINAPI NtGdiSetBoundsRect( HDC hdc, const RECT *rect, UINT flags );
 W32KAPI BOOL     WINAPI NtGdiSetColorAdjustment( HDC hdc, const COLORADJUSTMENT *ca );
-W32KAPI INT      WINAPI NtGdiSetDIBitsToDeviceInternal( HDC hdc, INT x_dst, INT y_dst, DWORD cx,
-                                                        DWORD cy, INT x_src, INT y_src, UINT startscan,
-                                                        UINT lines, const void *bits, const BITMAPINFO *bmi,
-                                                        UINT coloruse, UINT max_bits, UINT max_info,
-                                                        BOOL xform_coords, HANDLE xform );
+W32KAPI INT      MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiSetDIBitsToDeviceInternal( HDC hdc, INT x_dst, INT y_dst, DWORD cx,
+                                                                                       DWORD cy, INT x_src, INT y_src, UINT startscan,
+                                                                                       UINT lines, const void *bits, const BITMAPINFO *bmi,
+                                                                                       UINT coloruse, UINT max_bits, UINT max_info,
+                                                                                       BOOL xform_coords, HANDLE xform );
 W32KAPI BOOL     WINAPI NtGdiSetDeviceGammaRamp( HDC hdc, void *ptr );
 W32KAPI DWORD    WINAPI NtGdiSetLayout( HDC hdc, LONG wox, DWORD layout );
 W32KAPI BOOL     WINAPI NtGdiSetMagicColors( HDC hdc, DWORD magic, ULONG index );
@@ -495,20 +504,20 @@ W32KAPI BOOL     WINAPI NtGdiSetVirtualResolution( HDC hdc, DWORD horz_res, DWOR
                                                    DWORD horz_size, DWORD vert_size );
 W32KAPI INT      WINAPI NtGdiStartDoc( HDC hdc, const DOCINFOW *doc, BOOL *banding, INT job );
 W32KAPI INT      WINAPI NtGdiStartPage( HDC hdc );
-W32KAPI BOOL     WINAPI NtGdiStretchBlt( HDC hdc, INT x_dst, INT y_dst, INT width_dst, INT height_dst,
-                                         HDC hdc_src, INT x_src, INT y_src, INT width_src, INT height_src,
-                                         DWORD rop, COLORREF bk_color );
-W32KAPI INT      WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT x_dst, INT y_dst, INT width_dst,
-                                                    INT height_dst, INT x_src, INT y_src, INT width_src,
-                                                    INT height_src, const void *bits, const BITMAPINFO *bmi,
-                                                    UINT coloruse, DWORD rop, UINT max_info, UINT max_bits,
-                                                    HANDLE xform );
+W32KAPI BOOL     MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiStretchBlt( HDC hdc, INT x_dst, INT y_dst, INT width_dst, INT height_dst,
+                                                                        HDC hdc_src, INT x_src, INT y_src, INT width_src, INT height_src,
+                                                                        DWORD rop, COLORREF bk_color );
+W32KAPI INT      MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT x_dst, INT y_dst, INT width_dst,
+                                                                                   INT height_dst, INT x_src, INT y_src, INT width_src,
+                                                                                   INT height_src, const void *bits, const BITMAPINFO *bmi,
+                                                                                   UINT coloruse, DWORD rop, UINT max_info, UINT max_bits,
+                                                                                   HANDLE xform );
 W32KAPI BOOL     WINAPI NtGdiStrokeAndFillPath( HDC hdc );
 W32KAPI BOOL     WINAPI NtGdiStrokePath( HDC hdc );
 W32KAPI BOOL     WINAPI NtGdiSwapBuffers( HDC hdc );
-W32KAPI BOOL     WINAPI NtGdiTransparentBlt( HDC hdc, int x_dst, int y_dst, int width_dst, int height_dst,
-                                             HDC hdc_src, int x_src, int y_src, int width_src, int height_src,
-                                             UINT color );
+W32KAPI BOOL     MACRUNNER_ARM64_MS_SYSCALL_ABI WINAPI NtGdiTransparentBlt( HDC hdc, int x_dst, int y_dst, int width_dst, int height_dst,
+                                                                            HDC hdc_src, int x_src, int y_src, int width_src, int height_src,
+                                                                            UINT color );
 W32KAPI BOOL     WINAPI NtGdiTransformPoints( HDC hdc, const POINT *points_in, POINT *points_out,
                                               INT count, UINT mode );
 W32KAPI BOOL     WINAPI NtGdiUnrealizeObject( HGDIOBJ obj );

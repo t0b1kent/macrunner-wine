@@ -163,7 +163,7 @@ DWORD WINAPI NsiEnumerateObjectsAllParameters( DWORD unk, DWORD unk2, const NPI_
 
 DWORD WINAPI NsiEnumerateObjectsAllParametersEx( struct nsi_enumerate_all_ex *params )
 {
-    DWORD out_size, received, err = ERROR_SUCCESS;
+    DWORD out_size, received, err = ERROR_SUCCESS, kopij = 0;
     HANDLE device = get_nsi_device( FALSE );
     struct nsiproxy_enumerate_all in;
     BYTE *out, *ptr;
@@ -191,14 +191,62 @@ DWORD WINAPI NsiEnumerateObjectsAllParametersEx( struct nsi_enumerate_all_ex *pa
     if (err == ERROR_SUCCESS || err == ERROR_MORE_DATA)
     {
         params->count = *(DWORD *)out;
+        /* ★ 01.09.2026 — ОТКУДА НУЛЕВОЙ ИСТОЧНИК КОПИИ.
+         *
+         * Half-Life: отказ в ucrtbase `_memmove+0x4d0`, ЧТЕНИЕ по адресу 0x615/0x616.
+         * memmove при перекрытии копирует с конца, поэтому такой адрес означает
+         * источник около нуля при длине ~0x616. Источник здесь — `out + 4`, а `out`
+         * заведомо не ноль (проверен выше). Значит указатель уезжает арифметикой:
+         * `ptr += размер * in.count`, а `count` приходит ИЗ ДРАЙВЕРА (*(DWORD *)out).
+         * При завышенном count 32-битное сложение заворачивается, и ptr падает к нулю.
+         *
+         * Печатаем числа один раз при явно негодном count — тогда видно, кто врёт:
+         * драйвер или расчёт. Прибор молчит, пока всё в порядке. */
+        {
+            static int skazano;
+            DWORD zapros = in.count;
+
+            /* ★★★★★★ MacRunner 2026-09-01 — ЧТЕНИЕ ЗА КОНЦОМ БУФЕРА.
+             *
+             * `out` выделен под ЗАПРОШЕННОЕ число записей (in.count). При
+             * ERROR_MORE_DATA драйвер кладёт в первое слово ПОЛНОЕ число доступных
+             * записей, и оно бывает больше запрошенного — прибор ловил count=121 при
+             * запрошенных 64. А копирование ниже идёт по `params->count`, то есть по
+             * этому большему числу, из буфера, выделенного под меньшее. Получается
+             * чтение за концом.
+             *
+             * Замер (Half-Life, 5 прогонов из 5, числа совпадают дословно):
+             *   отказ в ucrtbase!_memmove+0x4d0 на `movups (%esi,%edx,4),%xmm0`
+             *   esi=06f974dc edx=0 ecx=13e8, [ebp+4]=78a64ec9 -> nsi!NsiEnumerate...
+             * то есть первое же чтение источника за границей.
+             *
+             * Эталон CrossOver 26.1.0 здесь совпадает с нами дословно, то есть это
+             * недосмотр вышестоящего кода, а не наше расхождение. Ограничиваем копию
+             * тем, что реально влезло в буфер; `params->count` при этом ОСТАЁТСЯ
+             * полным — вызывающий по нему решает, что перезапросить.
+             *
+             * Гейт снят 02.09.2026: выключенная ветка копировала БОЛЬШЕ, чем влезает
+             * в буфер, то есть запись за конец по переменной окружения. Ограничение
+             * безусловно. */
+            if (params->count > zapros)
+            {
+                if (skazano++ < 3)
+                    ERR( "macrunner-nsi-за-концом: count=%lu > просили=%lu, буфер на %lu "
+                         "(key=%lu rw=%lu dyn=%lu stat=%lu out_size=%lu получено=%lu) %s\n",
+                         params->count, zapros, zapros, params->key_size, params->rw_size,
+                         params->dynamic_size, params->static_size, out_size, received,
+                              "-> копируем только влезшее" );
+                kopij = zapros;
+            }
+        }
         ptr = out + sizeof(DWORD);
-        if (params->key_size) memcpy( params->key_data, ptr, params->key_size * params->count );
+        if (params->key_size) memcpy( params->key_data, ptr, params->key_size * kopij );
         ptr += params->key_size * in.count;
-        if (params->rw_size) memcpy( params->rw_data, ptr, params->rw_size * params->count );
+        if (params->rw_size) memcpy( params->rw_data, ptr, params->rw_size * kopij );
         ptr += params->rw_size * in.count;
-        if (params->dynamic_size) memcpy( params->dynamic_data, ptr, params->dynamic_size * params->count );
+        if (params->dynamic_size) memcpy( params->dynamic_data, ptr, params->dynamic_size * kopij );
         ptr += params->dynamic_size * in.count;
-        if (params->static_size) memcpy( params->static_data, ptr, params->static_size * params->count );
+        if (params->static_size) memcpy( params->static_data, ptr, params->static_size * kopij );
     }
 
     free( out );

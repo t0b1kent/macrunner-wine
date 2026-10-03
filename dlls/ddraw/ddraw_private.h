@@ -316,6 +316,16 @@ extern struct ddraw_handle_table global_handle_table;
 
 struct d3d_device
 {
+    /* Счётчики примитивов для GetStats. Раньше он отдавал нули, то есть
+     * приложение, показывающее статистику отрисовки, показывало пустоту даже
+     * когда сцена рисовалась. */
+    D3DSTATS stats;
+
+    /* Статус отсечения, записанный SetClipStatus. Без него Set терял значение,
+     * а Get отдавал границы viewport — то есть приложение читало не своё. */
+    D3DCLIPSTATUS clip_status;
+    BOOL clip_status_set;
+
     /* IUnknown */
     IDirect3DDevice7 IDirect3DDevice7_iface;
     IDirect3DDevice3 IDirect3DDevice3_iface;
@@ -412,6 +422,14 @@ struct ddraw_clipper
     HWND window;
     HRGN region;
     BOOL initialized;
+
+    /* IsClipListChanged возвращал FALSE всегда — приложение, которое на этом
+     * ответе решает, надо ли перечитывать список, не перечитывало его НИКОГДА.
+     * Флаг взводится при смене списка или окна и гасится при чтении; для
+     * оконного клиппера дополнительно сверяем область окна, потому что она
+     * меняется сама, без вызовов к нам. */
+    BOOL clip_list_changed;
+    RECT window_rect_seen;
 };
 
 HRESULT ddraw_clipper_init(struct ddraw_clipper *clipper);
@@ -524,6 +542,12 @@ struct d3d_viewport
 
     DWORD                     active_lights_count;
     DWORD                     map_lights;
+
+    /* Поверхность фоновой глубины (SetBackgroundDepth). Раньше Set её терял, а
+     * Get возвращал valid=FALSE даже сразу после успешной установки — то есть
+     * приложение не могло прочитать то, что само записало. Ссылку держим, пока
+     * поверхность назначена: иначе она могла бы освободиться у нас под руками. */
+    IDirectDrawSurface       *background_depth;
 
     enum ddraw_viewport_version version;
 

@@ -278,6 +278,31 @@ NTSTATUS WINAPI wow64_NtOpenKey( UINT *args )
     *handle_ptr = 0;
     status = NtOpenKey( &handle, access, objattr_32to64( &attr, attr32 ));
     put_handle( handle_ptr, handle );
+    /* Итерация 295: релиз GOG защиты диска не несёт, значит диалог «вставьте диск» вызван
+     * НЕНАЙДЕННЫМ путём установки, который Diablo держит в реестре. Печатаем имена ключей,
+     * которые гость открывает, и статус — это назовёт недостающую запись. */
+    {
+        static LONG rk_n;
+        LONG k = InterlockedIncrement( &rk_n );
+        if (k <= 400 && attr32)
+        {
+            UNICODE_STRING32 *n32 = attr32->ObjectName ? (UNICODE_STRING32 *)ULongToPtr( attr32->ObjectName ) : NULL;
+            (void)n32;
+            if (attr.attr.ObjectName && attr.attr.ObjectName->Buffer)
+            {
+                char buf[260];
+                unsigned int i, n = attr.attr.ObjectName->Length / sizeof(WCHAR);
+                if (n > sizeof(buf) - 1) n = sizeof(buf) - 1;
+                for (i = 0; i < n; i++)
+                {
+                    WCHAR c = attr.attr.ObjectName->Buffer[i];
+                    buf[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '?';
+                }
+                buf[n] = 0;
+                MESSAGE( "macrunner-regkey: n=%d status=%08x имя=%s\n", (int)k, (unsigned)status, buf );
+            }
+        }
+    }
     return status;
 }
 
@@ -299,6 +324,31 @@ NTSTATUS WINAPI wow64_NtOpenKeyEx( UINT *args )
     *handle_ptr = 0;
     status = NtOpenKeyEx( &handle, access, objattr_32to64( &attr, attr32 ), options );
     put_handle( handle_ptr, handle );
+    /* Итерация 295: релиз GOG защиты диска не несёт, значит диалог «вставьте диск» вызван
+     * НЕНАЙДЕННЫМ путём установки, который Diablo держит в реестре. Печатаем имена ключей,
+     * которые гость открывает, и статус — это назовёт недостающую запись. */
+    {
+        static LONG rk_n;
+        LONG k = InterlockedIncrement( &rk_n );
+        if (k <= 400 && attr32)
+        {
+            UNICODE_STRING32 *n32 = attr32->ObjectName ? (UNICODE_STRING32 *)ULongToPtr( attr32->ObjectName ) : NULL;
+            (void)n32;
+            if (attr.attr.ObjectName && attr.attr.ObjectName->Buffer)
+            {
+                char buf[260];
+                unsigned int i, n = attr.attr.ObjectName->Length / sizeof(WCHAR);
+                if (n > sizeof(buf) - 1) n = sizeof(buf) - 1;
+                for (i = 0; i < n; i++)
+                {
+                    WCHAR c = attr.attr.ObjectName->Buffer[i];
+                    buf[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '?';
+                }
+                buf[n] = 0;
+                MESSAGE( "macrunner-regkey: n=%d status=%08x имя=%s\n", (int)k, (unsigned)status, buf );
+            }
+        }
+    }
     return status;
 }
 
@@ -391,8 +441,32 @@ NTSTATUS WINAPI wow64_NtQueryValueKey( UINT *args )
     ULONG *retlen = get_ptr( &args );
 
     UNICODE_STRING str;
+    NTSTATUS status;
+    UNICODE_STRING *name;
 
-    return NtQueryValueKey( handle, unicode_str_32to64( &str, str32 ), class, ptr, len, retlen );
+    name = unicode_str_32to64( &str, str32 );
+    status = NtQueryValueKey( handle, name, class, ptr, len, retlen );
+    /* Итерация 296: ключ Software\\Blizzard Entertainment\\Internal создан и теперь
+     * открывается, а диалог остался — значит недостаёт ЗНАЧЕНИЯ внутри. Печатаем имя
+     * значения и статус: это назовёт недостающую запись, а не догадку о ней. */
+    {
+        static LONG qv_n;
+        LONG k = InterlockedIncrement( &qv_n );
+        if (k <= 400 && name && name->Buffer)
+        {
+            char buf[160];
+            unsigned int i, n = name->Length / sizeof(WCHAR);
+            if (n > sizeof(buf) - 1) n = sizeof(buf) - 1;
+            for (i = 0; i < n; i++)
+            {
+                WCHAR c = name->Buffer[i];
+                buf[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '?';
+            }
+            buf[n] = 0;
+            MESSAGE( "macrunner-regval: n=%d status=%08x значение=%s\n", (int)k, (unsigned)status, buf );
+        }
+    }
+    return status;
 }
 
 

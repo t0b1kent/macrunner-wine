@@ -27,6 +27,12 @@
 #include "config.h"
 
 #include <poll.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -35,6 +41,256 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(event);
 WINE_DECLARE_DEBUG_CHANNEL(imm);
+
+static BOOL trace_ui_input_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
+
+static unsigned long long trace_ui_input_tid(void)
+{
+    uint64_t tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    return tid;
+}
+
+/* MacRunner: bounded ProcessEvents drain probe.
+ *
+ * Why this exists as a SEPARATE, bounded probe rather than reusing
+ * ProcessEvents_enter/_exit above: those two fprintf+fflush on EVERY call, i.e. at
+ * least twice per frame in a Unity message loop, which is a multi-hundred-MB log and
+ * a real slowdown on a boot that is already throughput-starved.  So the broad gate can
+ * never be turned on for a full-length Hollow Knight run — and that is exactly the run
+ * where the question has to be answered.
+ *
+ * The question: cocoa_window.m's postKeyEvent: puts the key on a SPECIFIC queue (it
+ * prints `postKey_posted … queue=%p`), and only the thread that owns that queue will
+ * ever dequeue it.  HK's window is realized on demand from DXMT's get_win_data, i.e.
+ * on whichever thread first asks for it — not necessarily the thread that pumps
+ * messages.  "Nobody drains that queue" and "the guest never pumps at all" and "it was
+ * drained but the key was never posted" are three different bugs with three different
+ * fixes, and until now they were indistinguishable, because macdrv_key_event=0 is
+ * consistent with all three.
+ *
+ * Bounding: one line per (tid, queue) pair on first sight, then at log-spaced call
+ * counts, so a full boot costs ~7 lines per pumping thread.  Key dequeues are printed
+ * unconditionally because they are rare and are the whole point. */
+static BOOL macrunner_drain_probe_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *value = getenv("MACRUNNER_TRACE_WINEMAC_DRAIN");
+
+        if (value) enabled = value[0] && value[0] != '0';
+        else enabled = getenv("MACRUNNER_TRACE_WINEMAC_KEYS") != NULL ||
+                       getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL;
+    }
+    return enabled;
+}
+
+/* MacRunner 2026-07-29 (HK master lane iter 9) — call-count spacing alone CANNOT answer the
+ * question this probe was built for, so it now also buckets by TIME and reports the mask.
+ *
+ * Measured on the two runs that carry the whole ladder (HK-E2E-24-WIN32UHOOK-t1 and
+ * BLACKFRAME-DRAWTRACE): keys reach -[WineWindow postKeyEvent:] and are posted to the queue
+ * (postKey_posted 18 and 15) on exactly the queue this drain probe shows being drained by a
+ * live thread of the same pid -- and ProcessEvents_key_dequeued is 0, macdrv_key_event is 0.
+ * So the key is on the right queue, the owning thread exists, and nothing ever copies it out.
+ *
+ * Exactly two things do that, and the old probe could not tell them apart:
+ *   (a) the thread stops calling macdrv_ProcessEvents before the key is posted;
+ *   (b) it keeps calling, but with event_mask == 0 -- either because the caller's mask has no
+ *       QS_KEY, or because the nested-event guard below zeroes event_mask wholesale whenever
+ *       data->current_event is set.  In case (b) the while loop copies nothing, count stays 0,
+ *       and the log looks identical to (a).
+ * Log spacing hid this: BLACKFRAME printed calls=1/10/100 at t=821.8/831.8/837.8 and then
+ * nothing, because reaching calls=1000 would have taken longer than the run -- while the first
+ * key was posted at t=847.2.  "Silent because stopped" and "silent because still climbing to
+ * the next decade" are not distinguishable from that.
+ *
+ * A 10-second bucket makes an ALIVE pump visible at ~1 line per thread per 10 s (about 110
+ * lines across a full boot -- same order as the existing spacing, nowhere near per-frame), and
+ * mask/event_mask/current name (b) directly.  Still behind the same gate. */
+#define MACRUNNER_DRAIN_BUCKET_SECS 10
+
+static void macrunner_note_drain(void *queue, int fd, int count, DWORD mask,
+                                 unsigned long long event_mask, const void *current)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    static struct { unsigned long long tid; void *queue; unsigned long long calls;
+                    long long bucket; } seen[64];
+    static unsigned int used;
+    unsigned long long tid = trace_ui_input_tid();
+    unsigned long long calls;
+    BOOL first = FALSE, new_bucket = FALSE;
+    long long bucket = 0;
+    struct timespec ts;
+    unsigned int i;
+
+    if (!macrunner_drain_probe_enabled()) return;
+
+    if (!clock_gettime(CLOCK_MONOTONIC, &ts))
+        bucket = (long long)ts.tv_sec / MACRUNNER_DRAIN_BUCKET_SECS;
+
+    pthread_mutex_lock(&lock);
+    for (i = 0; i < used; i++)
+        if (seen[i].tid == tid && seen[i].queue == queue) break;
+    if (i == used)
+    {
+        if (used >= 64) { pthread_mutex_unlock(&lock); return; }
+        seen[used].tid = tid;
+        seen[used].queue = queue;
+        seen[used].calls = 0;
+        seen[used].bucket = bucket - 1;
+        used++;
+        first = TRUE;
+    }
+    calls = ++seen[i].calls;
+    if (seen[i].bucket != bucket)
+    {
+        seen[i].bucket = bucket;
+        new_bucket = TRUE;
+    }
+    pthread_mutex_unlock(&lock);
+
+    if (first || new_bucket || calls == 10 || calls == 100 || calls == 1000 ||
+        calls == 10000 || calls == 100000 || calls == 1000000)
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=ProcessEvents_drain pid=%d tid=%llu queue=%p fd=%d "
+                "calls=%llu handled=%d mask=0x%x event_mask=0x%llx current=%p qs_key=%d\n",
+                getpid(), tid, queue, fd, calls, count, (unsigned int)mask, event_mask, current,
+                (int)((mask & QS_KEY) != 0));
+        fflush(stderr);
+    }
+}
+
+static BOOL return_route_observer_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *value = getenv("MACRUNNER_HB_RETURN_ROUTE_OBSERVER");
+        enabled = value && value[0] && value[0] != '0';
+    }
+    return enabled;
+}
+
+BOOL macdrv_return_route_focus_milestones_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *value = getenv("MACRUNNER_HB_RETURN_ROUTE_FOCUS_MILESTONES");
+        enabled = value && value[0] && value[0] != '0';
+    }
+    return enabled;
+}
+
+static unsigned int return_route_observer_limit(void)
+{
+    static unsigned int limit;
+
+    if (!limit)
+    {
+        const char *value = getenv("MACRUNNER_HB_RETURN_ROUTE_OBSERVER_MAX");
+        char *end;
+        unsigned long parsed = value ? strtoul(value, &end, 10) : 0;
+
+        limit = value && end != value && !*end && parsed && parsed <= 256 ? parsed : 64;
+    }
+    return limit;
+}
+
+void macdrv_return_route_observe(const char *stage, void *hwnd, macdrv_window window,
+                                 unsigned int keycode, unsigned int vkey, int pressed,
+                                 unsigned int flags, unsigned int event_time)
+{
+    static unsigned int records;
+    struct macdrv_return_route_window_state cocoa_state;
+    GUITHREADINFO gui_info = { sizeof(gui_info) };
+    struct timespec now;
+    DWORD gui_tid = 0;
+    DWORD wine_tid = 0;
+    HWND foreground = NULL;
+    unsigned int ordinal;
+    const char *direction;
+
+    if (!return_route_observer_enabled()) return;
+    if (keycode != 36 && vkey != VK_RETURN) return;
+    ordinal = __atomic_add_fetch(&records, 1, __ATOMIC_RELAXED);
+    if (ordinal > return_route_observer_limit()) return;
+    memset(&cocoa_state, 0, sizeof(cocoa_state));
+    macdrv_get_return_route_window_state(window, &cocoa_state);
+    if (pthread_main_np())
+    {
+        /* win32u queries from the main run-loop thread cross the arm64x
+           import-thunk SIGILL routing and freeze the loop while a guest
+           thread waits in _MetalLayer_setProps dispatch_sync (2026-07-20 boot
+           deadlock). GUI focus/active/foreground stay zero here; the managed
+           unity-selection event carries the matching Win32 focus proof.
+
+           ★ 2026-07-29 (HK E2E lane), MEASURED, NOT DEDUCED: GetCurrentThreadId()
+           belongs in this branch too, and leaving it out of it wedged Hollow Knight
+           six runs out of six.  It expands to
+           HandleToULong(NtCurrentTeb()->ClientId.UniqueThread) -- an imported
+           NtCurrentTeb() call followed by a load at TEB+0x48 -- and the Cocoa main
+           thread is NOT a Wine thread: `main -> __wine_main -> CFRunLoopRun` parks
+           the process's original thread in the run loop while Wine's own threads are
+           created separately, so it has no TEB and that load faults.  HyperBridge's
+           fault handler then never returns
+           (macrunner_hb_primary_signal_handler -> route_x64_callback_fault ->
+           redirect_arm64x_hexpthk_sigill -> pc_is_x64_guest_code_module_no_lock ->
+           pc_in_graphics_arm64x_x64_range -> ldr_entry_from_pc, identical PC
+           0x1148c5d68 in three samples 15 minutes apart, ~107 % CPU throughout).
+
+           Because [NSApp run] lives on that same thread, losing it kills the whole
+           process: every subsequent dispatch_sync onto the main queue -- which is how
+           DXMT sets Metal layer properties -- blocks forever.  Signature in the logs
+           was `wine_window_keyDown keycode=36` with NO matching `postKey_posted`,
+           in exactly the runs where a Return key reached the Cocoa thread; keycode
+           125 (arrow) posts cleanly every time because the keycode filter above
+           returns before this point.  See
+           reports/phase4-hollow-knight/HK-E2E-19-STALL-SAMPLE/. */
+    }
+    else
+    {
+        wine_tid = GetCurrentThreadId();
+        if (hwnd && (gui_tid = NtUserGetWindowThread(hwnd, NULL)))
+            NtUserGetGUIThreadInfo(gui_tid, &gui_info);
+        foreground = NtUserGetForegroundWindow();
+    }
+    direction = pressed < 0 ? "proof" : pressed ? "down" : "up";
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    fprintf(stderr,
+            "macrunner-return-route: stage=%s seq=%u pid=%d native_tid=%llu wine_tid=%lu "
+            "hwnd=%p keycode=%u vkey=0x%x direction=%s flags=0x%x event_time=%u "
+            "monotonic_ns=%llu cocoa_window_id=%llu cocoa_hwnd=%p mapping=%d "
+            "foreground_hwnd=%p active_hwnd=%p focus_hwnd=%p gui_wine_tid=%lu "
+            "nsapp_active=%d nswindow_key=%d nswindow_main=%d "
+            "key_window_id=%llu key_window_hwnd=%p main_window_id=%llu main_window_hwnd=%p\n",
+            stage, ordinal, getpid(), trace_ui_input_tid(), (unsigned long)wine_tid,
+            hwnd, keycode, vkey, direction, flags, event_time,
+            (unsigned long long)now.tv_sec * 1000000000ull + now.tv_nsec,
+            cocoa_state.cocoa_window_id, cocoa_state.window_hwnd,
+            hwnd && cocoa_state.window_hwnd == hwnd,
+            foreground, gui_info.hwndActive, gui_info.hwndFocus,
+            (unsigned long)gui_tid, cocoa_state.app_active, cocoa_state.window_key,
+            cocoa_state.window_main, cocoa_state.key_window_id,
+            cocoa_state.key_window_hwnd, cocoa_state.main_window_id,
+            cocoa_state.main_window_hwnd);
+    fflush(stderr);
+}
 
 pthread_mutex_t ime_composition_rect_mutex = PTHREAD_MUTEX_INITIALIZER;
 CGRect ime_composition_rect;
@@ -78,6 +334,7 @@ static const char *dbgstr_event(int type)
         "WINDOW_MINIMIZE_REQUESTED",
         "WINDOW_RESIZE_ENDED",
         "WINDOW_RESTORE_REQUESTED",
+        "MACRUNNER_WINSHOW_ACTIVATE",
     };
     C_ASSERT(ARRAYSIZE(event_names) == NUM_EVENT_TYPES);
 
@@ -134,6 +391,7 @@ static macdrv_event_mask get_event_mask(DWORD mask)
         event_mask |= event_mask_for_type(WINDOW_FRAME_CHANGED);
         event_mask |= event_mask_for_type(WINDOW_GOT_FOCUS);
         event_mask |= event_mask_for_type(WINDOW_LOST_FOCUS);
+        event_mask |= event_mask_for_type(MACRUNNER_WINSHOW_ACTIVATE);
     }
 
     if (mask & QS_SENDMESSAGE)
@@ -385,6 +643,15 @@ void macdrv_handle_event(const macdrv_event *event)
     TRACE("%s for hwnd/window %p/%p\n", dbgstr_event(event->type), hwnd,
           event->window);
 
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=macdrv_handle_event_enter pid=%d type=%d/%s hwnd=%p window=%p current=%p\n",
+                getpid(), event->type, dbgstr_event(event->type), hwnd, event->window,
+                thread_data ? thread_data->current_event : NULL);
+        fflush(stderr);
+    }
+
     prev = thread_data->current_event;
     thread_data->current_event = event;
 
@@ -400,7 +667,11 @@ void macdrv_handle_event(const macdrv_event *event)
         macdrv_app_quit_requested(event);
         break;
     case CLIENT_SURFACE_PRESENTED:    /* CW HACK 22435 */
+#if defined(__x86_64__)
 	macdrv_client_surface_presented(event);
+#else
+	/* MacRunner: D3DMetal-only event; not delivered on arm64 host. */
+#endif
 	break;
     case DISPLAYS_CHANGED:
         macdrv_displays_changed(event);
@@ -417,6 +688,9 @@ void macdrv_handle_event(const macdrv_event *event)
         break;
     case KEY_PRESS:
     case KEY_RELEASE:
+        macdrv_return_route_observe("macdrv-event-dequeue", hwnd, event->window,
+                                    event->key.keycode, 0, event->type == KEY_PRESS,
+                                    event->key.modifiers, event->key.time_ms);
         macdrv_key_event(hwnd, event);
         break;
     case KEYBOARD_CHANGED:
@@ -426,6 +700,14 @@ void macdrv_handle_event(const macdrv_event *event)
         macdrv_lost_pasteboard_ownership(hwnd);
         break;
     case MOUSE_BUTTON:
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=macdrv_handle_event_mouse hwnd=%p window=%p button=%d pressed=%d x=%d y=%d\n",
+                    hwnd, event->window, event->mouse_button.button, event->mouse_button.pressed,
+                    event->mouse_button.x, event->mouse_button.y);
+            fflush(stderr);
+        }
         macdrv_mouse_button(hwnd, event);
         break;
     case MOUSE_MOVED_RELATIVE:
@@ -474,9 +756,15 @@ void macdrv_handle_event(const macdrv_event *event)
         break;
     case WINDOW_GOT_FOCUS:
         macdrv_window_got_focus(hwnd, event);
+        if (macdrv_return_route_focus_milestones_enabled())
+            macdrv_return_route_observe("macdrv-focus-state", hwnd, event->window,
+                                        36, 0, -1, 0, 0);
         break;
     case WINDOW_LOST_FOCUS:
         macdrv_window_lost_focus(hwnd, event);
+        if (macdrv_return_route_focus_milestones_enabled())
+            macdrv_return_route_observe("macdrv-focus-state", hwnd, event->window,
+                                        36, 0, -1, 0, 0);
         break;
     case WINDOW_MAXIMIZE_REQUESTED:
         macdrv_window_maximize_requested(hwnd);
@@ -490,12 +778,22 @@ void macdrv_handle_event(const macdrv_event *event)
     case WINDOW_RESTORE_REQUESTED:
         macdrv_window_restore_requested(hwnd, event);
         break;
+    case MACRUNNER_WINSHOW_ACTIVATE:
+        macdrv_winshow_activate(hwnd);
+        break;
     default:
         TRACE("    ignoring\n");
         break;
     }
 
     thread_data->current_event = prev;
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=macdrv_handle_event_exit pid=%d type=%d/%s hwnd=%p window=%p restored=%p\n",
+                getpid(), event->type, dbgstr_event(event->type), hwnd, event->window, prev);
+        fflush(stderr);
+    }
 }
 
 
@@ -515,10 +813,29 @@ BOOL macdrv_ProcessEvents(DWORD mask)
     macdrv_event_mask event_mask = get_event_mask(mask);
     macdrv_event *event;
     int count = 0;
+    BOOL ret;
 
     TRACE("mask %x\n", mask);
 
-    if (!data) return FALSE;
+    if (!data)
+    {
+        /* This early return sits ABOVE the drain probe at the bottom, so without a note
+         * here "HK never pumps messages" and "HK pumps but the pumping thread never ran
+         * macdrv_init_thread_data" would both show up as zero drain lines — two different
+         * bugs with two different fixes, which is the exact ambiguity this probe exists to
+         * remove. queue=(nil)/fd=-1/handled=-1 is the no-thread-data signature. */
+        macrunner_note_drain(NULL, -1, -1, mask, (unsigned long long)event_mask, NULL);
+        return FALSE;
+    }
+
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=ProcessEvents_enter pid=%d tid=%llu mask=0x%x event_mask=0x%llx queue=%p fd=%d current=%p\n",
+                getpid(), trace_ui_input_tid(), mask, (unsigned long long)event_mask, data->queue,
+                macdrv_get_event_queue_fd(data->queue), data->current_event);
+        fflush(stderr);
+    }
 
     if (data->current_event && data->current_event->type != QUERY_EVENT &&
         data->current_event->type != QUERY_EVENT_NO_PREEMPT_WAIT &&
@@ -528,11 +845,47 @@ BOOL macdrv_ProcessEvents(DWORD mask)
 
     while (macdrv_copy_event_from_queue(data->queue, event_mask, &event))
     {
+        if (macrunner_drain_probe_enabled() &&
+            (event->type == KEY_PRESS || event->type == KEY_RELEASE))
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=ProcessEvents_key_dequeued pid=%d tid=%llu queue=%p type=%d/%s window=%p\n",
+                    getpid(), trace_ui_input_tid(), data->queue, event->type,
+                    dbgstr_event(event->type), event->window);
+            fflush(stderr);
+        }
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=ProcessEvents_dequeue pid=%d count=%d event=%p type=%d/%s\n",
+                    getpid(), count + 1, event, event->type, dbgstr_event(event->type));
+            fflush(stderr);
+        }
         count++;
         macdrv_handle_event(event);
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=ProcessEvents_handled pid=%d count=%d event=%p type=%d/%s\n",
+                    getpid(), count, event, event->type, dbgstr_event(event->type));
+            fflush(stderr);
+        }
         macdrv_release_event(event);
     }
 
     if (count) TRACE("processed %d events\n", count);
-    return mask == QS_ALLINPUT && !check_fd_events(macdrv_get_event_queue_fd(data->queue), POLLIN);
+    /* event_mask is read AFTER the nested-event guard above, so a 0 here names that guard (or a
+     * caller mask without QS_KEY) as the reason nothing was copied out -- see the probe header. */
+    macrunner_note_drain(data->queue, macdrv_get_event_queue_fd(data->queue), count, mask,
+                         (unsigned long long)event_mask, data->current_event);
+    ret = mask == QS_ALLINPUT && !check_fd_events(macdrv_get_event_queue_fd(data->queue), POLLIN);
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=ProcessEvents_exit pid=%d tid=%llu count=%d ret=%d fd_pending=%d\n",
+                getpid(), trace_ui_input_tid(), count, ret,
+                check_fd_events(macdrv_get_event_queue_fd(data->queue), POLLIN));
+        fflush(stderr);
+    }
+    return ret;
 }

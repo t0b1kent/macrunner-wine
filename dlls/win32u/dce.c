@@ -913,8 +913,8 @@ void process_surface_message( struct flush_shm_surface_params *params )
 
     TRACE( "Flushing %p window surface %s\n", hwnd, wine_dbgstr_rect( &params->bounds ));
 
-    status = NtMapViewOfSection( mapping, GetCurrentProcess(), (void**)&bits,
-                                 0, 0, NULL, &view_size, ViewShare, 0, PAGE_READONLY );
+    status = win32u_map_view_of_section( mapping, GetCurrentProcess(), (void **)&bits,
+                                         0, 0, NULL, &view_size, ViewShare, 0, PAGE_READONLY );
     if (!bits)
     {
         ERR( "NtMapViewOfSection failed: %x\n", status );

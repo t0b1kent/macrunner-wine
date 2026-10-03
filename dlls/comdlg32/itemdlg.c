@@ -19,6 +19,7 @@
  */
 
 #include <stdarg.h>
+#include <stdio.h>
 
 #define COBJMACROS
 #include "windef.h"
@@ -1989,7 +1990,7 @@ static HRESULT init_explorerbrowser(FileDialogImpl *This)
 
     /* Browse somewhere */
     psi_folder = This->psi_setfolder ? This->psi_setfolder : This->psi_defaultfolder;
-    IExplorerBrowser_BrowseToObject(This->peb, (IUnknown*)psi_folder, SBSP_DEFBROWSER);
+    hr = IExplorerBrowser_BrowseToObject(This->peb, (IUnknown*)psi_folder, SBSP_DEFBROWSER);
 
     return S_OK;
 }
@@ -3602,6 +3603,8 @@ static HRESULT WINAPI IServiceProvider_fnQueryService(IServiceProvider *iface,
         hr = IExplorerBrowser_QueryInterface(This->peb, riid, ppv);
     else if(IsEqualGUID(guidService, &SID_SExplorerBrowserFrame))
         hr = IFileDialog2_QueryInterface(&This->IFileDialog2_iface, riid, ppv);
+    else if(IsEqualGUID(guidService, &SID_ExplorerPaneVisibility))
+        hr = E_NOINTERFACE;
     else
         FIXME("Interface %s requested from unknown service %s\n",
               debugstr_guid(riid), debugstr_guid(guidService));

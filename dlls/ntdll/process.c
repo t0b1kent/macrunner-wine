@@ -345,7 +345,7 @@ void WINAPI RtlOpenCrossProcessEmulatorWorkConnection( HANDLE process, HANDLE *s
     if (NtDuplicateObject( process, handle, GetCurrentProcess(), section, 0, 0, DUPLICATE_SAME_ACCESS ))
         return;
 
-    if (!NtMapViewOfSection( *section, GetCurrentProcess(), addr, 0, 0, NULL,
+    if (!WINE_NT_MAP_VIEW( *section, GetCurrentProcess(), addr, 0, 0, NULL,
                              &size, ViewShare, 0, PAGE_READWRITE )) return;
 
     NtClose( *section );

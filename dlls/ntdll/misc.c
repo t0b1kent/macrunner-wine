@@ -230,13 +230,29 @@ void * __cdecl _lfind( const void *key, const void *base, unsigned int *nmemb,
     return NULL;
 }
 
+/*********************************************************************
+ *          WinSqmAddToStream (NTDLL.@)
+ */
+void WINAPI WinSqmAddToStream(DWORD unk1, DWORD unk2, DWORD unk3, const void *unk4)
+{
+    TRACE("(%ld, %ld, %ld, %p)\n", unk1, unk2, unk3, unk4);
+}
+
+/*********************************************************************
+ *          WinSqmAddToStreamEx (NTDLL.@)
+ */
+void WINAPI WinSqmAddToStreamEx(DWORD unk1, DWORD unk2, DWORD unk3, DWORD unk4, const void *unk5)
+{
+    TRACE("(%ld, %ld, %ld, %ld, %p)\n", unk1, unk2, unk3, unk4, unk5);
+}
+
 /******************************************************************************
  *                  WinSqmEndSession   (NTDLL.@)
  */
 NTSTATUS WINAPI WinSqmEndSession(HANDLE session)
 {
-    FIXME("(%p): stub\n", session);
-    return STATUS_NOT_IMPLEMENTED;
+    TRACE("(%p)\n", session);
+    return STATUS_SUCCESS;
 }
 
 /*********************************************************************
@@ -244,7 +260,7 @@ NTSTATUS WINAPI WinSqmEndSession(HANDLE session)
  */
 void WINAPI WinSqmIncrementDWORD(DWORD unk1, DWORD unk2, DWORD unk3)
 {
-    FIXME("(%ld, %ld, %ld): stub\n", unk1, unk2, unk3);
+    TRACE("(%ld, %ld, %ld)\n", unk1, unk2, unk3);
 }
 
 /*********************************************************************
@@ -252,7 +268,7 @@ void WINAPI WinSqmIncrementDWORD(DWORD unk1, DWORD unk2, DWORD unk3)
  */
 BOOL WINAPI WinSqmIsOptedIn(void)
 {
-    FIXME("(): stub\n");
+    TRACE("()\n");
     return FALSE;
 }
 
@@ -261,7 +277,7 @@ BOOL WINAPI WinSqmIsOptedIn(void)
  */
 HANDLE WINAPI WinSqmStartSession(GUID *sessionguid, DWORD sessionid, DWORD unknown1)
 {
-    FIXME("(%p, 0x%lx, 0x%lx): stub\n", sessionguid, sessionid, unknown1);
+    TRACE("(%p, 0x%lx, 0x%lx)\n", sessionguid, sessionid, unknown1);
     return INVALID_HANDLE_VALUE;
 }
 
@@ -270,7 +286,7 @@ HANDLE WINAPI WinSqmStartSession(GUID *sessionguid, DWORD sessionid, DWORD unkno
  */
 void WINAPI WinSqmSetDWORD(HANDLE session, DWORD datapoint_id, DWORD datapoint_value)
 {
-    FIXME("(%p, %ld, %ld): stub\n", session, datapoint_id, datapoint_value);
+    TRACE("(%p, %ld, %ld)\n", session, datapoint_id, datapoint_value);
 }
 
 /******************************************************************************
@@ -278,7 +294,7 @@ void WINAPI WinSqmSetDWORD(HANDLE session, DWORD datapoint_id, DWORD datapoint_v
  */
 void WINAPI WinSqmSetIfMaxDWORD(DWORD unk1, DWORD unk2, DWORD unk3)
 {
-    FIXME("(0x%lx, 0x%lx, 0x%lx): stub\n", unk1, unk2, unk3);
+    TRACE("(0x%lx, 0x%lx, 0x%lx)\n", unk1, unk2, unk3);
 }
 
 /******************************************************************************

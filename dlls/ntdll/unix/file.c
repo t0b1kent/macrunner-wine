@@ -126,6 +126,199 @@
 WINE_DEFAULT_DEBUG_CHANNEL(file);
 WINE_DECLARE_DEBUG_CHANNEL(winediag);
 
+static BOOL macrunner_trace_fileinfo_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled == -1) enabled = !!getenv("MACRUNNER_TRACE_FILEINFO");
+    return enabled;
+}
+
+static BOOL macrunner_trace_file_name_interesting( const UNICODE_STRING *name )
+{
+    static const WCHAR langs_xml[] = {'l','a','n','g','s','.','x','m','l',0};
+    static const WCHAR config_xml[] = {'c','o','n','f','i','g','.','x','m','l',0};
+    static const WCHAR langs_model_xml[] =
+        {'l','a','n','g','s','.','m','o','d','e','l','.','x','m','l',0};
+    const WCHAR *str;
+    unsigned int len;
+
+    if (!macrunner_trace_fileinfo_enabled() || !name || !name->Buffer) return FALSE;
+    /* MacRunner 2026-08-16, лейн ЛЕСТНИЦА, итерация 1277 — режим «ВСЕ ИМЕНА».
+     *
+     * `MACRUNNER_TRACE_FILEINFO=2` пропускает первые 300 открытий БЕЗ фильтра по имени. Нужен
+     * для решающей проверки: зонд по имени `version.dll` не дал НИ ОДНОЙ строки (итерация 1276),
+     * при том что гость проверку `file != INVALID_HANDLE_VALUE` не провалил. Отсутствие строки
+     * можно объяснить двояко — открытия не было ИЛИ фильтр не сработал. Режим «все имена»
+     * различает эти случаи за один прогон, а `NtOpenFile` отдельного пути не имеет: он просто
+     * зовёт `NtCreateFile` (`file.c:4966`), значит покрытие полное. */
+    {
+        static int all_mode = -1;
+        static unsigned all_left;
+
+        if (all_mode < 0) {
+            const char *v = getenv("MACRUNNER_TRACE_FILEINFO");
+            all_mode = (v && v[0] == '2');
+            all_left = 20000;   /* 300 не хватало: нужный тест идёт поздно (итерация 1277) */
+        }
+        if (all_mode && all_left) { all_left--; return TRUE; }
+    }
+    str = name->Buffer;
+    len = name->Length / sizeof(WCHAR);
+    while (len && (str[len - 1] == 0 || str[len - 1] == '\\' || str[len - 1] == '/')) len--;
+
+    if (len >= ARRAY_SIZE(langs_xml) - 1 &&
+        !wcsicmp( str + len - (ARRAY_SIZE(langs_xml) - 1), langs_xml )) return TRUE;
+    if (len >= ARRAY_SIZE(config_xml) - 1 &&
+        !wcsicmp( str + len - (ARRAY_SIZE(config_xml) - 1), config_xml )) return TRUE;
+    if (len >= ARRAY_SIZE(langs_model_xml) - 1 &&
+        !wcsicmp( str + len - (ARRAY_SIZE(langs_model_xml) - 1), langs_model_xml )) return TRUE;
+    /* MacRunner 2026-08-16, лейн ЛЕСТНИЦА, итерация 1276 — добавлено `version.dll`.
+     *
+     * Ступень 9: два создания секции отказывают с `c0000008`, и описатель у них негоден
+     * (`0x6f4000000000`), тогда как у 93 успешных он вида `0x8`…`0x28`. Вызывающий один и тот же
+     * (`__wine_syscall_dispatcher + 0x164`), значит значение приходит негодным ИЗВНЕ. Открывается
+     * при этом именно `version.dll` — обе копии, `system32` и `syswow64`. Эта строка даёт увидеть,
+     * КАКОЙ описатель гость получил при открытии, и сравнить с тем, что дошло до `NtCreateSection`.
+     * Гейт прежний: `MACRUNNER_TRACE_FILEINFO`, умолчание ВЫКЛ. */
+    {
+        static const WCHAR version_dll[] = {'v','e','r','s','i','o','n','.','d','l','l',0};
+
+        if (len >= ARRAY_SIZE(version_dll) - 1 &&
+            !wcsicmp( str + len - (ARRAY_SIZE(version_dll) - 1), version_dll )) return TRUE;
+    }
+    return FALSE;
+}
+
+#define MACRUNNER_SCENE_LOADING_PROBE_DEFAULT_MAX 4096
+
+static BOOL macrunner_scene_loading_probe_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *value = getenv( "MACRUNNER_HB_SCENE_LOADING_PROBE" );
+        enabled = value && value[0] && value[0] != '0';
+    }
+    return enabled;
+}
+
+static unsigned int macrunner_scene_loading_probe_max(void)
+{
+    static unsigned int limit;
+
+    if (!limit)
+    {
+        const char *value = getenv( "MACRUNNER_HB_SCENE_LOADING_PROBE_MAX" );
+        unsigned long parsed = value ? strtoul( value, NULL, 10 ) : 0;
+
+        limit = parsed && parsed <= UINT_MAX ? parsed : MACRUNNER_SCENE_LOADING_PROBE_DEFAULT_MAX;
+    }
+    return limit;
+}
+
+static WCHAR macrunner_scene_loading_ascii_tolower( WCHAR ch )
+{
+    if (ch >= 'A' && ch <= 'Z') return ch + ('a' - 'A');
+    return ch;
+}
+
+static BOOL macrunner_scene_loading_name_contains( const UNICODE_STRING *name, const char *needle )
+{
+    unsigned int i, j, name_len, needle_len = strlen( needle );
+
+    if (!name || !name->Buffer || !needle_len) return FALSE;
+    name_len = name->Length / sizeof(WCHAR);
+    if (needle_len > name_len) return FALSE;
+
+    for (i = 0; i <= name_len - needle_len; i++)
+    {
+        for (j = 0; j < needle_len; j++)
+            if (macrunner_scene_loading_ascii_tolower( name->Buffer[i + j] ) !=
+                macrunner_scene_loading_ascii_tolower( (unsigned char)needle[j] )) break;
+        if (j == needle_len) return TRUE;
+    }
+    return FALSE;
+}
+
+static const char *macrunner_scene_loading_probe_kind( const UNICODE_STRING *name )
+{
+    if (macrunner_scene_loading_name_contains( name, "\\level" ) ||
+        macrunner_scene_loading_name_contains( name, "/level" )) return "scene-serialized";
+    if (macrunner_scene_loading_name_contains( name, "globalgamemanagers" )) return "global-managers";
+    if (macrunner_scene_loading_name_contains( name, "resources.assets" ) ||
+        macrunner_scene_loading_name_contains( name, "sharedassets" )) return "resource-asset";
+    if (macrunner_scene_loading_name_contains( name, "assembly-csharp.dll" ) ||
+        macrunner_scene_loading_name_contains( name, "monobleedingedge" )) return "managed-runtime";
+    if (macrunner_scene_loading_name_contains( name, "galaxy" ) ||
+        macrunner_scene_loading_name_contains( name, "gog" )) return "online-subsystem";
+    return NULL;
+}
+
+static void macrunner_scene_loading_probe_log( const char *api, const UNICODE_STRING *name,
+                                                const char *unix_name, ACCESS_MASK access,
+                                                ULONG disposition, ULONG options, NTSTATUS status )
+{
+    static unsigned int count;
+    const char *kind;
+    unsigned int ordinal, limit;
+
+    if (!macrunner_scene_loading_probe_enabled()) return;
+    if (!(kind = macrunner_scene_loading_probe_kind( name ))) return;
+
+    limit = macrunner_scene_loading_probe_max();
+    ordinal = __atomic_add_fetch( &count, 1, __ATOMIC_RELAXED );
+    if (ordinal > limit)
+    {
+        if (ordinal == limit + 1)
+        {
+            fprintf( stderr, "macrunner-hb-scene-loading: phase=budget-exhausted limit=%u\n", limit );
+            fflush( stderr );
+        }
+        return;
+    }
+
+    fprintf( stderr, "macrunner-hb-scene-loading: phase=file-api ordinal=%u api=%s kind=%s "
+             "status=%08x access=%08x disposition=%u options=%08x nt=%s unix=\"%s\"\n",
+             ordinal, api, kind, (unsigned int)status, access, disposition, options,
+             debugstr_us(name), unix_name ? unix_name : "(unresolved)" );
+    fflush( stderr );
+}
+
+/* MacRunner 2026-06-22: per-thread recent-read ring. Each FD_TYPE_FILE read records (name, offset,
+ * length, first 16 bytes). At the c000007b the HB run-exit calls macrunner_dump_read_ring() to dump
+ * the crashing thread's last reads = what the gate READ just before crashing (the wrong-data source).
+ * Bypasses disasm/ASLR/winedbg friction. Env MACRUNNER_TRACE_FILEINFO. */
+#define MACRUNNER_READ_RING_N 32
+struct macrunner_read_ring_ent { char name[200]; long long off; unsigned int len, got; unsigned char b[16]; int blen; };
+static __thread struct macrunner_read_ring_ent macrunner_read_ring[MACRUNNER_READ_RING_N];
+static __thread unsigned int macrunner_read_ring_idx;
+
+void macrunner_dump_read_ring( void )
+{
+    /* Своё число: без него K строк кольца читаются как K событий. Тот же изъян
+     * уже стоил разбора — 192 строки были приняты за 192 аномалии. */
+    static __thread unsigned int mr_vydach;
+    unsigned int i, strok = 0, nomer;
+    if (!macrunner_trace_fileinfo_enabled()) return;
+    nomer = ++mr_vydach;
+    for (i = 0; i < MACRUNNER_READ_RING_N; i++)
+    {
+        unsigned int slot = (macrunner_read_ring_idx + i) % MACRUNNER_READ_RING_N;
+        struct macrunner_read_ring_ent *e = &macrunner_read_ring[slot];
+        char hex[40];
+        int hi = 0, k;
+        if (!e->name[0]) continue;
+        for (k = 0; k < e->blen && k < 16; k++) hi += snprintf( hex + hi, sizeof(hex) - hi, "%02x", e->b[k] );
+        MESSAGE( "macrunner-readring[%02u]: %s off=%lld len=%u got=%u b=%s\n",
+                 i, e->name, e->off, e->len, e->got, hex );
+        strok++;
+    }
+    MESSAGE( "macrunner-readring: ИТОГ выдача=%u строк=%u (выдач=%u, НЕ %u)\n",
+             nomer, strok, nomer, strok );
+}
+
 #define MAX_DOS_DRIVES 26
 
 /* just in case... */
@@ -4243,6 +4436,38 @@ static NTSTATUS find_drive_nt_root( char *unix_name, unsigned int len,
         }
         if (pos <= 1) break;
     }
+    /* MacRunner 2026-08-14, лейн ЛЕСТНИЦА, итерация 866: ПОЧЕМУ `/` перестаёт совпадать
+     * с `Z:`, стоит появиться букве `d:`.
+     *
+     * Сюда попадаем, когда обход компонентов пути НЕ нашёл ни одного диска. Прежде это
+     * молча возвращало STATUS_SUCCESS с пустым именем (правка 865 закрыла падение, но не
+     * причину): пути вырождаются в запасную форму `\??\unix\...`, и загрузчик не находит
+     * `kernel32.dll` (c0000135). Печатаем ТАБЛИЦУ дисков и опознание корня — это ровно те
+     * два числа, которых не хватает: если `/` есть в таблице, виновато сравнение, если
+     * нет — виновата сама таблица. Первые 8 промахов, дальше молчим. */
+    {
+        static int miss_n;
+        if (miss_n < 8)
+        {
+            struct stat root_st;
+            char tbl[400];
+            int p = 0;
+            unsigned int k;
+            miss_n++;
+            for (k = 0; k < MAX_DOS_DRIVES && p < 340; k++)
+            {
+                if (!info[k].dev && !info[k].ino) continue;
+                p += sprintf( tbl + p, " %c:%llu/%llu", 'a' + k,
+                              (unsigned long long)info[k].dev,
+                              (unsigned long long)info[k].ino );
+            }
+            tbl[p] = 0;
+            if (stat( "/", &root_st )) root_st.st_dev = root_st.st_ino = 0;
+            fprintf( stderr, "macrunner-нет-диска: путь=%.120s корень=%llu/%llu таблица:%s\n",
+                     unix_name, (unsigned long long)root_st.st_dev,
+                     (unsigned long long)root_st.st_ino, p ? tbl : " ПУСТА" );
+        }
+    }
     return status;
 }
 
@@ -4391,7 +4616,24 @@ NTSTATUS get_full_path( char *name, const WCHAR *curdir, UNICODE_STRING *nt_name
     ULONG prefix_len, len = max( ARRAY_SIZE(unix_prefixW), wcslen(curdir) ) + strlen(name) + 1;
 
     /* special case for Unix file name */
-    if (name[0] == '/' && !find_drive_nt_root( name, strlen(name), &ret, FILE_OPEN )) goto done;
+    /* MacRunner 2026-08-14, лейн ЛЕСТНИЦА, итерация 865: ПАДЕНИЕ services.exe.
+     *
+     * Достаточно завести в префиксе ЛЮБУЮ лишнюю букву диска (`dosdevices/d:`), и запуск
+     * умирает за 6 с с кодом 139. Отчёт macOS назвал место точно:
+     *   get_full_path <- init_startup_info <- start_main_thread, SIGSEGV по адресу 0.
+     * Три руки совпали до строки (метка+cdrom, метка без cdrom, пустой каталог без метки —
+     * 6 с / 381 строка), контроль без буквы жил 219 с — значит дело в самой букве.
+     *
+     * Причина: `find_drive_nt_root` возвращает STATUS_SUCCESS при `*nt_name == NULL` —
+     * когда цикл по компонентам пути дошёл до корня (`break` при `pos <= 1`), не найдя
+     * ни одного диска. Соседний `unix_to_nt_file_name` этот случай ПРОВЕРЯЕТ (`if (!buffer)`
+     * — «conversion failed, return \\?\unix path»), а здесь проверялся только статус, и
+     * `done:` разыменовывал ноль в `init_unicode_string`.
+     *
+     * Зовём `unix_to_nt_file_name`: он делает ровно то же самое, но с обработкой этого
+     * случая, и `*nt` у него на успехе всегда не пуст. Имя он не портит — работает с
+     * копией, тогда как `find_drive_nt_root` писал нули прямо в `name`. */
+    if (name[0] == '/' && !unix_to_nt_file_name( name, &ret, FILE_OPEN ) && ret) goto done;
 
     if (!(ret = malloc( len * sizeof(WCHAR) ))) return STATUS_NO_MEMORY;
 
@@ -4619,6 +4861,38 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
            handle, access, debugstr_us(attr->ObjectName), attr->Attributes,
            attr->RootDirectory, attr->SecurityDescriptor, io, alloc_size,
            attributes, sharing, disposition, options, ea_buffer, ea_length );
+    if (macrunner_trace_file_name_interesting( attr->ObjectName ))
+        fprintf( stderr, "macrunner-fileinfo: NtCreateFile-enter name=%s access=%08x "
+                 "sharing=%08x disp=%u options=%08x attrs=%08x root=%p\n",
+                 debugstr_us(attr->ObjectName), access, sharing, disposition, options,
+                 attributes, attr->RootDirectory );
+    /* MacRunner 2026-08-16, лейн ЛЕСТНИЦА, итерация 1277 — ИМЕНА ВСЕХ ОТКРЫТИЙ, БЕЗ ФИЛЬТРА.
+     *
+     * Итерация 1276 добавила `version.dll` в фильтр и получила НОЛЬ строк при живом зонде
+     * (4239 строк других видов). Два прочтения: имя не оканчивается на `version.dll`, либо
+     * фильтр не сработал. Различает их только печать БЕЗ фильтра. `NtOpenFile` здесь же
+     * покрыт: он всего лишь зовёт `NtCreateFile` (file.c:4942).
+     *
+     * Гейт `MACRUNNER_TRACE_OPENNAMES`, умолчание ВЫКЛ, печать первых 64 — этого хватает,
+     * а прогон не тонет. */
+    {
+        static int names = -1;
+        static unsigned n_names;
+
+        if (names < 0)
+        {
+            const char *v = getenv( "MACRUNNER_TRACE_OPENNAMES" );
+            names = v && v[0] && v[0] != '0';
+        }
+        /* Потолок поднят с 64 до 4096 (итерация 1277, поймано применением): отказ случается на
+         * 262-м создании секции, то есть ПОЗДНО, и при потолке 64 позднее открытие в журнал не
+         * попадало бы вовсе. Ноль при низком потолке неотличим от «открытия не было» — ровно та
+         * ловушка, за которую лейн платил сегодня шесть раз. */
+        if (names && __atomic_add_fetch( &n_names, 1, __ATOMIC_RELAXED ) <= 4096)
+            fprintf( stderr, "macrunner-opennames: #%u name=%s root=%p disp=%u\n",
+                     n_names, attr && attr->ObjectName ? debugstr_us(attr->ObjectName) : "(нет)",
+                     attr ? attr->RootDirectory : NULL, disposition );
+    }
 
     *handle = 0;
     if (!attr || !attr->ObjectName) return STATUS_INVALID_PARAMETER;
@@ -4654,6 +4928,12 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
                                  sharing, disposition, options, ea_buffer, ea_length );
     }
     else WARN( "%s not found (%x)\n", debugstr_us(attr->ObjectName), status );
+
+    if (macrunner_trace_file_name_interesting( attr->ObjectName ))
+        fprintf( stderr, "macrunner-fileinfo: NtCreateFile-open name=%s unix=\"%s\" "
+                 "access=%08x status=%08x handle=%p\n",
+                 debugstr_us(attr->ObjectName), unix_name ? unix_name : "(null)",
+                 access, status, status == STATUS_SUCCESS ? *handle : 0 );
 
     if (status == STATUS_SUCCESS)
     {
@@ -4698,6 +4978,8 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
     }
 
  done:
+    macrunner_scene_loading_probe_log( "NtCreateFile", attr ? attr->ObjectName : NULL,
+                                       unix_name, access, disposition, options, status );
     free( unix_name );
     free( nt_name.Buffer );
     return io->Status = status;
@@ -4751,18 +5033,38 @@ NTSTATUS WINAPI NtCreateMailslotFile( HANDLE *handle, ULONG access, OBJECT_ATTRI
 /******************************************************************
  *		NtCreateNamedPipeFile    (NTDLL.@)
  */
+#if defined(__aarch64__)
+NTSTATUS WINAPI NtCreateNamedPipeFile( HANDLE *handle, ULONG access, OBJECT_ATTRIBUTES *attr,
+                                       IO_STATUS_BLOCK *io, ULONG sharing, ULONG dispo, ULONG options,
+                                       const struct __wine_nt_named_pipe_extra *extra )
+#else
 NTSTATUS WINAPI NtCreateNamedPipeFile( HANDLE *handle, ULONG access, OBJECT_ATTRIBUTES *attr,
                                        IO_STATUS_BLOCK *io, ULONG sharing, ULONG dispo, ULONG options,
                                        ULONG pipe_type, ULONG read_mode, ULONG completion_mode,
                                        ULONG max_inst, ULONG inbound_quota, ULONG outbound_quota,
                                        LARGE_INTEGER *timeout )
+#endif
 {
     unsigned int status;
     data_size_t len;
     struct object_attributes *objattr;
+#if defined(__aarch64__)
+    ULONG pipe_type, read_mode, completion_mode, max_inst, inbound_quota, outbound_quota;
+    LARGE_INTEGER *timeout;
+#endif
 
     *handle = 0;
     if (!attr) return STATUS_INVALID_PARAMETER;
+#if defined(__aarch64__)
+    if (!extra) return STATUS_INVALID_PARAMETER;
+    pipe_type       = extra->pipe_type;
+    read_mode       = extra->read_mode;
+    completion_mode = extra->completion_mode;
+    max_inst        = extra->max_inst;
+    inbound_quota   = extra->inbound_quota;
+    outbound_quota  = extra->outbound_quota;
+    timeout         = extra->timeout;
+#endif
 
     TRACE( "(%p %x %s %p %x %d %x %d %d %d %d %d %d %p)\n",
            handle, access, debugstr_us(attr->ObjectName), io, sharing, dispo,
@@ -4850,6 +5152,8 @@ NTSTATUS WINAPI NtQueryFullAttributesFile( const OBJECT_ATTRIBUTES *attr,
             fill_file_info( &st, attributes, info, FileNetworkOpenInformation );
     }
     else WARN( "%s not found (%x)\n", debugstr_us(attr->ObjectName), status );
+    macrunner_scene_loading_probe_log( "NtQueryFullAttributesFile", attr->ObjectName,
+                                       unix_name, 0, FILE_OPEN, 0, status );
     free( unix_name );
     free( nt_name.Buffer );
     return status;
@@ -4879,6 +5183,8 @@ NTSTATUS WINAPI NtQueryAttributesFile( const OBJECT_ATTRIBUTES *attr, FILE_BASIC
             status = fill_file_info( &st, attributes, info, FileBasicInformation );
     }
     else WARN( "%s not found (%x)\n", debugstr_us(attr->ObjectName), status );
+    macrunner_scene_loading_probe_log( "NtQueryAttributesFile", attr->ObjectName,
+                                       unix_name, 0, FILE_OPEN, 0, status );
     free( unix_name );
     free( nt_name.Buffer );
     return status;
@@ -5138,6 +5444,37 @@ NTSTATUS WINAPI NtQueryInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
         FIXME("Unsupported class (%d)\n", class);
         status = STATUS_NOT_IMPLEMENTED;
         break;
+    }
+    if (status == STATUS_SUCCESS && macrunner_trace_fileinfo_enabled())
+    {
+        if (class == FileStandardInformation)
+        {
+            const FILE_STANDARD_INFORMATION *info = ptr;
+
+            MESSAGE( "macrunner-fileinfo: NtQueryInformationFile handle=%p class=Standard len=%u "
+                     "alloc=%s eof=%s links=%u delete=%u dir=%u io_info=%s\n",
+                     handle, len, wine_dbgstr_longlong(info->AllocationSize.QuadPart),
+                     wine_dbgstr_longlong(info->EndOfFile.QuadPart), info->NumberOfLinks,
+                     info->DeletePending, info->Directory, wine_dbgstr_longlong(io->Information) );
+        }
+        else if (class == FilePositionInformation)
+        {
+            const FILE_POSITION_INFORMATION *info = ptr;
+
+            MESSAGE( "macrunner-fileinfo: NtQueryInformationFile handle=%p class=Position len=%u "
+                     "pos=%s io_info=%s\n", handle, len,
+                     wine_dbgstr_longlong(info->CurrentByteOffset.QuadPart),
+                     wine_dbgstr_longlong(io->Information) );
+        }
+        else if (class == FileEndOfFileInformation)
+        {
+            const FILE_END_OF_FILE_INFORMATION *info = ptr;
+
+            MESSAGE( "macrunner-fileinfo: NtQueryInformationFile handle=%p class=EndOfFile len=%u "
+                     "eof=%s io_info=%s\n", handle, len,
+                     wine_dbgstr_longlong(info->EndOfFile.QuadPart),
+                     wine_dbgstr_longlong(io->Information) );
+        }
     }
     if (needs_close) close( fd );
     if (status == STATUS_SUCCESS && !io->Information) io->Information = info_sizes[class];
@@ -5467,6 +5804,25 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
         FIXME("Unsupported class (%d)\n", class);
         status = STATUS_NOT_IMPLEMENTED;
         break;
+    }
+    if (status == STATUS_SUCCESS && macrunner_trace_fileinfo_enabled())
+    {
+        if (class == FilePositionInformation)
+        {
+            const FILE_POSITION_INFORMATION *info = ptr;
+
+            MESSAGE( "macrunner-fileinfo: NtSetInformationFile handle=%p class=Position len=%u "
+                     "pos=%s\n", handle, len,
+                     wine_dbgstr_longlong(info->CurrentByteOffset.QuadPart) );
+        }
+        else if (class == FileEndOfFileInformation)
+        {
+            const FILE_END_OF_FILE_INFORMATION *info = ptr;
+
+            MESSAGE( "macrunner-fileinfo: NtSetInformationFile handle=%p class=EndOfFile len=%u "
+                     "eof=%s\n", handle, len,
+                     wine_dbgstr_longlong(info->EndOfFile.QuadPart) );
+        }
     }
     io->Information = 0;
     return io->Status = status;
@@ -6032,9 +6388,23 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
     if (!io) return STATUS_ACCESS_VIOLATION;
 
     status = server_get_unix_fd( handle, FILE_READ_DATA, &unix_handle, &needs_close, &type, &options );
-    if (status && status != STATUS_BAD_DEVICE_TYPE) return status;
+    if (status && status != STATUS_BAD_DEVICE_TYPE)
+    {
+        if (macrunner_trace_fileinfo_enabled() && length >= 0x80000)
+            MESSAGE( "macrunner-fileinfo: NtReadFile fd lookup failed handle=%p len=%u "
+                     "status=%08x offset=%s\n", handle, length, status,
+                     offset ? wine_dbgstr_longlong(offset->QuadPart) : "(null)" );
+        return status;
+    }
 
-    if (!virtual_check_buffer_for_write( buffer, length )) return STATUS_ACCESS_VIOLATION;
+    if (!virtual_check_buffer_for_write( buffer, length ))
+    {
+        if (macrunner_trace_fileinfo_enabled())
+            MESSAGE( "macrunner-fileinfo: NtReadFile buffer check failed handle=%p buffer=%p "
+                     "len=%u offset=%s\n", handle, buffer, length,
+                     offset ? wine_dbgstr_longlong(offset->QuadPart) : "(null)" );
+        return STATUS_ACCESS_VIOLATION;
+    }
 
     if (status == STATUS_BAD_DEVICE_TYPE)
         return server_read_file( handle, event, apc, apc_user, io, buffer, length, offset, key );
@@ -6192,6 +6562,36 @@ NTSTATUS WINAPI NtReadFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, vo
 
 done:
     send_completion = cvalue != 0;
+    /* MacRunner 2026-06-22: source-capture for the scene-load deserialize (vs CrossOver). Log Unity
+     * asset reads (file, offset, length, first 16 bytes) on ANY read path (sequential or positioned)
+     * here at done: where unix_handle is still open. Diff MacRunner-vs-CrossOver -> the wrong-data
+     * cause. Env MACRUNNER_TRACE_FILEINFO, capped. */
+    if (macrunner_trace_fileinfo_enabled() && total > 0 && type == FD_TYPE_FILE)
+    {
+        char rr_path[1024];
+        /* skip DLL/system-lib reads (Wine re-reads user32/ucrtbase/kernel32 etc. many times, which
+         * would evict the relevant data read from the ring) -> keep only non-DLL (data/asset/config) */
+        if (fcntl( unix_handle, F_GETPATH, rr_path ) == 0 &&
+            !strstr( rr_path, ".dll" ) && !strstr( rr_path, "/lib/wine/" ))
+        {
+            struct macrunner_read_ring_ent *rr_e = &macrunner_read_ring[macrunner_read_ring_idx % MACRUNNER_READ_RING_N];
+            const char *rr_bn = strrchr( rr_path, '/' );
+            const unsigned char *rr_b = buffer;
+            int rr_k;
+            size_t rr_nl;
+            rr_bn = rr_bn ? rr_bn + 1 : rr_path;
+            rr_nl = strlen( rr_bn );
+            if (rr_nl >= sizeof(rr_e->name)) rr_nl = sizeof(rr_e->name) - 1;
+            memcpy( rr_e->name, rr_bn, rr_nl );
+            rr_e->name[rr_nl] = 0;
+            rr_e->off = offset ? offset->QuadPart : -1;
+            rr_e->len = length;
+            rr_e->got = total;
+            rr_e->blen = total < 16 ? (int)total : 16;
+            for (rr_k = 0; rr_k < rr_e->blen; rr_k++) rr_e->b[rr_k] = rr_b[rr_k];
+            macrunner_read_ring_idx++;
+        }
+    }
 
 err:
     if (needs_close) close( unix_handle );
@@ -6214,6 +6614,13 @@ err:
 
     if (send_completion && async_read)
         add_completion( handle, cvalue, status, total, ret_status == STATUS_PENDING );
+    if (macrunner_trace_fileinfo_enabled() && (length >= 0x80000 || total >= 0x80000))
+    {
+        MESSAGE( "macrunner-fileinfo: NtReadFile handle=%p len=%u total=%u status=%08x "
+                 "ret=%08x offset=%s io_info=%s\n", handle, length, total, status, ret_status,
+                 offset ? wine_dbgstr_longlong(offset->QuadPart) : "(null)",
+                 io ? wine_dbgstr_longlong(io->Information) : "(null)" );
+    }
     return ret_status;
 }
 
@@ -6333,6 +6740,13 @@ NTSTATUS WINAPI NtWriteFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, v
         status = STATUS_INVALID_USER_BUFFER;
         goto done;
     }
+
+    /* ★ 07.09.2026, лейн ЗАГРУЗКА — фазовые часы. Строки Unity («Loaded All Assemblies»,
+     * «Finished resetting the current domain», «UnloadTime») доходят до журнала отсюда.
+     * Ставится ПОСЛЕ проверки буфера: байты уже заведомо читаемы, и сам скан не может
+     * вызвать отказ страницы. Гейт MACRUNNER_HB_TRACE_FAZA умолчанием закрыт; разбор
+     * цены в горячем пути — в шапке macrunner_faza_write_scan (virtual.c). */
+    macrunner_faza_write_scan( buffer, length );
 
     if (status == STATUS_BAD_DEVICE_TYPE)
         return server_write_file( handle, event, apc, apc_user, io, buffer, length, offset, key );
@@ -7434,6 +7848,25 @@ NTSTATUS WINAPI NtQueryVolumeInformationFile( HANDLE handle, IO_STATUS_BLOCK *io
 
             if ((status = get_device_info( fd, info )) == STATUS_SUCCESS)
                 io->Information = sizeof(*info);
+            /* MacRunner 2026-08-14, лейн ЛЕСТНИЦА, итерация 872: ЧТО МЫ ОТВЕЧАЕМ ПРО ТОМ.
+             *
+             * Игра открывает `\??\D:\` пять раз подряд (строки 104682-104798 журнала
+             * d880), все успешно, и сразу после этого печатает «Please insert the Diablo
+             * CD». Значит привод она НАХОДИТ, а ответ про него её не устраивает. Здесь
+             * печатается ровно то, что мы отдаём: тип устройства и признаки. Для CD-ROM
+             * ожидается FILE_DEVICE_CD_ROM (2) и FILE_REMOVABLE_MEDIA (1) в
+             * Characteristics. Первые 16 запросов, потом молчим. */
+            {
+                static int dev_n;
+                if (dev_n < 16)
+                {
+                    dev_n++;
+                    fprintf( stderr, "macrunner-том-устройство: n=%d статус=%08x тип=%u признаки=%08x\n",
+                             dev_n, (unsigned)status,
+                             status ? 0u : (unsigned)info->DeviceType,
+                             status ? 0u : (unsigned)info->Characteristics );
+                }
+            }
         }
         break;
 

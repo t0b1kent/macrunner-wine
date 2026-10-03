@@ -4108,9 +4108,9 @@ typedef struct _IMAGE_ARM64EC_METADATA
     ULONG  ExtraRFETableSize;
     ULONG  __os_arm64x_dispatch_fptr;
     ULONG  AuxiliaryIATCopy;
-    ULONG  __os_arm64x_helper0;
-    ULONG  __os_arm64x_helper1;
-    ULONG  __os_arm64x_helper2;
+    ULONG  AuxiliaryDelayloadIAT;
+    ULONG  AuxiliaryDelayloadIATCopy;
+    ULONG  HybridImageInfoBitfield;
     ULONG  __os_arm64x_helper3;
     ULONG  __os_arm64x_helper4;
     ULONG  __os_arm64x_helper5;
@@ -7361,7 +7361,7 @@ static FORCEINLINE LONG WINAPI InterlockedExchange( LONG volatile *dest, LONG va
     LONG ret;
 #if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
-#elif defined(__i386__) || defined(__x86_64__)
+#elif (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__)
     __asm__ __volatile__( "lock; xchgl %0,(%1)"
                           : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
 #else
@@ -7420,7 +7420,7 @@ static FORCEINLINE void * WINAPI InterlockedExchangePointer( void *volatile *des
     void *ret;
 #if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) && !defined(__arm64ec__)
     __asm__ __volatile__( "lock; xchgq %0,(%1)" : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
 #elif defined(__i386__)
     __asm__ __volatile__( "lock; xchgl %0,(%1)" : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
@@ -7534,9 +7534,9 @@ static FORCEINLINE void WriteNoFence64( LONG64 volatile *dest, LONG64 value )
 
 static FORCEINLINE DECLSPEC_NORETURN void __fastfail(unsigned int code)
 {
-#if defined(__x86_64__) || defined(__i386__)
+#if (defined(__x86_64__) || defined(__i386__)) && !defined(__arm64ec__)
     for (;;) __asm__ __volatile__( "int $0x29" :: "c" ((ULONG_PTR)code) : "memory" );
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__arm64ec__)
     register ULONG_PTR val __asm__("x0") = code;
     for (;;) __asm__ __volatile__( "brk #0xf003" :: "r" (val) : "memory" );
 #elif defined(__arm__)

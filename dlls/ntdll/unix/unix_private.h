@@ -69,16 +69,108 @@ static inline TEB64 *NtCurrentTeb64(void) { return NULL; }
 #else
 typedef TEB64 WOW_TEB;
 typedef PEB64 WOW_PEB;
-static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiBatchCount; }
+static inline TEB64 *get_teb64_from_teb( TEB *teb )
+{
+    ULONG_PTR batch = (ULONG_PTR)teb->GdiBatchCount;
+    LONG offset = teb->WowTebOffset;
+    TEB64 *teb64;
+
+    if (!batch || !offset) return NULL;
+    teb64 = (TEB64 *)((char *)teb + offset);
+    if ((ULONG_PTR)teb64 != batch) return NULL;
+    if ((ULONG_PTR)teb64 & (sizeof(ULONG64) - 1)) return NULL;
+    return teb64;
+}
+static inline TEB64 *NtCurrentTeb64(void) { return get_teb64_from_teb( NtCurrentTeb() ); }
 #endif
 
 extern WOW_PEB *wow_peb;
 extern ULONG_PTR user_space_wow_limit;
 extern SECTION_IMAGE_INFORMATION main_image_info;
+extern BOOL macrunner_hb_x64_loader;
+extern BOOL macrunner_hb_prefer_native_helper_exe( const UNICODE_STRING *path );
+
+#define WINE_NT_MAP_VIEW(mapping, process, ptr, zero_bits, commit_size, offset, size, inherit_, alloc_type_, protect_) \
+    NtMapViewOfSection( mapping, process, ptr, zero_bits, commit_size, offset, size, \
+                        &(struct __wine_nt_section_extra){ inherit_, alloc_type_, protect_ } )
+
+#if defined(__APPLE__) && defined(__aarch64__)
+extern void macrunner_hb_prepare_x64_guest_fault_handlers( const char *stage );
+extern void macrunner_hb_register_x64_original_exec_sections( void *module, const IMAGE_NT_HEADERS *nt );
+extern void macrunner_hb_register_x64_exec_alloc( void *base, SIZE_T size, ULONG type, ULONG protect,
+                                                  void *allocation_base, SIZE_T allocation_size );
+extern void macrunner_hb_register_x64_exec_protect( void *base, SIZE_T size, ULONG protect,
+                                                    void *allocation_base, SIZE_T allocation_size );
+extern BOOL macrunner_hb_is_registered_x64_guest_address( const void *addr );
+extern BOOL macrunner_hb_is_current_x64_guest_view_address( const void *addr );
+extern BOOL macrunner_hb_is_current_x64_guest_exec_address( const void *addr );
+extern void *macrunner_hb_wow64_guest32_memory(void);
+extern void *macrunner_hb_wow64_guest32_host_ptr( ULONG_PTR guest );
+extern void macrunner_dbg_mirror_options( ULONG peb32 );
+extern NTSTATUS macrunner_hb_wow64_guest32_alloc( SIZE_T size, ULONG protect, void **host_ptr );
+extern NTSTATUS macrunner_hb_wow64_guest32_alloc_range( SIZE_T size, ULONG protect, ULONG_PTR limit_low,
+                                                        ULONG_PTR limit_high, BOOL top_down, void **host_ptr );
+extern NTSTATUS macrunner_hb_wow64_guest32_map_fixed( ULONG_PTR guest_base, SIZE_T size,
+                                                      ULONG protect, void **host_ptr );
+extern NTSTATUS macrunner_hb_wow64_guest32_protect( ULONG_PTR guest_base, SIZE_T size, ULONG protect );
+extern NTSTATUS macrunner_hb_wow64_guest32_free( void *host_ptr );
+extern unsigned long long macrunner_hb_wow64_guest32_base(void);
+#else
+static inline void macrunner_hb_prepare_x64_guest_fault_handlers( const char *stage ) {}
+static inline void macrunner_hb_register_x64_original_exec_sections( void *module, const IMAGE_NT_HEADERS *nt ) {}
+static inline void macrunner_hb_register_x64_exec_alloc( void *base, SIZE_T size, ULONG type, ULONG protect,
+                                                         void *allocation_base, SIZE_T allocation_size ) {}
+static inline void macrunner_hb_register_x64_exec_protect( void *base, SIZE_T size, ULONG protect,
+                                                           void *allocation_base, SIZE_T allocation_size ) {}
+static inline BOOL macrunner_hb_is_registered_x64_guest_address( const void *addr ) { return FALSE; }
+static inline BOOL macrunner_hb_is_current_x64_guest_view_address( const void *addr ) { return FALSE; }
+static inline BOOL macrunner_hb_is_current_x64_guest_exec_address( const void *addr ) { return FALSE; }
+static inline void *macrunner_hb_wow64_guest32_memory(void) { return NULL; }
+static inline void *macrunner_hb_wow64_guest32_host_ptr( ULONG_PTR guest ) { (void)guest; return NULL; }
+static inline NTSTATUS macrunner_hb_wow64_guest32_alloc( SIZE_T size, ULONG protect, void **host_ptr )
+{
+    return STATUS_NOT_SUPPORTED;
+}
+static inline NTSTATUS macrunner_hb_wow64_guest32_alloc_range( SIZE_T size, ULONG protect,
+                                                               ULONG_PTR limit_low, ULONG_PTR limit_high,
+                                                               BOOL top_down, void **host_ptr )
+{
+    return STATUS_NOT_SUPPORTED;
+}
+static inline NTSTATUS macrunner_hb_wow64_guest32_map_fixed( ULONG_PTR guest_base, SIZE_T size,
+                                                             ULONG protect, void **host_ptr )
+{
+    return STATUS_NOT_SUPPORTED;
+}
+static inline NTSTATUS macrunner_hb_wow64_guest32_protect( ULONG_PTR guest_base, SIZE_T size, ULONG protect )
+{
+    return STATUS_NOT_SUPPORTED;
+}
+#endif
+
+#if defined(__APPLE__) && defined(__aarch64__)
+/* Exception redirect helpers — implemented in macrunner_hb.c, used by virtual.c and signal_arm64.c.
+ * Return thread-local bridge/original stack pointers for the per-thread overflow redirect. */
+extern void *macrunner_hb_exc_get_original_stack_base(void);
+extern void *macrunner_hb_exc_get_bridge_stack_limit(void);
+extern void *macrunner_hb_exc_get_bridge_stack_top(void);
+extern int   macrunner_hb_exc_get_run_depth(void);
+#endif
+
+static inline BOOL macrunner_hb_x64_guest_process(void)
+{
+    return macrunner_hb_x64_loader &&
+           current_machine == IMAGE_FILE_MACHINE_ARM64 &&
+           main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64;
+}
 
 static inline WOW_TEB *get_wow_teb( TEB *teb )
 {
+#ifdef _WIN64
     return teb->WowTebOffset ? (WOW_TEB *)((char *)teb + teb->WowTebOffset) : NULL;
+#else
+    return (WOW_TEB *)get_teb64_from_teb( teb );
+#endif
 }
 
 static inline BOOL is_wow64(void)
@@ -94,6 +186,16 @@ static inline BOOL is_old_wow64(void)
 
 static inline BOOL is_arm64ec(void)
 {
+    /* MacRunner HyperBridge uses the ARM64 host loader for a regular AMD64
+     * PE image, but that is not an ARM64EC hybrid process.  Keep it out of
+     * the ARM64EC-only export/redirection paths; those expect PE-side EC
+     * symbols that x86_64-windows/ntdll.dll correctly does not provide.
+     *
+     * This helper is used by signal/low-level paths, so it must not call
+     * getenv() or any non-async-safe libc routine.  The loader caches the
+     * environment gate in macrunner_hb_x64_loader during process startup. */
+    if (macrunner_hb_x64_guest_process()) return FALSE;
+
     return (current_machine == IMAGE_FILE_MACHINE_ARM64 &&
             main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64);
 }
@@ -116,6 +218,17 @@ struct ntdll_thread_data
     PRTL_THREAD_START_ROUTINE start;         /* thread entry point */
     void                     *param;         /* thread entry point parameter */
     void                     *jmp_buf;       /* setjmp buffer for exception handling */
+#if defined(__APPLE__) && defined(__aarch64__)
+    /* Scratch slots used by __wine_pe_x18_thunk to preserve PE-side
+     * registers across the x18 self-heal trampoline. Filled in by
+     * segv_handler when it detects a TEB-deref-with-x18=NULL fault,
+     * read back by the asm thunk before branching to the retry PC. */
+    ULONG_PTR                 apple_x18_save_x10;
+    ULONG_PTR                 apple_x18_save_x16;
+    ULONG_PTR                 apple_x18_save_pc;
+#endif
+    void                     *jmp_buf_stack[8];
+    unsigned int              jmp_buf_depth;
 };
 
 C_ASSERT( sizeof(struct ntdll_thread_data) <= sizeof(((TEB *)0)->GdiTebBatch) );
@@ -123,6 +236,17 @@ C_ASSERT( sizeof(struct ntdll_thread_data) <= sizeof(((TEB *)0)->GdiTebBatch) );
 C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct ntdll_thread_data, syscall_table ) == 0x370 );
 C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct ntdll_thread_data, syscall_frame ) == 0x378 );
 C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct ntdll_thread_data, syscall_trace ) == 0x380 );
+#if defined(__APPLE__) && defined(__aarch64__)
+/* TEB-relative offsets used by __wine_pe_x18_resume_thunk in
+ * signal_arm64.c. If you change struct layout above and these
+ * C_ASSERTs fire, update both the asm offsets and the macros below. */
+#define TEB_APPLE_X18_SAVE_X10_OFFSET 0x3d8
+#define TEB_APPLE_X18_SAVE_X16_OFFSET 0x3e0
+#define TEB_APPLE_X18_SAVE_PC_OFFSET  0x3e8
+C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct ntdll_thread_data, apple_x18_save_x10 ) == TEB_APPLE_X18_SAVE_X10_OFFSET );
+C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct ntdll_thread_data, apple_x18_save_x16 ) == TEB_APPLE_X18_SAVE_X16_OFFSET );
+C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct ntdll_thread_data, apple_x18_save_pc  ) == TEB_APPLE_X18_SAVE_PC_OFFSET  );
+#endif
 #else
 C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct ntdll_thread_data, syscall_table ) == 0x214 );
 C_ASSERT( offsetof( TEB, GdiTebBatch ) + offsetof( struct ntdll_thread_data, syscall_frame ) == 0x218 );
@@ -153,7 +277,16 @@ static const SIZE_T page_size = 0x1000;
 static const SIZE_T teb_size = 0x3800;  /* TEB64 + TEB32 + debug info */
 static const SIZE_T signal_stack_mask = 0xffff;
 static const SIZE_T signal_stack_size = 0x10000 - 0x3800;
+/* arm64 macOS uses 16K host pages and Mach-O signal frames are larger than
+ * Linux ones.  Pure-arm64 WOW64/HyperBridge also runs PE32 init through nested
+ * ARM64 PE, unixlib, syscall, and user-callback frames. 8 MB was enough to
+ * reach GDI, but NtGdiOpenDCW can still push a callback frame into the guard
+ * page before window creation. Keep extra headroom for that generic boundary. */
+#if defined(__APPLE__) && defined(__aarch64__)
+static const SIZE_T kernel_stack_size = 0x1000000;
+#else
 static const SIZE_T kernel_stack_size = 0x100000;
+#endif
 static const SIZE_T min_kernel_stack  = 0x2000;
 static const LONG teb_offset = 0x2000;
 
@@ -186,6 +319,22 @@ extern const char **dll_paths;
 extern const char **system_dll_paths;
 extern pthread_key_t teb_key;
 extern PEB *peb;
+
+/* MacRunner 2026-08-16, лейн ЛЕСТНИЦА, итерация 1299 — ГДЕ НА САМОМ ДЕЛЕ ЛЕЖИТ PEB32.
+ *
+ * Штатно `teb32->Peb` считается как `PtrToUlong( peb + page_size )` (`virtual.c:5736`). Верхний
+ * Wine вправе так делать: у него блок TEB/PEB лежит в младших 4 ГБ. У нас он на 0x7ffd01f0000,
+ * потому что низ адресного пространства на macOS недостижим из-за `__PAGEZERO`, и усечение даёт
+ * 0xd01f1000 — адрес, которого не существует.
+ *
+ * Гейт `MACRUNNER_HB_WOW64_PEB_IN_MIRROR` (env.c) переносит PEB32 в зеркало guest32, где хостовый
+ * адрес это `база | адрес32`. Но мест, считающих PEB32, ТРИ, и гейт покрывал только своё:
+ *   env.c            — переносит блок
+ *   virtual.c:5736   — `init_teb`, кладёт адрес в TEB каждого потока   ← из-за него перенос молчал
+ *   wow64/process.c  — межпроцессная ветвь, `PtrToUlong(...) + 0x1000`  ← пока не сведена
+ *
+ * Здесь адрес после переноса, или NULL, если переноса не было. `init_teb` берёт его, если он есть. */
+extern void *macrunner_hb_wow_peb32_mirror;
 extern USHORT *uctable;
 extern USHORT *lctable;
 extern SIZE_T startup_info_size;
@@ -299,6 +448,16 @@ extern NTSTATUS virtual_alloc_thread_stack( INITIAL_TEB *stack, ULONG_PTR limit_
 extern void virtual_map_user_shared_data(void);
 extern void virtual_init_user_shared_data(void);
 extern NTSTATUS virtual_handle_fault( EXCEPTION_RECORD *rec, void *stack );
+#if defined(__APPLE__) && defined(__aarch64__)
+/* Лейн КЛИН-2 08.09.2026: PC отказа, положенный обработчиком сигнала ПЕРЕД вызовом
+ * virtual_handle_fault. Сам rec->ExceptionAddress там пуст (замер MAPJIT: 8 из 8). */
+extern __thread void *macrunner_fault_pc;
+/* Лейн СТЕНА64 08.09.2026: снимок x0..x30 (+sp в [31]) из контекста сигнала. */
+extern __thread unsigned long long macrunner_fault_x[32];
+extern __thread int macrunner_fault_x_valid;
+/* Лейн СТЕНА64: адрес внутри кодового буфера FEX (область MAP_JIT). */
+extern BOOL macrunner_addr_in_jit_view( const void *addr );
+#endif
 extern unsigned int virtual_locked_server_call( void *req_ptr );
 extern ssize_t virtual_locked_read( int fd, void *addr, size_t size );
 extern ssize_t virtual_locked_pread( int fd, void *addr, size_t size, off_t offset );
@@ -306,6 +465,11 @@ extern ssize_t virtual_locked_recvmsg( int fd, struct msghdr *hdr, int flags );
 extern BOOL virtual_is_valid_code_address( const void *addr, SIZE_T size );
 extern void *virtual_setup_exception( void *stack_ptr, size_t size, EXCEPTION_RECORD *rec );
 extern BOOL virtual_check_buffer_for_read( const void *ptr, SIZE_T size );
+/* ★ 07.09.2026, лейн ЗАГРУЗКА: фазовые часы (virtual.c). Скан вывода гостя на маркеры
+ * Unity; перепись проверки буфера печатается на каждом маркере, потому что прогон игры
+ * всегда обрывается по бюджету и atexit может не отработать. */
+extern void macrunner_faza_write_scan( const void *buffer, ULONG length );
+extern void macrunner_vcheck_census_print( const char *povod );
 extern BOOL virtual_check_buffer_for_write( void *ptr, SIZE_T size );
 extern SIZE_T virtual_uninterrupted_read_memory( const void *addr, void *buffer, SIZE_T size );
 extern NTSTATUS virtual_uninterrupted_write_memory( void *addr, const void *buffer, SIZE_T size );
@@ -593,7 +757,7 @@ static inline NTSTATUS map_section( HANDLE mapping, void **ptr, SIZE_T *size, UL
 {
     *ptr = NULL;
     *size = 0;
-    return NtMapViewOfSection( mapping, NtCurrentProcess(), ptr, user_space_wow_limit,
+    return WINE_NT_MAP_VIEW( mapping, NtCurrentProcess(), ptr, user_space_wow_limit,
                                0, NULL, size, ViewShare, 0, protect );
 }
 
@@ -732,5 +896,16 @@ static inline int is_gdt_sel( WORD sel )
 }
 
 #endif  /* defined(__i386__) || defined(__x86_64__) */
+
+extern UINT64 macrunner_hb_guest_pc_for_tid( DWORD tid, UINT64 *guest_rsp, int *state, UINT64 *gpr6 );
+extern int macrunner_hb_import_name_for_guest( UINT64 guest_target, const char **dll, const char **api,
+                                               UINT64 *target );
+extern int macrunner_hb_guest_ctx_for_tid( DWORD tid, UINT64 *guest_pc, UINT64 *guest_sp );
+/* итерация 143 (лейн УСТАНОВЩИКИ): чей это стек — мостовой (1), отложенный исходный (2)
+ * или ни один (0). Нужна PE-стороне, где проверка границы видит только teb->Tib.Stack*. */
+extern int macrunner_hb_known_stack_for_sp( UINT64 sp, UINT64 *lo, UINT64 *hi, int *kind );
+/* итерация 81 (лейн МЕЛКИЕ): полный список загрузчика, один раз на процесс. */
+extern void macrunner_hb_dump_ldr_modules_once(void);
+extern int macrunner_hb_guest_image_for_pc( UINT64 pc, UINT64 *base, UINT64 *size );
 
 #endif /* __NTDLL_UNIX_PRIVATE_H */

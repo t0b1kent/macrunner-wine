@@ -388,8 +388,16 @@ DWORD_PTR WINAPI SHGetFileInfoW(LPCWSTR path,DWORD dwFileAttributes,
     /* get icon index (or load icon)*/
     if (SUCCEEDED(hr) && (flags & (SHGFI_ICON | SHGFI_SYSICONINDEX)))
     {
-        IImageList *icon_list;
-        SHGetImageList( (flags & SHGFI_SMALLICON) ? SHIL_SMALL : SHIL_LARGE, &IID_IImageList, (void **)&icon_list );
+        IImageList *icon_list = NULL;
+        int image_list = (flags & SHGFI_SMALLICON) ? SHIL_SMALL : SHIL_LARGE;
+        HRESULT list_hr = SHGetImageList( image_list, &IID_IImageList, (void **)&icon_list );
+
+        if (FAILED(list_hr) || !icon_list)
+        {
+            ret = FALSE;
+            hr = FAILED(list_hr) ? list_hr : E_FAIL;
+            goto done_icon_block;
+        }
 
         if (flags & SHGFI_USEFILEATTRIBUTES && !(flags & SHGFI_PIDL))
         {
@@ -465,7 +473,9 @@ DWORD_PTR WINAPI SHGetFileInfoW(LPCWSTR path,DWORD dwFileAttributes,
                 }
             }
         }
-        IImageList_Release( icon_list );
+done_icon_block:
+        if (icon_list)
+            IImageList_Release( icon_list );
     }
 
     if (flags & ~SHGFI_KNOWN_FLAGS)

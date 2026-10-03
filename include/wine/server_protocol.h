@@ -183,6 +183,13 @@ struct context_data
 #define SERVER_CTX_EXTENDED_REGISTERS 0x20
 #define SERVER_CTX_YMM_REGISTERS      0x40
 #define SERVER_CTX_EXEC_SPACE         0x80
+/* MacRunner 04.09.2026: x18 — РЕГИСТР ПЛАТФОРМЫ, не «целый».
+ * Транспорт уже был (arm64_regs.x[31] несёт все 31), не хватало ПРИЗНАКА:
+ * x18 ехал вместе с группой целых и потому затирался при любом чтении
+ * контекста. Апстрим решил это перестановкой раскладки (x19[...]); нам
+ * достаточно завести признак и перевести x18 на него — транспорт не
+ * меняется, значит и совместимость сервера с клиентом не рвётся. */
+#define SERVER_CTX_TLS                0x100
 
 
 struct send_fd
@@ -1616,6 +1623,7 @@ struct select_reply
 };
 #define SELECT_ALERTABLE     1
 #define SELECT_INTERRUPTIBLE 2
+#define SELECT_COOPERATIVE_SUSPEND 4
 
 
 

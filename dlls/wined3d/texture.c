@@ -124,6 +124,39 @@ static void wined3d_texture_evict_sysmem(struct wined3d_texture *texture)
     struct wined3d_texture_sub_resource *sub_resource;
     unsigned int i, sub_count;
 
+    /* MacRunner 2026-08-14, лейн ЛЕСТНИЦА, итерация 858: стена ступени 1 (Diablo).
+     *
+     * Полноэкранный BitBlt 1512x982 отказывал, потому что источник лежал по адресу,
+     * который к моменту чтения уже отдан (MEM_FREE/PAGE_NOACCESS). Цепочка вызовов,
+     * снятая обходом EBP в обработчике BOP, назвала виновника:
+     *     ucrtbase free() <- wined3d_resource_free_sysmem <- ЭТА функция <- ddraw.
+     * Ни одного кадра игры в цепочке — освобождает наш код, не Diablo.
+     *
+     * Механизм. DC поверхности живёт ДОЛЬШЕ вызова ReleaseDC: `wined3d_texture_release_dc`
+     * его намеренно не разрушает, а держит в `dc_info` для повторной выдачи, и его DIB
+     * указывает на `resource->heap_memory`. Выселение системной памяти этот DC не
+     * трогает, после чего `wined3d_texture_get_dc` видит непустой `dc_info[idx].dc` и
+     * возвращает СТАРЫЙ DC (строка «if (!(dc_info = texture->dc_info) || !dc_info[...].dc)»
+     * — то есть пересоздания не будет). Следующий BitBlt читает освобождённое.
+     *
+     * Лечение: живой DC удерживает системную память — ровно то, что уже делает
+     * `pin_sysmem` для текстур с WINED3D_TEXTURE_CREATE_GET_DC_LENIENT. Правка
+     * консервативна по построению: она только ПРОДЛЕВАЕТ жизнь памяти, освободить
+     * раньше прежнего не может. */
+    if (texture->dc_info)
+    {
+        unsigned int n = texture->level_count * texture->layer_count;
+        for (i = 0; i < n; ++i)
+        {
+            if (!texture->dc_info[i].dc) continue;
+            MESSAGE( "macrunner-wined3d-evict-держим-dc: texture=%p под_ресурс=%u dc=%p "
+                     "bitmap=%p heap=%p размер=%u\n", texture, i, texture->dc_info[i].dc,
+                     texture->dc_info[i].bitmap, texture->resource.heap_memory,
+                     (unsigned)texture->resource.size );
+            return;
+        }
+    }
+
     if ((texture->flags & WINED3D_TEXTURE_CONVERTED)
             || texture->resource.pin_sysmem
             || texture->download_count > WINED3D_TEXTURE_DYNAMIC_MAP_THRESHOLD)

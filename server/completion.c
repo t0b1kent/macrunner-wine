@@ -299,7 +299,7 @@ void add_completion( struct completion *completion, apc_param_t ckey, apc_param_
                      unsigned int status, apc_param_t information )
 {
     struct comp_msg *msg = mem_alloc( sizeof( *msg ) );
-    struct completion_wait *wait;
+    struct completion_wait *wait, *wait_next;
 
     if (!msg)
         return;
@@ -311,7 +311,19 @@ void add_completion( struct completion *completion, apc_param_t ckey, apc_param_
 
     list_add_tail( &completion->queue, &msg->queue_entry );
     completion->depth++;
-    LIST_FOR_EACH_ENTRY( wait, &completion->wait_queue, struct completion_wait, wait_queue_entry )
+    /* MacRunner 2026-08-24, лейн КАДР — обход обязан быть SAFE.
+     *
+     * wake_up() ведёт в completion_wait_satisfied() (:136), а по этому пути
+     * cleanup_thread_completion() (:246) делает list_remove() ТЕКУЩЕГО элемента из
+     * этого же wait_queue. Небезопасный макрос после такого читает next из
+     * освобождённой записи и отдаёт мусорный wait; wake_up разыменовывает его поле
+     * по смещению 0x18 и роняет сервер.
+     *
+     * Улика: два отчёта macOS 24.08 (09:44:07 и 09:46:19), стеки совпали до кадра —
+     * SIGSEGV KERN_INVALID_ADDRESS at 0x18,
+     * wake_up <- add_completion <- release_job_process <- kill_process.
+     * Рядом, на :222, над ЭТИМ ЖЕ списком уже стоит SAFE — асимметрия и была уликой. */
+    LIST_FOR_EACH_ENTRY_SAFE( wait, wait_next, &completion->wait_queue, struct completion_wait, wait_queue_entry )
     {
         wake_up( &wait->obj, 1 );
         if (list_empty( &completion->queue )) return;

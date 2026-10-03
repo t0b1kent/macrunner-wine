@@ -249,7 +249,7 @@ threadmbcinfo* create_mbcinfo(int cp, LCID lcid, threadmbcinfo *old_mbcinfo)
       newcp = GetOEMCP();
       break;
     case _MB_CP_LOCALE:
-      newcp = get_locinfo()->lc_codepage;
+      newcp = MSVCRT_locale ? get_locinfo()->lc_codepage : 0;
       if(newcp)
           break;
       /* fall through (C locale) */

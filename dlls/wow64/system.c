@@ -27,9 +27,76 @@
 #include "winnt.h"
 #include "winternl.h"
 #include "wow64_private.h"
+#include "wine/exception.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
+
+static BOOL macrunner_wow64_can_write( void *ptr, SIZE_T size )
+{
+    ULONG_PTR start = (ULONG_PTR)ptr, end = start + size;
+
+    if (!size) return TRUE;
+    if (!ptr || end < start) return FALSE;
+
+    while (start < end)
+    {
+        MEMORY_BASIC_INFORMATION mbi;
+        ULONG_PTR region_end;
+        DWORD protect;
+
+        if (NtQueryVirtualMemory( NtCurrentProcess(), (void *)start, MemoryBasicInformation,
+                                  &mbi, sizeof(mbi), NULL ) != STATUS_SUCCESS)
+            return FALSE;
+        if (mbi.State != MEM_COMMIT) return FALSE;
+        if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) return FALSE;
+        protect = mbi.Protect & 0xff;
+        if (protect != PAGE_READWRITE && protect != PAGE_WRITECOPY &&
+            protect != PAGE_EXECUTE_READWRITE && protect != PAGE_EXECUTE_WRITECOPY)
+            return FALSE;
+
+        region_end = (ULONG_PTR)mbi.BaseAddress + mbi.RegionSize;
+        if (region_end <= start) return FALSE;
+        start = region_end;
+    }
+    return TRUE;
+}
+
+static NTSTATUS macrunner_wow64_prepare_write( void *ptr, SIZE_T size )
+{
+    ULONG_PTR start = (ULONG_PTR)ptr, end = start + size;
+
+    if (!macrunner_wow64_can_write( ptr, size )) return STATUS_ACCESS_VIOLATION;
+
+    while (start < end)
+    {
+        MEMORY_BASIC_INFORMATION mbi;
+        ULONG_PTR region_end;
+        DWORD protect, new_protect, old_protect;
+        void *addr;
+        SIZE_T len;
+        NTSTATUS status;
+
+        if (NtQueryVirtualMemory( NtCurrentProcess(), (void *)start, MemoryBasicInformation,
+                                  &mbi, sizeof(mbi), NULL ) != STATUS_SUCCESS)
+            return STATUS_ACCESS_VIOLATION;
+
+        protect = mbi.Protect & 0xff;
+        region_end = (ULONG_PTR)mbi.BaseAddress + mbi.RegionSize;
+        if (region_end <= start) return STATUS_ACCESS_VIOLATION;
+
+        if (protect == PAGE_WRITECOPY || protect == PAGE_EXECUTE_WRITECOPY)
+        {
+            addr = (void *)start;
+            len = min( region_end, end ) - start;
+            new_protect = (protect == PAGE_EXECUTE_WRITECOPY) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+            status = NtProtectVirtualMemory( NtCurrentProcess(), &addr, &len, new_protect, &old_protect );
+            if (status) return status;
+        }
+        start = region_end;
+    }
+    return STATUS_SUCCESS;
+}
 
 static void put_system_basic_information( SYSTEM_BASIC_INFORMATION32 *info32,
                                           const SYSTEM_BASIC_INFORMATION *info )
@@ -316,6 +383,9 @@ NTSTATUS WINAPI wow64_NtQuerySystemInformation( UINT *args )
 
     NTSTATUS status;
 
+    MESSAGE( "macrunner-wow64: NtQuerySystemInformation enter class=%u ptr=%p len=%lu retlen=%p\n",
+             class, ptr, len, retlen );
+
     switch (class)
     {
     case SystemPerformanceInformation:  /* SYSTEM_PERFORMANCE_INFORMATION */
@@ -349,13 +419,34 @@ NTSTATUS WINAPI wow64_NtQuerySystemInformation( UINT *args )
         if (len == sizeof(SYSTEM_BASIC_INFORMATION32))
         {
             SYSTEM_BASIC_INFORMATION info;
+            SYSTEM_BASIC_INFORMATION32 info32_local;
             SYSTEM_BASIC_INFORMATION32 *info32 = ptr;
 
-            if (!(status = NtQuerySystemInformation( SystemEmulationBasicInformation, &info, sizeof(info), NULL )))
-                put_system_basic_information( info32, &info );
+            MESSAGE( "macrunner-wow64: NtQuerySystemInformation basic native-before ptr=%p len=%lu\n",
+                     info32, len );
+            if ((status = macrunner_wow64_prepare_write( info32, sizeof(*info32) )))
+            {
+                MESSAGE( "macrunner-wow64: NtQuerySystemInformation basic prepare-write status=%08lx ptr=%p len=%zu\n",
+                         status, info32, sizeof(*info32) );
+            }
+            else if (!(status = NtQuerySystemInformation( SystemEmulationBasicInformation, &info, sizeof(info), NULL )))
+            {
+                MESSAGE( "macrunner-wow64: NtQuerySystemInformation basic put-before ptr=%p\n", info32 );
+                put_system_basic_information( &info32_local, &info );
+                status = write_guest32_output( info32, &info32_local, sizeof(info32_local) );
+                MESSAGE( "macrunner-wow64: NtQuerySystemInformation basic put-status=%08lx ptr=%p\n",
+                         status, info32 );
+            }
+            MESSAGE( "macrunner-wow64: NtQuerySystemInformation basic leave status=%08lx ptr=%p\n",
+                     status, info32 );
         }
         else status = STATUS_INFO_LENGTH_MISMATCH;
-        if (retlen) *retlen = sizeof(SYSTEM_BASIC_INFORMATION32);
+        if (retlen)
+        {
+            ULONG retlen32 = sizeof(SYSTEM_BASIC_INFORMATION32);
+            NTSTATUS write_status = write_guest32_output( retlen, &retlen32, sizeof(retlen32) );
+            if (!status) status = write_status;
+        }
         return status;
 
     case SystemProcessInformation:  /* SYSTEM_PROCESS_INFORMATION */
@@ -841,7 +932,8 @@ NTSTATUS WINAPI wow64_NtWow64GetNativeSystemInformation( UINT *args )
             SYSTEM_BASIC_INFORMATION info;
             SYSTEM_BASIC_INFORMATION32 *info32 = ptr;
 
-            if (!(status = NtQuerySystemInformation( class, &info, sizeof(info), NULL )))
+            status = macrunner_wow64_prepare_write( info32, sizeof(*info32) );
+            if (!status && !(status = NtQuerySystemInformation( class, &info, sizeof(info), NULL )))
                 put_system_basic_information( info32, &info );
         }
         else status = STATUS_INFO_LENGTH_MISMATCH;

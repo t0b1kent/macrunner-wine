@@ -28,6 +28,11 @@
 
 #include <Security/AuthSession.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -42,9 +47,40 @@ WINE_DEFAULT_DEBUG_CHANNEL(macdrv);
 
 C_ASSERT(NUM_EVENT_TYPES <= sizeof(macdrv_event_mask) * 8);
 
+static BOOL trace_ui_input_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
+
+static unsigned long long trace_ui_input_tid(void)
+{
+    uint64_t tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    return tid;
+}
+
 int topmost_float_inactive = TOPMOST_FLOAT_INACTIVE_NONFULLSCREEN;
 bool capture_displays_for_fullscreen = false;
 BOOL allow_vsync = TRUE;
+BOOL macrunner_display_mode_changed = FALSE;
+static struct timespec macrunner_mode_change_ts;
+void macrunner_note_display_mode_change(void)
+{
+    clock_gettime(CLOCK_MONOTONIC, &macrunner_mode_change_ts);
+}
+unsigned int macrunner_ms_since_display_mode_change(void)
+{
+    struct timespec now;
+    if (!macrunner_mode_change_ts.tv_sec && !macrunner_mode_change_ts.tv_nsec) return ~0u;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (unsigned int)((now.tv_sec - macrunner_mode_change_ts.tv_sec) * 1000 + (now.tv_nsec - macrunner_mode_change_ts.tv_nsec) / 1000000);
+}
 BOOL allow_set_gamma = TRUE;
 /* CrossOver Hack 10912: Mac Edit menu */
 int mac_edit_menu = MAC_EDIT_MENU_BY_KEY;
@@ -326,6 +362,7 @@ static void setup_options(void)
     if (!get_config_key(hkey, appkey, "CaptureDisplaysForFullscreen", buffer, sizeof(buffer)))
         capture_displays_for_fullscreen = IS_OPTION_TRUE(buffer[0]);
 
+
     if (!get_config_key(hkey, appkey, "AllowVerticalSync", buffer, sizeof(buffer)))
         allow_vsync = IS_OPTION_TRUE(buffer[0]);
 
@@ -437,14 +474,251 @@ static void load_strings(struct localized_string *str)
 }
 
 
+/* MacRunner 2026-07-29 (HK E2E lane): the init body, split out of macdrv_init so the
+ * unix side can run it WITHOUT the PE.
+ *
+ * Measured across every HK run of 2026-07-29 (20 run dirs under
+ * reports/phase4-hollow-knight/laneA-*): in Hollow Knight's process
+ * stage=macdrv_init_entry = 0 AND stage=wow64_init_entry = 0 AND
+ * stage=dllmain_attach = 0 -- the PE-side MACDRV_CALL(init) never arrives, so none of
+ * this ever ran there.  The SAME runs show winemac.so demonstrably ALIVE in that
+ * process: macrunner-get-win-data, macrunner-winrealize: d3d_on_demand and
+ * stage=create_cocoa_window all print with HK's unix pid, because DXMT reaches
+ * winemac.so directly through the exported d3dmetal `macdrv_functions` table
+ * (d3dmetal.c:424), which needs no unixlib call and no DllMain.
+ *
+ * So the driver is not missing from the process -- only its initialisation is.  This
+ * function is that initialisation, callable from the unix side, and macdrv_process_selfinit()
+ * below drives it from the first d3dmetal entry HK actually reaches.
+ *
+ * `strings` may be NULL (the self-init path has no PE to LoadStringW from); the Cocoa
+ * menu builder falls back to built-in English titles, see WineLocalizedString(). */
+static pthread_mutex_t macdrv_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+static BOOL macdrv_process_initialised;
+
+static NTSTATUS macdrv_init_core(struct localized_string *strings, const char *origin)
+{
+    SessionAttributeBits attributes;
+    OSStatus status;
+
+    pthread_mutex_lock(&macdrv_init_mutex);
+    if (macdrv_process_initialised)
+    {
+        pthread_mutex_unlock(&macdrv_init_mutex);
+        fprintf(stderr, "macrunner-ui-input: stage=macdrv_init_core_already pid=%d origin=%s\n",
+                getpid(), origin);
+        fflush(stderr);
+        return STATUS_SUCCESS;
+    }
+
+    status = SessionGetInfo(callerSecuritySession, NULL, &attributes);
+    fprintf(stderr, "macrunner-ui-input: stage=macdrv_init_session pid=%d status=%d attrs=0x%x graphic=%d origin=%s\n",
+            getpid(), (int)status, (unsigned int)attributes,
+            (int)((status == noErr) && (attributes & sessionHasGraphicAccess) ? 1 : 0), origin);
+    fflush(stderr);
+    if (status != noErr || !(attributes & sessionHasGraphicAccess))
+    {
+        pthread_mutex_unlock(&macdrv_init_mutex);
+        fprintf(stderr, "macrunner-ui-input: stage=macdrv_init_no_graphic_access pid=%d — "
+                "driver NOT initialised, Cocoa app never started, input impossible\n", getpid());
+        fflush(stderr);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    init_win_context();
+    setup_options();
+    if (strings) load_strings(strings);
+
+    macdrv_err_on = ERR_ON(macdrv);
+    {
+        int cocoa_rc;
+
+        fprintf(stderr, "macrunner-ui-input: stage=macdrv_init_start_cocoa_call pid=%d origin=%s\n",
+                getpid(), origin);
+        fflush(stderr);
+        cocoa_rc = macdrv_start_cocoa_app(NtGetTickCount());
+        fprintf(stderr, "macrunner-ui-input: stage=macdrv_init_start_cocoa_ret pid=%d rc=%d\n",
+                getpid(), cocoa_rc);
+        fflush(stderr);
+        if (cocoa_rc)
+        {
+            pthread_mutex_unlock(&macdrv_init_mutex);
+            ERR("Failed to start Cocoa app main loop\n");
+            return STATUS_UNSUCCESSFUL;
+        }
+    }
+
+    init_user_driver();
+    macdrv_process_initialised = TRUE;
+    pthread_mutex_unlock(&macdrv_init_mutex);
+
+    fprintf(stderr, "macrunner-ui-input: stage=macdrv_init_user_driver_set pid=%d origin=%s\n",
+            getpid(), origin);
+    fflush(stderr);
+    return STATUS_SUCCESS;
+}
+
+
+/***********************************************************************
+ *              macdrv_process_selfinit
+ *
+ * MacRunner 2026-07-29 (HK E2E lane): bring the Mac driver up from the UNIX side,
+ * for a process whose winemac.drv PE never ran its DllMain.
+ *
+ * A/B: MACRUNNER_MACDRV_UNIX_SELFINIT=0 restores the previous behaviour exactly
+ * (this function then does nothing and the process keeps win32u's re-entrancy
+ * placeholder, which is the measured 2026-07-29 baseline).
+ *
+ * Safe to call from any thread and any number of times: macdrv_init_core() is
+ * once-only under a mutex, and macdrv_start_cocoa_app() schedules run_cocoa_app on
+ * the MAIN thread's run loop and waits at most 5 s -- it is explicitly designed to be
+ * called from a secondary thread, and HK's process main thread is parked in the bare
+ * CFRunLoopRun of ntdll's loader, which is exactly the state it expects.
+ */
+/* MacRunner 2026-07-29 (HK E2E lane): OPTIONAL DEFERRAL of the self-init above.
+ *
+ * The measurement that motivates it, conditioned on wall-clock >=600 s so that short
+ * diagnostic probes cannot manufacture failures: self-init ABSENT -> 14/16 runs reach
+ * `Loaded Objects now`, MonoManager->UnloadTime max 237.7 s, none over 300 s. Self-init
+ * PRESENT -> 0/8, with a heavy tail (784.1 s and 928.5 s observed). The medians are
+ * unchanged in both eras, so this is not a uniform slowdown -- a subset of runs stalls
+ * 2-4x -- and every one of those stalls sits inside the Mono scene-load window that
+ * self-init lands in the middle of (it fires at ~+140 s, the window is ~+54 s to ~+280 s).
+ *
+ * Both halves of this lane's objective have been demonstrated, never together: keys reach
+ * the guest when HK has a real driver, and the menu loads when it has none. Deferring the
+ * install past the scene-load window is the one intervention that can satisfy both, and it
+ * wins under either reading of the cost -- if the cost is specific to the loading window,
+ * deferral removes it; if the driver is simply expensive while Mono is loading, deferral
+ * moves that expense to after the menu, which is exactly when this lane needs input.
+ *
+ * MACRUNNER_MACDRV_SELFINIT_DELAY_MS=<n> withholds the driver for n ms measured from the
+ * FIRST call, i.e. from the first winemac.so entry point HK's process reaches. Unset or 0
+ * is the current behaviour, byte-for-byte: the very first call initialises inline.
+ *
+ * Deferral only has an effect if something calls back in after the delay, so the callers in
+ * d3dmetal.c retry from the recurring DXMT entry points as well as the one-shot swapchain
+ * path. Deliberately NOT a timer thread: a bare pthread has no Wine TEB, and a TEB-less
+ * thread reaching win32u is the documented way into the fault router that has already cost
+ * these lanes six iterations (signal_arm64.c:1454). Every caller here is a Wine thread. */
+static BOOL macdrv_selfinit_delay_elapsed(void)
+{
+    static const char *cached_env;
+    static DWORD first_tick, delay_ms;
+    static BOOL resolved;
+    DWORD now = NtGetTickCount();
+
+    if (!resolved)
+    {
+        resolved = TRUE;
+        cached_env = getenv("MACRUNNER_MACDRV_SELFINIT_DELAY_MS");
+        delay_ms = (cached_env && cached_env[0]) ? (DWORD)atoi(cached_env) : 0;
+        first_tick = now;
+        if (delay_ms)
+        {
+            fprintf(stderr, "macrunner-ui-input: stage=macdrv_selfinit_deferred pid=%d delay_ms=%u — "
+                    "driver withheld until the scene-load window has passed\n",
+                    getpid(), (unsigned int)delay_ms);
+            fflush(stderr);
+        }
+    }
+    if (!delay_ms) return TRUE;
+    /* NtGetTickCount wraps every ~49.7 days; the unsigned difference stays correct across it. */
+    if ((DWORD)(now - first_tick) >= delay_ms) return TRUE;
+
+    /* Count the declines and print on a coarse ladder.
+     *
+     * Without this, the first deferred run could not distinguish two very different failures:
+     * the retry sites are never called after the menu, or they are called and the run simply
+     * did not live long enough (it got 38 s of post-menu life before teardown). Those need
+     * opposite fixes -- widen the retry set, versus give the run more time -- and a zero on
+     * `macdrv_selfinit_entry` is equally consistent with both.
+     *
+     * Powers-of-four ladder so a hot render path cannot turn this into a log flood, with the
+     * elapsed time on every line so the LAST one before teardown dates the final retry. */
+    {
+        static unsigned long declines, next_report = 1;
+
+        if (++declines >= next_report)
+        {
+            next_report *= 4;
+            fprintf(stderr, "macrunner-ui-input: stage=macdrv_selfinit_waiting pid=%d declines=%lu "
+                    "elapsed_ms=%u delay_ms=%u\n", getpid(), declines,
+                    (unsigned int)(DWORD)(now - first_tick), (unsigned int)delay_ms);
+            fflush(stderr);
+        }
+    }
+    return FALSE;
+}
+
+/* DECLSPEC_EXPORT: winemac.so exports exactly three symbols, and win32u's placeholder
+ * driver needs to reach this one by dlsym. See nulldrv_ProcessEvents() in
+ * win32u/driver.c for why the call has to come from there rather than from DXMT. */
+DECLSPEC_EXPORT BOOL macdrv_process_selfinit(void)
+{
+    static BOOL announced;   /* a duplicated log line under a race is harmless */
+    static const char *gate;
+    static BOOL gate_resolved;
+
+    /* Ordered so the common case is a single BOOL read. This is now called from
+     * nulldrv_ProcessEvents(), i.e. on every message-pump wait of every placeholder
+     * process, so the getenv() that used to run before this check would have been an
+     * O(n) environment walk per pump. */
+    if (macdrv_process_initialised) return TRUE;
+    if (!gate_resolved)
+    {
+        gate_resolved = TRUE;
+        gate = getenv("MACRUNNER_MACDRV_UNIX_SELFINIT");
+    }
+    if (gate && gate[0] == '0')
+    {
+        if (!announced)
+        {
+            announced = TRUE;
+            fprintf(stderr, "macrunner-ui-input: stage=macdrv_selfinit_disabled pid=%d\n", getpid());
+            fflush(stderr);
+        }
+        return FALSE;
+    }
+
+    /* Checked before the entry announcement so a deferred run's log says "waiting", not
+     * "initialising", at the moment it declines -- this lane has twice read an announcement
+     * as proof that the thing it announces actually happened. */
+    if (!macdrv_selfinit_delay_elapsed()) return FALSE;
+
+    if (!announced)
+    {
+        announced = TRUE;
+        fprintf(stderr, "macrunner-ui-input: stage=macdrv_selfinit_entry pid=%d tid=%llu — "
+                "no PE DllMain ran in this process, initialising the driver from the unix side\n",
+                getpid(), trace_ui_input_tid());
+        fflush(stderr);
+    }
+
+    return !macdrv_init_core(NULL, "selfinit");
+}
+
+
 /***********************************************************************
  *              macdrv_init
  */
 static NTSTATUS macdrv_init(void *arg)
 {
     struct init_params *params = arg;
-    SessionAttributeBits attributes;
-    OSStatus status;
+
+    /* MacRunner 2026-07-28 (HK input) — UNGATED, a handful of lines once per
+     * process.  Measured on live HK pid 13773 (winemac.so UUID-verified against
+     * the mapped image): app_icon_callback/app_quit_request_callback/both reg
+     * callbacks were ALL NULL, and no run_cocoa_app source was registered on the
+     * main run loop, while a real visible WineWindow existed.  dllmain.c:486
+     * always passes &macdrv_app_icon, so a NULL static means this function never
+     * executed its first statement.  Every rung the input ladder measured lives
+     * DOWNSTREAM of this edge, so its silence was uninterpretable.  Trace the
+     * whole init chain so "did not run" can never again be confused with
+     * "not logged". */
+    fprintf(stderr, "macrunner-ui-input: stage=macdrv_init_entry pid=%d icon_cb=%p strings=%p\n",
+            getpid(), (void *)(UINT_PTR)params->app_icon_callback, params->strings);
+    fflush(stderr);
 
     app_icon_callback = params->app_icon_callback;
     app_quit_request_callback = params->app_quit_request_callback;
@@ -452,23 +726,10 @@ static NTSTATUS macdrv_init(void *arg)
     regqueryvalueexa_callback = params->regqueryvalueexa_callback;
     regsetvalueexa_callback = params->regsetvalueexa_callback;
 
-    status = SessionGetInfo(callerSecuritySession, NULL, &attributes);
-    if (status != noErr || !(attributes & sessionHasGraphicAccess))
-        return STATUS_UNSUCCESSFUL;
-
-    init_win_context();
-    setup_options();
-    load_strings(params->strings);
-
-    macdrv_err_on = ERR_ON(macdrv);
-    if (macdrv_start_cocoa_app(NtGetTickCount()))
-    {
-        ERR("Failed to start Cocoa app main loop\n");
-        return STATUS_UNSUCCESSFUL;
-    }
-
-    init_user_driver();
-    return STATUS_SUCCESS;
+    /* The callbacks above are assigned unconditionally, before the once-guard inside
+     * macdrv_init_core(): if the unix self-init got here first it left them at 0, and
+     * a PE that later does arrive must still be able to install the real ones. */
+    return macdrv_init_core(params->strings, "dllmain");
 }
 
 
@@ -481,6 +742,14 @@ void macdrv_ThreadDetach(void)
 
     if (data)
     {
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=macdrv_ThreadDetach pid=%d native_tid=%llu wine_tid=%lx queue=%p fd=%d\n",
+                    getpid(), trace_ui_input_tid(), (unsigned long)GetCurrentThreadId(),
+                    data->queue, data->queue ? macdrv_get_event_queue_fd(data->queue) : -1);
+            fflush(stderr);
+        }
         macdrv_destroy_event_queue(data->queue);
         if (data->keyboard_layout_uchr)
             CFRelease(data->keyboard_layout_uchr);
@@ -512,6 +781,13 @@ static void set_queue_display_fd(int fd)
         ret = wine_server_call(req);
     }
     SERVER_END_REQ;
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=set_queue_display_fd pid=%d tid=%llu fd=%d handle=%p ret=%d\n",
+                getpid(), trace_ui_input_tid(), fd, handle, ret);
+        fflush(stderr);
+    }
     if (ret)
     {
         MESSAGE("macdrv: Can't store handle for event queue fd\n");
@@ -550,6 +826,14 @@ struct macdrv_thread_data *macdrv_init_thread_data(void)
 
     set_queue_display_fd(macdrv_get_event_queue_fd(data->queue));
     NtUserGetThreadInfo()->driver_data = (UINT_PTR)data;
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=macdrv_init_thread_data pid=%d native_tid=%llu wine_tid=%lx queue=%p fd=%d\n",
+                getpid(), trace_ui_input_tid(), (unsigned long)GetCurrentThreadId(),
+                data->queue, macdrv_get_event_queue_fd(data->queue));
+        fflush(stderr);
+    }
 
     NtUserActivateKeyboardLayout(data->active_keyboard_layout, 0);
     return data;
@@ -652,6 +936,32 @@ C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
 
 #ifdef _WIN64
 
+static void *wow64_ptr_from_args( const void *args, ULONG ptr )
+{
+    ULONG_PTR base = (ULONG_PTR)args & ~(ULONG_PTR)0xffffffff;
+
+    return ptr ? (void *)(base | ptr) : NULL;
+}
+
+static struct localized_string *wow64_translate_strings( const void *args, ULONG ptr )
+{
+    const struct localized_string *src = wow64_ptr_from_args( args, ptr );
+    struct localized_string *dst;
+    unsigned int i, count;
+
+    if (!src) return NULL;
+    for (count = 0; src[count].id && count < 256; count++) {}
+    if (src[count].id) return NULL;
+    if (!(dst = calloc( count + 1, sizeof(*dst) ))) return NULL;
+
+    for (i = 0; i < count; i++)
+    {
+        dst[i] = src[i];
+        dst[i].str = (UINT_PTR)wow64_ptr_from_args( args, (ULONG)src[i].str );
+    }
+    return dst;
+}
+
 static NTSTATUS wow64_init(void *arg)
 {
     struct
@@ -664,14 +974,60 @@ static NTSTATUS wow64_init(void *arg)
         UINT64 regsetvalueexa_callback;
     } *params32 = arg;
     struct init_params params;
+    NTSTATUS status;
 
-    params.strings = UlongToPtr(params32->strings);
+    /* MacRunner 2026-07-29 (HK E2E lane) — UNGATED, at most 3 lines per process.
+     *
+     * Measured on live HK (laneA-HK-E2E-05-a1, pid 7057): the game process has
+     * aarch64-unix/winemac.so MAPPED but x86_64-windows/winemac.drv NOT mapped, and
+     * NO stage=macdrv_init_entry anywhere in the run log — while a DIFFERENT process
+     * (unix 7156 = wine 0020, the explorer-class one) ran the whole init chain and
+     * created 4 Cocoa windows.  HK is an x86_64 PE, so its MACDRV_CALL(init) lands
+     * HERE, in wow64_init, not in macdrv_init directly — and this function can return
+     * BEFORE macdrv_init on a strings-translation failure, which would produce exactly
+     * that signature: winemac.so mapped by __wine_init_unix_call, process_attach
+     * returning FALSE, the PE unmapped again, and macdrv_init never entered.
+     * dllmain.c's PE-side trace cannot settle this on its own because both of its
+     * paths are dead in these runs (STD_ERROR_HANDLE is NULL in a GUI process, and
+     * ERR_(winediag) is silenced by WINEDEBUG=-all), so trace it from the unix side,
+     * where plain fprintf(stderr) demonstrably reaches run.log. */
+    fprintf(stderr, "macrunner-ui-input: stage=wow64_init_entry pid=%d strings32=%08x\n",
+            getpid(), (unsigned int)params32->strings);
+    fflush(stderr);
+
+    /* MacRunner 2026-08-13, лейн ЛЕСТНИЦА, итерация 818 — ОТСУТСТВИЕ строк НЕ ЕСТЬ ОТКАЗ.
+     *
+     * Здесь стояла стена ступени 1. `wow64_translate_strings` отдаёт NULL в ДВУХ разных
+     * случаях: «переводить нечего» (указатель 0) и «перевести не смог». Проверка их не
+     * различала, поэтому штатный NULL читался как отказ.
+     *
+     * Замерено на живом прогоне (d822-З2): i386-сторона печатает
+     * `wow64_init_entry strings32=00000000` — то есть строки ПРОПУЩЕНЫ намеренно
+     * (`macdrv_pe_skip_strings`, лекарство от зависания DllMain), — и следом
+     * `wow64_init_strings_FAILED`, `macdrv_init` не вызван. Дальше по цепочке:
+     * `LdrLoadDll winemac.drv status=c0000142`, USER32 остаётся без драйвера, окна нет.
+     *
+     * Что доказывает, что дело именно в различении, а не в самих строках: на 64-битном
+     * пути ровно тот же NULL проходит штатно — `macdrv_init_entry ... strings=0x0`. */
+    if (!params32->strings) params.strings = NULL;
+    else if (!(params.strings = wow64_translate_strings( arg, params32->strings )))
+    {
+        fprintf(stderr, "macrunner-ui-input: stage=wow64_init_strings_FAILED pid=%d — "
+                "returning STATUS_ACCESS_VIOLATION, macdrv_init NEVER CALLED\n", getpid());
+        fflush(stderr);
+        return STATUS_ACCESS_VIOLATION;
+    }
+    fprintf(stderr, "macrunner-ui-input: stage=wow64_init_strings_ok pid=%d strings32=%08x "
+            "перевод=%p\n", getpid(), (unsigned int)params32->strings, params.strings);
+    fflush(stderr);
     params.app_icon_callback = params32->app_icon_callback;
     params.app_quit_request_callback = params32->app_quit_request_callback;
     params.regcreateopenkeyexa_callback = params32->regcreateopenkeyexa_callback;
     params.regqueryvalueexa_callback = params32->regqueryvalueexa_callback;
     params.regsetvalueexa_callback = params32->regsetvalueexa_callback;
-    return macdrv_init(&params);
+    status = macdrv_init(&params);
+    free(params.strings);
+    return status;
 }
 
 const unixlib_entry_t __wine_unix_call_wow64_funcs[] =

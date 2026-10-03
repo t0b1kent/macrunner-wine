@@ -44,12 +44,17 @@ BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
 {
     if (reason == DLL_PROCESS_ATTACH)
     {
+        MESSAGE( "macrunner-kernelbase-dllmain: pid=%04x process-attach hinst=%p\n",
+                 (unsigned int)GetCurrentProcessId(), hinst );
         DisableThreadLibraryCalls( hinst );
         IsWow64Process( GetCurrentProcess(), &is_wow64 );
         init_global_data();
         init_locale( hinst );
+        MESSAGE( "macrunner-kernelbase-dllmain: pid=%04x init_locale done\n",
+                 (unsigned int)GetCurrentProcessId() );
         init_startup_info( NtCurrentTeb()->Peb->ProcessParameters );
         init_console();
+        macrunner_hb_0e0_pe_probe_init();
     }
     return TRUE;
 }

@@ -36,6 +36,7 @@ typedef struct
 } LOCKTABLEENTRY;
 
 static LOCKTABLEENTRY lock_table[ _TOTAL_LOCKS ];
+static LONG lock_table_lock_init_state; /* 0 = idle, 1 = initializing, 2 = ready */
 
 static inline void msvcrt_mlock_set_entry_initialized( int locknum, BOOL initialized )
 {
@@ -45,15 +46,34 @@ static inline void msvcrt_mlock_set_entry_initialized( int locknum, BOOL initial
 static inline void msvcrt_initialize_mlock( int locknum )
 {
   InitializeCriticalSectionEx( &(lock_table[ locknum ].crit), 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
-  lock_table[ locknum ].crit.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": LOCKTABLEENTRY.crit");
+  SET_CS_DEBUG_NAME(&(lock_table[ locknum ].crit), __FILE__ ": LOCKTABLEENTRY.crit");
   msvcrt_mlock_set_entry_initialized( locknum, TRUE );
+  if (locknum == _LOCKTAB_LOCK) InterlockedExchange( &lock_table_lock_init_state, 2 );
 }
 
 static inline void msvcrt_uninitialize_mlock( int locknum )
 {
-  lock_table[ locknum ].crit.DebugInfo->Spare[0] = 0;
+  SET_CS_DEBUG_NAME(&(lock_table[ locknum ].crit), 0);
   DeleteCriticalSection( &(lock_table[ locknum ].crit) );
   msvcrt_mlock_set_entry_initialized( locknum, FALSE );
+  if (locknum == _LOCKTAB_LOCK) InterlockedExchange( &lock_table_lock_init_state, 0 );
+}
+
+static void msvcrt_ensure_locktab_lock(void)
+{
+  LONG state;
+
+  if (lock_table[ _LOCKTAB_LOCK ].bInit) return;
+
+  state = InterlockedCompareExchange( &lock_table_lock_init_state, 1, 0 );
+  if (!state)
+  {
+    if (!lock_table[ _LOCKTAB_LOCK ].bInit) msvcrt_initialize_mlock( _LOCKTAB_LOCK );
+    InterlockedExchange( &lock_table_lock_init_state, 2 );
+    return;
+  }
+
+  while (!lock_table[ _LOCKTAB_LOCK ].bInit && lock_table_lock_init_state == 1) Sleep(0);
 }
 
 /**********************************************************************
@@ -71,12 +91,11 @@ void msvcrt_init_mt_locks(void)
 
   /* Initialize the table */
   for( i=0; i < _TOTAL_LOCKS; i++ )
-  {
-    msvcrt_mlock_set_entry_initialized( i, FALSE );
-  }
+    if( !lock_table[ i ].bInit )
+      msvcrt_mlock_set_entry_initialized( i, FALSE );
 
   /* Initialize our lock table lock */
-  msvcrt_initialize_mlock( _LOCKTAB_LOCK );
+  msvcrt_ensure_locktab_lock();
 }
 
 /**********************************************************************
@@ -89,6 +108,10 @@ void CDECL _lock( int locknum )
   /* If the lock doesn't exist yet, create it */
   if( lock_table[ locknum ].bInit == FALSE )
   {
+    if( locknum == _LOCKTAB_LOCK )
+      msvcrt_ensure_locktab_lock();
+    else
+    {
     /* Lock while we're changing the lock table */
     _lock( _LOCKTAB_LOCK );
 
@@ -101,6 +124,7 @@ void CDECL _lock( int locknum )
 
     /* Unlock ourselves */
     _unlock( _LOCKTAB_LOCK );
+    }
   }
 
   EnterCriticalSection( &(lock_table[ locknum ].crit) );

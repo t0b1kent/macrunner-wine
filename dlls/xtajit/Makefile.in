@@ -1,0 +1,13 @@
+MODULE    = xtajit.dll
+UNIXLIB   = xtajit.so
+IMPORTS   = ntdll wow64
+EXTRADEFS = -D_CRTIMP=
+EXTRAINCL = -I$(top_srcdir)/../hyperbridge/include
+UNIX_CFLAGS = -I$(top_srcdir)/../hyperbridge/include
+UNIX_LIBS = $(top_srcdir)/../hyperbridge/libhyperbridge.a
+
+EXTRADLLFLAGS = -nodefaultlibs
+
+SOURCES = \
+	cpu.c \
+	unixlib.c

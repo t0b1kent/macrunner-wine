@@ -22,6 +22,8 @@
 
 #include <assert.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -51,6 +53,12 @@ enum property_type
     PROP_TYPE_STRING, /* atom that was originally a string */
     PROP_TYPE_ATOM    /* plain atom */
 };
+
+static int macrunner_trace_createwindow(void)
+{
+    const char *val = getenv( "MACRUNNER_HB_TRACE_CREATEWINDOW" );
+    return val && val[0] && val[0] != '0';
+}
 
 
 struct window
@@ -623,7 +631,23 @@ static struct window *create_window( struct window *parent, struct window *owner
     struct window_class *class;
     struct obj_locator class_locator;
 
-    if (!(desktop = get_thread_desktop( current, DESKTOP_CREATEWINDOW ))) return NULL;
+    if (macrunner_trace_createwindow())
+        fprintf( stderr, "macrunner-server-create-window: enter process=%p thread=%p "
+                 "thread_desktop=%08x desktop_users=%d atom=%04x class_instance=%08lx "
+                 "instance=%08lx parent=%p owner=%p\n",
+                 current->process, current, current->desktop, current->desktop_users,
+                 atom, (unsigned long)class_instance, (unsigned long)instance, parent, owner );
+
+    if (!(desktop = get_thread_desktop( current, DESKTOP_CREATEWINDOW )))
+    {
+        if (macrunner_trace_createwindow())
+            fprintf( stderr, "macrunner-server-create-window: no-desktop process=%p thread=%p "
+                     "thread_desktop=%08x desktop_users=%d atom=%04x class_instance=%08lx "
+                     "instance=%08lx\n",
+                     current->process, current, current->desktop, current->desktop_users,
+                     atom, (unsigned long)class_instance, (unsigned long)instance );
+        return NULL;
+    }
 
     if (!(class = grab_class( current->process, atom, class_instance, &extra_bytes, &class_locator )))
     {

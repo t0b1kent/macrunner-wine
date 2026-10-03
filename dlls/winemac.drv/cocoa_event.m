@@ -22,6 +22,11 @@
 #include <sys/event.h>
 #include <sys/time.h>
 #include <libkern/OSAtomic.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "macdrv_cocoa.h"
 #import "cocoa_event.h"
@@ -39,6 +44,24 @@ static NSString* const WineHotKeyModFlagsKey    = @"modFlags";
 static NSString* const WineHotKeyKeyCodeKey     = @"keyCode";
 static NSString* const WineHotKeyCarbonRefKey   = @"hotKeyRef";
 static const OSType WineHotKeySignature = 'Wine';
+
+static BOOL trace_ui_input_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
+
+static unsigned long long trace_ui_input_tid(void)
+{
+    uint64_t tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    return tid;
+}
 
 
 @implementation NSEvent (WineExtensions)
@@ -189,6 +212,15 @@ static const OSType WineHotKeySignature = 'Wine';
             rc = write(fds[1], &junk, 1);
         } while (rc < 0 && errno == EINTR);
 
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=queue_signal pid=%d tid=%llu queue=%p read_fd=%d write_fd=%d rc=%d errno=%d\n",
+                    getpid(), trace_ui_input_tid(), self, fds[0], fds[1], rc,
+                    rc < 0 ? errno : 0);
+            fflush(stderr);
+        }
+
         if (rc < 0 && errno != EAGAIN)
             ERR(@"%@: got error writing to event queue signaling pipe: %s\n", self, strerror(errno));
     }
@@ -197,8 +229,12 @@ static const OSType WineHotKeySignature = 'Wine';
     {
         NSIndexSet* indexes;
         MacDrvEvent* lastEvent;
+        NSUInteger before_count;
+        NSUInteger after_count;
+        int event_type = event->event->type;
 
         [eventsLock lock];
+        before_count = [events count];
 
         indexes = [events indexesOfObjectsPassingTest:^BOOL(id obj, NSUInteger idx, BOOL *stop){
             return ((MacDrvEvent*)obj)->event->deliver <= 0;
@@ -232,9 +268,28 @@ static const OSType WineHotKeySignature = 'Wine';
         else
             [events addObject:event];
 
+        after_count = [events count];
         [eventsLock unlock];
 
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=queue_post pid=%d tid=%llu queue=%p event=%p type=%d before=%lu after=%lu deliver=%d\n",
+                    getpid(), trace_ui_input_tid(), self, event->event, event_type,
+                    (unsigned long)before_count, (unsigned long)after_count,
+                    event->event->deliver);
+            fflush(stderr);
+        }
+
         [self signalEventAvailable];
+
+        if (trace_ui_input_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=queue_post_signal_done pid=%d tid=%llu queue=%p event=%p type=%d\n",
+                    getpid(), trace_ui_input_tid(), self, event->event, event_type);
+            fflush(stderr);
+        }
     }
 
     - (void) postEvent:(macdrv_event*)inEvent
@@ -247,15 +302,21 @@ static const OSType WineHotKeySignature = 'Wine';
     - (MacDrvEvent*) getEventMatchingMask:(macdrv_event_mask)mask
     {
         char buf[512];
-        int rc;
+        ssize_t rc;
+        ssize_t read_bytes = 0;
+        int read_errno;
         NSUInteger index;
+        NSUInteger before_count;
+        NSUInteger after_count;
         MacDrvEvent* ret = nil;
 
         /* Clear the pipe which signals there are pending events. */
         do
         {
             rc = read(fds[0], buf, sizeof(buf));
+            if (rc > 0) read_bytes += rc;
         } while (rc > 0 || (rc < 0 && errno == EINTR));
+        read_errno = rc < 0 ? errno : 0;
         if (rc == 0 || (rc < 0 && errno != EAGAIN))
         {
             if (rc == 0)
@@ -266,6 +327,7 @@ static const OSType WineHotKeySignature = 'Wine';
         }
 
         [eventsLock lock];
+        before_count = [events count];
 
         index = 0;
         while (index < [events count])
@@ -287,7 +349,18 @@ static const OSType WineHotKeySignature = 'Wine';
                 index++;
         }
 
+        after_count = [events count];
         [eventsLock unlock];
+        if (trace_ui_input_enabled() && (ret || before_count))
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=queue_get pid=%d tid=%llu queue=%p mask=0x%llx read_rc=%zd read_errno=%d read_bytes=%zd before=%lu after=%lu ret=%p type=%d\n",
+                    getpid(), trace_ui_input_tid(), self, (unsigned long long)mask,
+                    rc, read_errno, read_bytes, (unsigned long)before_count,
+                    (unsigned long)after_count, ret ? ret->event : NULL,
+                    ret ? ret->event->type : -1);
+            fflush(stderr);
+        }
         return ret;
     }
 
@@ -486,14 +559,65 @@ static const OSType WineHotKeySignature = 'Wine';
  *
  * Run a block on the main thread synchronously.
  */
+/* ★★★★★ MacRunner 2026-09-02 — OnMainThread С САМОГО ГЛАВНОГО ПОТОКА COCOA: ВЫПОЛНЯТЬ НА МЕСТЕ.
+ *
+ * КОРЕНЬ ТУПИКА Diablo (0 кадров; главный поток игры крутит wined3d_cs_mt_finish, 7,7 млн
+ * NtDelayExecution за 220 с; поток wined3d_cs молчит после WINED3D_CS_OP_CALLBACK =
+ * wined3d_device_gl_delete_opengl_contexts_cs). Нативный sample зависшего процесса, три потока:
+ *   главный поток Cocoa:  -[WineContentView viewWillDraw] -> macdrv_update_opengl_context
+ *                         -> OnMainThread -> dispatch_semaphore_wait      ЖДЁТ САМ СЕБЯ
+ *   поток wined3d_cs:     wglDeleteContext -> macdrv_dispose_opengl_context
+ *                         -> -[WineOpenGLContext setView:] -> OnMainThread -> semaphore_wait
+ *                                                                          ждёт главный поток Cocoa
+ *   главный поток Win32:  wined3d_cs_mt_finish -> NtDelayExecution        ждёт поток wined3d_cs
+ * viewWillDraw зовёт macdrv_update_opengl_context ИЗ главного потока (правка 2026-07-29,
+ * 73a7cd133; в эталоне viewWillDraw лишь ставит needsUpdate). Тот приходит сюда, а у главного
+ * потока Cocoa нет очереди Wine (queue == nil) -> ветка семафора -> ожидание блока, который
+ * выполнит только этот же поток -> вечно. Лечим ПРИЧИНУ здесь, а не в месте вызова: если мы уже
+ * на главном потоке — блок выполняется сразу (это и есть семантика «на главном потоке»), и все
+ * места вызова покрыты разом.
+ *
+ * ★ 2026-09-04, ГЕЙТ СНЯТ — ЛЕЧЕНИЕ БЕЗУСЛОВНО. `MACRUNNER_MAC_ONMAINTHREAD_INLINE`
+ * (умолчание ВКЛ) был лесами под парный замер. Замер сделан и записан:
+ * reports/research/DIABLO-ТУПИК-ONMAINTHREAD-20260902/ИТОГ.md — режим A («0 кадров, код 142»)
+ * числится ПОЧИНЕННЫМ этим лечением, все три звена тупика сняты нативным `sample`, а рука ВЫКЛ
+ * печатала `macrunner-onmainthread-САМОЖДАНИЕ` и стояла насмерть до конца бюджета.
+ * Единственное действие выключателя — вернуть доказанный вечный тупик; такая ветка не лечит
+ * ничего и при этом выглядит выбором. Ветка ВЫКЛ и функция-гейт удалены (правило проекта
+ * «гейт — это леса, а не дом»).
+ *
+ * Веха `macrunner-onmainthread-inline` ОСТАВЛЕНА: она отвечает на ДРУГОЙ вопрос — исполнялось
+ * ли лечение в этом прогоне вообще. Ответ бывает «ноль» (здоровый прогон kan-48: ни одного
+ * вызова OnMainThread с главного потока Cocoa), и без вехи «ноль» неотличим от «прибора нет». */
 void OnMainThread(dispatch_block_t block)
 {
+    if ([NSThread isMainThread])
+    {
+        static int n_inline;
+
+        if (++n_inline <= 4)
+        {
+            fprintf(stderr, "macrunner-onmainthread-inline: n=%d главный поток Cocoa звал "
+                    "OnMainThread — выполнено на месте, без ожидания себя\n", n_inline);
+            fflush(stderr);
+        }
+        block();
+        return;
+    }
 @autoreleasepool
 {
     NSMutableDictionary* threadDict = [[NSThread currentThread] threadDictionary];
     WineEventQueue* queue = threadDict[WineEventQueueThreadDictionaryKey];
     dispatch_semaphore_t semaphore = NULL;
     __block BOOL finished;
+
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=onmainthread_enter pid=%d tid=%llu queue=%p is_main=%d\n",
+                getpid(), trace_ui_input_tid(), queue, [NSThread isMainThread]);
+        fflush(stderr);
+    }
 
     if (!queue)
     {
@@ -533,11 +657,20 @@ void OnMainThread(dispatch_block_t block)
                     kevent(queue->kq, NULL, 0, &kev, 1, NULL);
             }
         }
+
     }
     else
     {
         dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
         dispatch_release(semaphore);
+    }
+
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=onmainthread_exit pid=%d tid=%llu queue=%p finished=%d\n",
+                getpid(), trace_ui_input_tid(), queue, finished);
+        fflush(stderr);
     }
 }
 }
@@ -568,6 +701,15 @@ macdrv_event_queue macdrv_create_event_queue(macdrv_event_handler handler)
         }
     }
 
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=queue_create pid=%d tid=%llu queue=%p read_fd=%d write_fd=%d is_main=%d registered=%d\n",
+                getpid(), trace_ui_input_tid(), queue, queue ? queue->fds[0] : -1,
+                queue ? queue->fds[1] : -1, [NSThread isMainThread], queue != nil);
+        fflush(stderr);
+    }
+
     return (macdrv_event_queue)queue;
 }
 }
@@ -584,6 +726,15 @@ void macdrv_destroy_event_queue(macdrv_event_queue queue)
 {
     WineEventQueue* q = (WineEventQueue*)queue;
     NSMutableDictionary* threadDict = [[NSThread currentThread] threadDictionary];
+
+    if (trace_ui_input_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=queue_destroy pid=%d tid=%llu queue=%p read_fd=%d write_fd=%d is_main=%d\n",
+                getpid(), trace_ui_input_tid(), q, q ? q->fds[0] : -1,
+                q ? q->fds[1] : -1, [NSThread isMainThread]);
+        fflush(stderr);
+    }
 
     [[WineApplicationController sharedController] unregisterEventQueue:q];
     [threadDict removeObjectForKey:WineEventQueueThreadDictionaryKey];
@@ -623,6 +774,14 @@ int macdrv_copy_event_from_queue(macdrv_event_queue queue,
     if (macDrvEvent)
         *event = macdrv_retain_event(macDrvEvent->event);
 
+    if (trace_ui_input_enabled() && macDrvEvent)
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=copy_event_from_queue queue=%p mask=0x%llx event=%p type=%d\n",
+                q, (unsigned long long)mask, macDrvEvent->event, macDrvEvent->event->type);
+        fflush(stderr);
+    }
+
     return (macDrvEvent != nil);
 }
 }
@@ -640,6 +799,35 @@ macdrv_event* macdrv_create_event(int type, WineWindow* window)
     event->type = type;
     event->window = (macdrv_window)[window retain];
     return event;
+}
+
+/***********************************************************************
+ *              macdrv_post_event
+ */
+void macdrv_post_event(macdrv_event_queue queue, macdrv_event *event)
+{
+@autoreleasepool
+{
+    if (!queue || !event) return;
+    [(WineEventQueue*)queue postEvent:event];
+}
+}
+
+/***********************************************************************
+ *              macdrv_post_event_for_window
+ */
+void macdrv_post_event_for_window(int type, macdrv_window window)
+{
+@autoreleasepool
+{
+    macdrv_event *event;
+    WineWindow *wine_window = (WineWindow *)window;
+
+    if (!wine_window) return;
+    if (!(event = macdrv_create_event(type, wine_window))) return;
+    [[wine_window queue] postEvent:event];
+    macdrv_release_event(event);
+}
 }
 
 /***********************************************************************

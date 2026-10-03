@@ -78,9 +78,17 @@ HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
  */
 HRESULT WINAPI DwmGetColorizationColor(DWORD *colorization, BOOL *opaque_blend)
 {
-    FIXME("(%p, %p) stub\n", colorization, opaque_blend);
+    COLORREF caption;
 
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", colorization, opaque_blend);
+
+    if (!colorization || !opaque_blend) return E_INVALIDARG;
+
+    caption = GetSysColor(COLOR_ACTIVECAPTION);
+    *colorization = 0xff000000 | (GetRValue(caption) << 16) | (GetGValue(caption) << 8) | GetBValue(caption);
+    *opaque_blend = TRUE;
+
+    return S_OK;
 }
 
 /**********************************************************************
@@ -100,9 +108,7 @@ HRESULT WINAPI DwmInvalidateIconicBitmaps(HWND hwnd)
  */
 HRESULT WINAPI DwmSetWindowAttribute(HWND hwnd, DWORD attributenum, LPCVOID attribute, DWORD size)
 {
-    static BOOL once;
-
-    if (!once++) FIXME("(%p, %lx, %p, %lx) stub\n", hwnd, attributenum, attribute, size);
+    TRACE("(%p, %lx, %p, %lx)\n", hwnd, attributenum, attribute, size);
 
     return S_OK;
 }

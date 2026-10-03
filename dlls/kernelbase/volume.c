@@ -24,6 +24,7 @@
 
 #include <stdarg.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 
 #include "ntstatus.h"
@@ -242,6 +243,20 @@ BOOL WINAPI GetVolumeInformationA( LPCSTR root, LPSTR label,
 
     HeapFree( GetProcessHeap(), 0, labelW );
     HeapFree( GetProcessHeap(), 0, fsnameW );
+    /* Итерация 292: парный зонд к macrunner-drivetype. Печатаем корень, успех и МЕТКУ —
+     * если игра сверяет метку, здесь будет видно и что мы отдали, и чего она не приняла. */
+    {
+        static LONG vi_n;
+        LONG k = InterlockedIncrement( &vi_n );
+        if (k <= 30)
+            MESSAGE( "macrunner-volinfo: n=%d корень=\"%s\" ok=%d метка=%s серийный=%s%08x "
+                     "флаги=%s%08x фс=%s\n",
+                     (int)k, root ? root : "(нет)", ret ? 1 : 0,
+                     label ? label : "(НЕ СПРАШИВАЛ)",
+                     serial ? "" : "НЕ СПРАШИВАЛ:", serial ? (unsigned)*serial : 0,
+                     flags ? "" : "НЕ СПРАШИВАЛ:", flags ? (unsigned)*flags : 0,
+                     fsname ? fsname : "(НЕ СПРАШИВАЛ)" );
+    }
     return ret;
 }
 
@@ -636,9 +651,21 @@ UINT WINAPI DECLSPEC_HOTPATCH GetDriveTypeW( LPCWSTR root )
 UINT WINAPI DECLSPEC_HOTPATCH GetDriveTypeA( LPCSTR root )
 {
     WCHAR *rootW = NULL;
+    UINT t;
 
     if (root && !(rootW = file_name_AtoW( root, FALSE ))) return DRIVE_NO_ROOT_DIR;
-    return GetDriveTypeW( rootW );
+    t = GetDriveTypeW( rootW );
+    /* Итерация 292, лейн ЛЕСТНИЦА: ступень 1 Diablo стоит на диалоге «Please insert the
+     * Diablo CD». Две догадки (привязка d: как cdrom, метка тома) опровергнуты прогонами —
+     * спрашиваем у самой игры, какие диски она перебирает и что получает. 5=DRIVE_CDROM. */
+    {
+        static LONG dt_n;
+        LONG k = InterlockedIncrement( &dt_n );
+        if (k <= 30)
+            MESSAGE( "macrunner-drivetype: n=%d корень=\"%s\" тип=%u\n",
+                     (int)k, root ? root : "(нет)", t );
+    }
+    return t;
 }
 
 
@@ -684,6 +711,16 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetDiskFreeSpaceExA( LPCSTR root, PULARGE_INTEGER 
 }
 
 
+
+/* Выключатель прежнего поведения. getenv в этом модуле недоступен (ловушка 210 лейна),
+ * поэтому переменная читается штатным способом самой kernelbase. */
+static BOOL cdrom_geometry_disabled(void)
+{
+    char v[8];
+    DWORD n = GetEnvironmentVariableA( "MACRUNNER_CDROM_GEOMETRY", v, sizeof(v) );
+    return n == 1 && v[0] == '0';
+}
+
 /***********************************************************************
  *           GetDiskFreeSpaceW   (kernelbase.@)
  */
@@ -723,6 +760,31 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetDiskFreeSpaceW( LPCWSTR root, LPDWORD cluster_s
         }
     }
 
+    /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 300 — ГЕОМЕТРИЯ КОМПАКТ-ДИСКА.
+     *
+     * Мы отдавали геометрию НОСИТЕЛЯ, на котором лежит каталог привода, то есть жёсткого диска
+     * хозяина: 8 секторов на кластер, 512 байт на сектор, миллионы свободных кластеров. Для
+     * привода, объявленного компакт-диском, это неверно само по себе, и на этом встала ступень 1
+     * Diablo: Storm!SFileOpenArchive опознаёт компакт-диск НЕ типом привода и НЕ меткой, а
+     * сворачивая в 16-битную сумму имя файловой системы, число свободных кластеров, байт на
+     * сектор и тип привода, и требуя совпадения с 0x1f00 либо 0x805. Проверено арифметикой:
+     *
+     *     "CDFS" = 0x53464443  ^  2048 (0x800)  ^  5 (DRIVE_CDROM)  =  0x53464C46
+     *     0x5346 ^ 0x4C46 = 0x1F00                                  ← принимается
+     *
+     * то есть годной сумму делает именно НАСТОЯЩАЯ геометрия компакт-диска: сектор 2048 байт,
+     * один сектор на кластер, свободного места ноль. При наших 512 байтах сумма не совпадала,
+     * Storm возвращал ERROR_INVALID_DRIVE и до CreateFileA дело не доходило вовсе — отсюда и
+     * замер, в котором архив находится, но не открывается ни одним путём.
+     *
+     * Выключатель на случай, если где-то понадобится прежнее поведение. */
+    if (GetDriveTypeW( root ) == DRIVE_CDROM && !cdrom_geometry_disabled())
+    {
+        info.SectorsPerAllocationUnit = 1;
+        info.BytesPerSector = 2048;
+        info.AvailableAllocationUnits.QuadPart = 0;
+    }
+
     if (cluster_sectors) *cluster_sectors = info.SectorsPerAllocationUnit;
     if (sector_bytes) *sector_bytes = info.BytesPerSector;
     if (free_clusters) *free_clusters = info.AvailableAllocationUnits.u.LowPart;
@@ -742,8 +804,24 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetDiskFreeSpaceA( LPCSTR root, LPDWORD cluster_se
 {
     WCHAR *rootW = NULL;
 
+    BOOL ok;
+
     if (root && !(rootW = file_name_AtoW( root, FALSE ))) return FALSE;
-    return GetDiskFreeSpaceW( rootW, cluster_sectors, sector_bytes, free_clusters, total_clusters );
+    ok = GetDiskFreeSpaceW( rootW, cluster_sectors, sector_bytes, free_clusters, total_clusters );
+    /* Итерация 300: Storm!SFileOpenArchive опознаёт компакт-диск по ГЕОМЕТРИИ тома — сворачивает
+     * выданное здесь в 16-битную сумму и требует 0x1f00 либо 0x805, иначе ERROR_INVALID_DRIVE и
+     * до CreateFileA дело не доходит. Печатаем всё, что отдаём, чтобы посчитать свёртку. */
+    {
+        static LONG df_n;
+        LONG k = InterlockedIncrement( &df_n );
+        if (k <= 20)
+            MESSAGE( "macrunner-diskfree: n=%d ok=%d корень=\"%s\" сект_на_кластер=%lu байт_на_сектор=%lu "
+                     "свободно_кластеров=%lu всего_кластеров=%lu\n",
+                     (int)k, ok ? 1 : 0, root ? root : "(нет)",
+                     cluster_sectors ? *cluster_sectors : 0, sector_bytes ? *sector_bytes : 0,
+                     free_clusters ? *free_clusters : 0, total_clusters ? *total_clusters : 0 );
+    }
+    return ok;
 }
 
 

@@ -3037,7 +3037,7 @@ static NTSTATUS get_manifest_in_pe_file( struct actctx_loader* acl, struct assem
     offset.QuadPart = 0;
     count = 0;
     base = NULL;
-    status = NtMapViewOfSection( mapping, GetCurrentProcess(), &base, 0, 0, &offset,
+    status = WINE_NT_MAP_VIEW( mapping, GetCurrentProcess(), &base, 0, 0, &offset,
                                  &count, ViewShare, 0, PAGE_READONLY );
     NtClose( mapping );
     if (status != STATUS_SUCCESS) return status;
@@ -3077,7 +3077,7 @@ static NTSTATUS get_manifest_in_manifest_file( struct actctx_loader* acl, struct
     offset.QuadPart = 0;
     count = 0;
     base = NULL;
-    status = NtMapViewOfSection( mapping, GetCurrentProcess(), &base, 0, 0, &offset,
+    status = WINE_NT_MAP_VIEW( mapping, GetCurrentProcess(), &base, 0, 0, &offset,
                                  &count, ViewShare, 0, PAGE_READONLY );
     NtClose( mapping );
     if (status != STATUS_SUCCESS) return status;
@@ -3327,6 +3327,115 @@ static NTSTATUS lookup_winsxs(struct actctx_loader* acl, struct assembly_identit
     return io.Status;
 }
 
+static BOOL is_builtin_comctl32_v6_identity( const struct assembly_identity *ai )
+{
+    static const struct assembly_version comctl32_v6_version = { 6, 0, 2600, 2982 };
+
+    if (!ai->name || wcsicmp( ai->name, L"Microsoft.Windows.Common-Controls" )) return FALSE;
+    if (!ai->public_key || wcsicmp( ai->public_key, L"6595b64144ccf1df" )) return FALSE;
+    if (ai->version.major != comctl32_v6_version.major || ai->version.minor != comctl32_v6_version.minor)
+        return FALSE;
+    if (ai->version.build > comctl32_v6_version.build) return FALSE;
+    if (ai->version.build == comctl32_v6_version.build &&
+        ai->version.revision > comctl32_v6_version.revision) return FALSE;
+    return TRUE;
+}
+
+static NTSTATUS lookup_builtin_comctl32_v6( struct actctx_loader *acl, struct assembly_identity *ai )
+{
+    static const char manifest[] =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+        "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n"
+        "  <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" "
+        "version=\"6.0.2600.2982\" processorArchitecture=\"\" "
+        "publicKeyToken=\"6595b64144ccf1df\"/>\n"
+        "  <file name=\"comctl32.dll\">\n"
+        "    <windowClass>Button</windowClass>\n"
+        "    <windowClass>ButtonListBox</windowClass>\n"
+        "    <windowClass>ComboBoxEx32</windowClass>\n"
+        "    <windowClass>ComboLBox</windowClass>\n"
+        "    <windowClass>ComboBox</windowClass>\n"
+        "    <windowClass>Edit</windowClass>\n"
+        "    <windowClass>ListBox</windowClass>\n"
+        "    <windowClass>NativeFontCtl</windowClass>\n"
+        "    <windowClass>ReBarWindow32</windowClass>\n"
+        "    <windowClass>ScrollBar</windowClass>\n"
+        "    <windowClass>Static</windowClass>\n"
+        "    <windowClass>SysAnimate32</windowClass>\n"
+        "    <windowClass>SysDateTimePick32</windowClass>\n"
+        "    <windowClass>SysHeader32</windowClass>\n"
+        "    <windowClass>SysIPAddress32</windowClass>\n"
+        "    <windowClass>SysLink</windowClass>\n"
+        "    <windowClass>SysListView32</windowClass>\n"
+        "    <windowClass>SysMonthCal32</windowClass>\n"
+        "    <windowClass>SysPager</windowClass>\n"
+        "    <windowClass>SysTabControl32</windowClass>\n"
+        "    <windowClass>SysTreeView32</windowClass>\n"
+        "    <windowClass>ToolbarWindow32</windowClass>\n"
+        "    <windowClass>msctls_hotkey32</windowClass>\n"
+        "    <windowClass>msctls_progress32</windowClass>\n"
+        "    <windowClass>msctls_statusbar32</windowClass>\n"
+        "    <windowClass>msctls_trackbar32</windowClass>\n"
+        "    <windowClass>msctls_updown32</windowClass>\n"
+        "    <windowClass>tooltips_class32</windowClass>\n"
+        "  </file>\n"
+        "</assembly>\n";
+    struct assembly_identity builtin_ai = *ai;
+    UNICODE_STRING path_us;
+    WCHAR *path, *directory;
+    HANDLE file;
+    NTSTATUS status;
+
+    if (!is_builtin_comctl32_v6_identity( ai )) return STATUS_NO_SUCH_FILE;
+
+    builtin_ai.arch = L"";
+    builtin_ai.language = L"*";
+    builtin_ai.version.major = 6;
+    builtin_ai.version.minor = 0;
+    builtin_ai.version.build = 2600;
+    builtin_ai.version.revision = 2982;
+
+    if (!(directory = build_assembly_dir( &builtin_ai ))) return STATUS_NO_MEMORY;
+
+    if (!(path = RtlAllocateHeap( GetProcessHeap(), 0, (wcslen( windows_dir ) +
+                                                        ARRAY_SIZE( L"\\system32\\comctl32_v6.dll" )) *
+                                                       sizeof(WCHAR) )))
+    {
+        RtlFreeHeap( GetProcessHeap(), 0, directory );
+        return STATUS_NO_MEMORY;
+    }
+
+    wcscpy( path, windows_dir );
+    wcscat( path, L"\\system32\\comctl32_v6.dll" );
+
+    if (!RtlDosPathNameToNtPathName_U( path, &path_us, NULL, NULL ))
+    {
+        RtlFreeHeap( GetProcessHeap(), 0, path );
+        RtlFreeHeap( GetProcessHeap(), 0, directory );
+        return STATUS_NO_SUCH_FILE;
+    }
+    RtlFreeHeap( GetProcessHeap(), 0, path );
+
+    if (!(status = open_nt_file( &file, &path_us )))
+    {
+        TRACE( "using builtin comctl32 v6 manifest for %s (%s)\n",
+               debugstr_w(ai->name), debugstr_version(&ai->version) );
+        status = get_manifest_in_pe_file( acl, ai, path_us.Buffer, directory, TRUE, file, NULL, 0 );
+        NtClose( file );
+    }
+    else
+    {
+        TRACE( "using compiled builtin comctl32 v6 manifest for %s (%s)\n",
+               debugstr_w(ai->name), debugstr_version(&ai->version) );
+        status = parse_manifest( acl, ai, path_us.Buffer, NULL, directory, TRUE,
+                                 manifest, sizeof(manifest) - 1 );
+    }
+
+    RtlFreeUnicodeString( &path_us );
+    RtlFreeHeap( GetProcessHeap(), 0, directory );
+    return status;
+}
+
 static NTSTATUS open_manifest_file( struct actctx_loader *acl, struct assembly_identity *ai,
                                     const WCHAR *lang, const WCHAR *directory, WCHAR *buffer, DWORD len )
 {
@@ -3381,7 +3490,13 @@ static NTSTATUS lookup_assembly(struct actctx_loader* acl,
            debugstr_w(ai->name), debugstr_version(&ai->version),
            debugstr_w(ai->arch), debugstr_w(ai->language) );
 
-    if ((status = lookup_winsxs(acl, ai)) != STATUS_NO_SUCH_FILE) return status;
+    status = lookup_winsxs( acl, ai );
+    if (status == STATUS_NO_SUCH_FILE || status == STATUS_SXS_ASSEMBLY_NOT_FOUND)
+    {
+        NTSTATUS builtin_status = lookup_builtin_comctl32_v6( acl, ai );
+        if (builtin_status != STATUS_NO_SUCH_FILE) return builtin_status;
+    }
+    if (status != STATUS_NO_SUCH_FILE) return status;
 
     if (!lang || !wcsicmp( lang, L"neutral" ) || !wcscmp( lang, L"*")) lang = L"";
 

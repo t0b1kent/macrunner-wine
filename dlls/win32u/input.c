@@ -30,6 +30,12 @@
 #pragma makedep unix
 #endif
 
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include "win32u_private.h"
@@ -40,6 +46,69 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(win);
 WINE_DECLARE_DEBUG_CHANNEL(keyboard);
+
+/* ★ 06.09.2026 — реализация прибора лежит в dib.c (ОДИН экземпляр реестра на win32u.so);
+ * здесь достаточно заголовка. */
+#include "hb_probe.h"
+
+HB_PROBE_DEFINE(pr_fgwnd, "fgwnd",
+                "вызовы NtUserGetForegroundWindow, дошедшие до возврата: сам ВОПРОС «какое "
+                "окно впереди», а не событие смены окна. НЕ считает: смену переднего плана, "
+                "сделанную мимо этого вызова, и вопросы из других процессов прогона — "
+                "у каждого свой образ win32u.so и своя перепись",
+                NULL, 4096);
+
+static BOOL return_route_observer_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *value = getenv("MACRUNNER_HB_RETURN_ROUTE_OBSERVER");
+        enabled = value && value[0] && value[0] != '0';
+    }
+    return enabled;
+}
+
+static unsigned int return_route_observer_limit(void)
+{
+    static unsigned int limit;
+
+    if (!limit)
+    {
+        const char *value = getenv("MACRUNNER_HB_RETURN_ROUTE_OBSERVER_MAX");
+        char *end;
+        unsigned long parsed = value ? strtoul(value, &end, 10) : 0;
+
+        limit = value && end != value && !*end && parsed && parsed <= 256 ? parsed : 64;
+    }
+    return limit;
+}
+
+void macrunner_return_route_observe( const char *stage, HWND hwnd, UINT keycode,
+                                     BOOL key_up, UINT flags, UINT event_time,
+                                     UINT message, LONG result )
+{
+    static unsigned int records;
+    struct timespec now;
+    uint64_t native_tid = 0;
+    unsigned int ordinal;
+
+    if (!return_route_observer_enabled() || keycode != VK_RETURN) return;
+    ordinal = __atomic_add_fetch( &records, 1, __ATOMIC_RELAXED );
+    if (ordinal > return_route_observer_limit()) return;
+    pthread_threadid_np( NULL, &native_tid );
+    clock_gettime( CLOCK_MONOTONIC, &now );
+    fprintf( stderr,
+             "macrunner-return-route: stage=%s seq=%u pid=%d native_tid=%llu wine_tid=%p "
+             "hwnd=%p focus=%p active=%p foreground=%p keycode=0x%x direction=%s "
+             "flags=0x%x event_time=%u monotonic_ns=%llu message=0x%x result=%ld\n",
+             stage, ordinal, getpid(), (unsigned long long)native_tid,
+             NtCurrentTeb()->ClientId.UniqueThread, hwnd, get_focus(), get_active_window(),
+             NtUserGetForegroundWindow(), keycode, key_up ? "up" : "down", flags, event_time,
+             (unsigned long long)now.tv_sec * 1000000000ull + now.tv_nsec, message, result );
+    fflush( stderr );
+}
 
 static const WCHAR keyboard_layouts_keyW[] =
 {
@@ -561,6 +630,38 @@ HWND WINAPI NtUserGetForegroundWindow(void)
         hwnd = wine_server_ptr_handle( input_shm->active );
     if (status) hwnd = 0;
 
+    /* MacRunner 2026-08-12, лейн ЛЕСТНИЦА, итерация 404 — БЕЗУСЛОВНЫЙ ЗОНД.
+     *
+     * Diablo (i386) зовёт эту функцию ТРИЖДЫ непосредственно перед тем, как выйти самостоятельно
+     * через NtTerminateProcess(текущий, STATUS_SUCCESS) на 34-й секунде. Печати здесь не было ни
+     * одной — проверено по всем способам вывода (fprintf, TRACE, ERR) и в обоих деревьях
+     * (win32u, wow64win), — поэтому вопрос «что она вернула» замером не закрывался.
+     *
+     * Зонд безусловный и ограничен восемью срабатываниями: гейт сделал бы его лотереей, а
+     * период — молчанием (обе ловушки лейн ловил этой же ночью). stderr, а не ERR: канал
+     * ошибок wine до наших журналов не доходит. */
+    {
+        /* Итерация 405: было `< 8`, и восемь слотов расходовались В НАЧАЛЕ прогона, тогда как
+         * решение о выходе принимается на 34-й секунде — замер накрывал не тот момент. Вызовов
+         * этой функции за прогон десятки, поэтому печатаем ВСЕ, с потолком лишь от разгона. */
+        /* ★ 06.09.2026, лейн ПРИБОРЫ-3 — ПОТОЛОК СЧИТАЛ НАПЕЧАТАННОЕ, А НЕ СЛУЧИВШЕЕСЯ.
+         * `probe_n++` стоял ВНУТРИ `if`, поэтому на 4096-м вызове счётчик замирал и
+         * дальше молчал; из журнала нельзя было узнать, 4096 это всё или первые 4096 из
+         * многих. Прибор назван в scripts/инварианты.sh, то есть на его числе строится
+         * вердикт. Теперь события считаются всегда, печать ограничена, а состояние
+         * EVENTS-TRUNCATED объявляет число нижней границей само. */
+        HB_PROBE_LOOKED( &pr_fgwnd );
+        /* Итерация 807: добавлено, КТО спрашивает. Без этого чинить нельзя: в журнале 806
+         * окна создаются 25 раз, но адреса возврата 64-битные, и было неизвестно, спрашивает
+         * ли окно переднего плана сам i386-гость или 64-битная сторона рядом. */
+        HB_PROBE_SAY( &pr_fgwnd, "n=%u hwnd=%p status=%08x pid=%p thread=%p wow=%s\n",
+                      (unsigned)pr_fgwnd.hits, hwnd, (unsigned)status,
+                      NtCurrentTeb()->ClientId.UniqueProcess,
+                      NtCurrentTeb()->ClientId.UniqueThread,
+                      NtCurrentTeb()->WowTebOffset ? "да" : "нет" );
+        fflush( stderr );
+    }
+
     return hwnd;
 }
 
@@ -807,7 +908,14 @@ SHORT WINAPI NtUserGetAsyncKeyState( INT key )
         state = desktop_shm->keystate[key];
 
     if (status) return 0;
-    if (!(state & 0x40)) return (state & 0x80) << 8;
+    if (!(state & 0x40))
+    {
+        ret = (state & 0x80) << 8;
+        if (key == VK_RETURN && ret)
+            macrunner_return_route_observe( "unity-async-state-query", 0, key, !(ret & 0x8000),
+                                            state, NtGetTickCount(), 0, ret );
+        return ret;
+    }
 
     /* Need to make a server call to reset the last pressed bit */
     SERVER_START_REQ( get_key_state )
@@ -822,6 +930,9 @@ SHORT WINAPI NtUserGetAsyncKeyState( INT key )
     }
     SERVER_END_REQ;
 
+    if (key == VK_RETURN && ret)
+        macrunner_return_route_observe( "unity-async-state-query", 0, key, !(ret & 0x8000),
+                                        state, NtGetTickCount(), 0, ret );
     return ret;
 }
 
@@ -1033,6 +1144,9 @@ SHORT WINAPI NtUserGetKeyState( INT vkey )
     }
     SERVER_END_REQ;
     TRACE("key (0x%x) -> %x\n", vkey, retval);
+    if ((vkey & 0xff) == VK_RETURN && retval)
+        macrunner_return_route_observe( "unity-key-state-query", 0, vkey & 0xff,
+                                        !(retval & 0x8000), retval, NtGetTickCount(), 0, retval );
     return retval;
 }
 
@@ -1312,7 +1426,6 @@ HKL WINAPI NtUserActivateKeyboardLayout( HKL layout, UINT flags )
 {
     struct user_thread_info *info = get_user_thread_info();
     HKL old_layout;
-    LCID locale;
     HWND focus;
 
     TRACE_(keyboard)( "layout %p, flags %x\n", layout, flags );
@@ -1323,14 +1436,6 @@ HKL WINAPI NtUserActivateKeyboardLayout( HKL layout, UINT flags )
     {
         RtlSetLastWin32Error( ERROR_CALL_NOT_IMPLEMENTED );
         FIXME_(keyboard)( "HKL_NEXT and HKL_PREV not supported\n" );
-        return 0;
-    }
-
-    if (LOWORD(layout) != MAKELANGID(LANG_INVARIANT, SUBLANG_DEFAULT) &&
-        (NtQueryDefaultLocale( TRUE, &locale ) || LOWORD(layout) != locale))
-    {
-        RtlSetLastWin32Error( ERROR_CALL_NOT_IMPLEMENTED );
-        FIXME_(keyboard)( "Changing user locale is not supported\n" );
         return 0;
     }
 

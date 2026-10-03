@@ -110,10 +110,25 @@ static inline struct d3d_light *impl_from_IDirect3DLight(IDirect3DLight *iface)
  * Returns:
  *  E_NOINTERFACE, because it's a stub
  *****************************************************************************/
+/* Возвращал E_NOINTERFACE на ЛЮБОЙ запрос, включая IID_IUnknown. Для COM-объекта
+ * это нарушение контракта: IUnknown обязан отдаваться всегда, а запрос
+ * собственного интерфейса — тем более. Приложение, проверяющее объект через
+ * QueryInterface (обычная практика), получало отказ на живом источнике света. */
 static HRESULT WINAPI d3d_light_QueryInterface(IDirect3DLight *iface, REFIID riid, void **object)
 {
-    FIXME("iface %p, riid %s, object %p stub!\n", iface, debugstr_guid(riid), object);
+    TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(riid), object);
 
+    if (!object)
+        return E_POINTER;
+
+    if (IsEqualGUID(riid, &IID_IDirect3DLight) || IsEqualGUID(riid, &IID_IUnknown))
+    {
+        IDirect3DLight_AddRef(iface);
+        *object = iface;
+        return S_OK;
+    }
+
+    WARN("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(riid));
     *object = NULL;
     return E_NOINTERFACE;
 }

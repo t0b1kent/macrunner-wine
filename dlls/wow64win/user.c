@@ -28,6 +28,19 @@
 #include "shellapi.h"
 #include "shlobj.h"
 #include "wow64win_private.h"
+
+/* MacRunner 2026-08-10, лейн ЛЕСТНИЦА: ПАРТИЯ A закрытия долга wow64win.
+ *
+ * `get_ptr` в этом дереве переписан на `guest32_host_ptr` (склейка 32-битного значения
+ * с базой гостя), а поля ВНУТРИ структур остались на `UlongToPtr`. Из-за этого ключ
+ * класса окна не совпадал с ключом поиска — измерено 10.08, ошибка 1411. Эталон полного
+ * перевода — `dlls/wow64/`: там 0 мест на `UlongToPtr` против 29 на `guest32_host_ptr`.
+ *
+ * Переведены только те поля, которые win32u РАЗЫМЕНОВЫВАЕТ. Намеренно НЕ тронуты:
+ *   lpfnWndProc, func, callback — адреса гостевого КОДА, отдельный класс;
+ *   himc, hwndTarget           — описатели, а не указатели.
+ * Матрица: reports/lanes/МАТРИЦА-wow64win-перевод-указателей.md */
+
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
@@ -440,9 +453,9 @@ static struct client_menu_name *client_menu_name_32to64( struct client_menu_name
                                                          const struct client_menu_name32 *name32 )
 {
     if (!name32) return NULL;
-    name->nameA = UlongToPtr( name32->nameA );
-    name->nameW = UlongToPtr( name32->nameW );
-    name->nameUS = UlongToPtr( name32->nameUS );
+    name->nameA = guest32_host_ptr( name32->nameA );
+    name->nameW = guest32_host_ptr( name32->nameW );
+    name->nameUS = guest32_host_ptr( name32->nameUS );
     return name;
 }
 
@@ -481,8 +494,8 @@ static void win_proc_params_64to32( const struct win_proc_params *src, struct wi
 static void createstruct_32to64( const CREATESTRUCT32 *from, CREATESTRUCTW *to )
 
 {
-    to->lpCreateParams = UlongToPtr( from->lpCreateParams );
-    to->hInstance      = UlongToPtr( from->hInstance );
+    to->lpCreateParams = guest32_host_ptr( from->lpCreateParams );
+    to->hInstance      = guest32_host_ptr( from->hInstance );
     to->hMenu          = LongToHandle( from->hMenu );
     to->hwndParent     = LongToHandle( from->hwndParent );
     to->cy             = from->cy;
@@ -491,8 +504,8 @@ static void createstruct_32to64( const CREATESTRUCT32 *from, CREATESTRUCTW *to )
     to->x              = from->x;
     to->style          = from->style;
     to->dwExStyle      = from->dwExStyle;
-    to->lpszName       = UlongToPtr( from->lpszName );
-    to->lpszClass      = UlongToPtr( from->lpszClass );
+    to->lpszName       = guest32_host_ptr( from->lpszName );
+    to->lpszClass      = guest32_host_ptr( from->lpszClass );
 }
 
 static void createstruct_64to32( const CREATESTRUCTW *from, CREATESTRUCT32 *to )
@@ -839,8 +852,8 @@ static size_t packed_result_32to64( UINT message, WPARAM wparam, const void *par
             const CREATESTRUCT32 *cs32 = params32;
             CREATESTRUCTW *cs64 = params64;
 
-            cs64->lpCreateParams = UlongToPtr( cs32->lpCreateParams );
-            cs64->hInstance      = UlongToPtr( cs32->hInstance );
+            cs64->lpCreateParams = guest32_host_ptr( cs32->lpCreateParams );
+            cs64->hInstance      = guest32_host_ptr( cs32->hInstance );
             cs64->hMenu          = LongToHandle( cs32->hMenu );
             cs64->hwndParent     = LongToHandle( cs32->hwndParent );
             cs64->cy             = cs32->cy;
@@ -973,6 +986,37 @@ static NTSTATUS WINAPI wow64_NtUserCallWinProc( void *arg, ULONG size )
     {
         LRESULT *result_ptr = arg;
         result = *(LONG *)ret_ptr;
+        /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 218 — ЧТО ВЕРНУЛА ПРОЦЕДУРА ГОСТЯ.
+         * Версия 217: игра зовёт CreateWindowEx тысячи раз с одними параметрами, драйвер
+         * каждый раз создаёт окно, но показ не наступает. В Wine возврат FALSE из WM_NCCREATE
+         * уничтожает окно и отдаёт NULL из CreateWindowEx — это объяснило бы весь цикл.
+         * Печатаем возврат и поля CREATESTRUCT, которые гость получил. Ограничение по числу,
+         * без гейта: в PE-модуле getenv нет (ловушка 210). */
+        if (params32->msg == 0x0081 || params32->msg == 0x0001)  /* WM_NCCREATE, WM_CREATE */
+        {
+            static LONG nc_n;
+            LONG k = InterlockedIncrement( &nc_n );
+
+            if (k <= 6 || !(k % 500))
+            {
+                if (lparam_size >= sizeof(CREATESTRUCT32))
+                {
+                    const CREATESTRUCT32 *cs32 = (const CREATESTRUCT32 *)((char *)params32 + offset32);
+
+                    MESSAGE( "macrunner-wow64win-nccreate: n=%d msg=%04x РЕЗУЛЬТАТ=%08x ret_len=%u "
+                             "params=%08x inst=%08x name=%08x class=%08x %dx%d\n",
+                             (int)k, (unsigned)params32->msg, (unsigned)result, (unsigned)ret_len,
+                             (unsigned)cs32->lpCreateParams, (unsigned)cs32->hInstance,
+                             (unsigned)cs32->lpszName, (unsigned)cs32->lpszClass,
+                             (int)cs32->cx, (int)cs32->cy );
+                }
+                else
+                    MESSAGE( "macrunner-wow64win-nccreate: n=%d msg=%04x РЕЗУЛЬТАТ=%08x ret_len=%u "
+                             "БЕЗ-СТРУКТУРЫ lparam_size=%u\n",
+                             (int)k, (unsigned)params32->msg, (unsigned)result,
+                             (unsigned)ret_len, (unsigned)lparam_size );
+            }
+        }
         ret_len = packed_result_32to64( params32->msg, params32->wparam, (LONG *)ret_ptr + 1,
                                         ret_len - sizeof(LONG), result_ptr + 1 );
         *result_ptr = result;
@@ -1655,8 +1699,21 @@ NTSTATUS WINAPI wow64_NtUserCallHwnd( UINT *args )
 {
     HWND hwnd = get_handle( &args );
     DWORD code = get_ulong( &args );
+    /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 220.
+     * Замер 219: на каждый круг цикла приходится ПЯТЬ вызовов этого мультиплексора, и все его
+     * коды — опросы либо активация. Какой именно код и что он возвращает, из журнала не видно:
+     * системный вызов виден одним номером 0x1332. Печатаем код и результат.
+     * Без гейта (в PE-модуле getenv нет, ловушка 210), с ограничением по числу. */
+    {
+        static LONG n;
+        LONG k = InterlockedIncrement( &n );
+        ULONG_PTR ret = NtUserCallHwnd( hwnd, code );
 
-    return NtUserCallHwnd( hwnd, code );
+        if (k <= 12 || !(k % 2000))
+            MESSAGE( "macrunner-wow64win-callhwnd: n=%d hwnd=%p code=%u РЕЗУЛЬТАТ=%p\n",
+                     (int)k, hwnd, (unsigned)code, (void *)ret );
+        return ret;
+    }
 }
 
 NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
@@ -1673,11 +1730,11 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
             {
                 int bar;
                 ULONG info;
-            } *info32 = UlongToPtr( param );
+            } *info32 = guest32_host_ptr( param );
             struct get_scroll_info_params info;
 
             info.bar = info32->bar;
-            info.info = UlongToPtr( info32->info );
+            info.info = guest32_host_ptr( info32->info );
             return NtUserCallHwndParam( hwnd, (UINT_PTR)&info, code );
         }
 
@@ -1687,10 +1744,10 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
             {
                 ULONG rect;
                 UINT dpi;
-            } *params32 = UlongToPtr( param );
+            } *params32 = guest32_host_ptr( param );
             struct get_window_rects_params params;
 
-            params.rect = UlongToPtr( params32->rect );
+            params.rect = guest32_host_ptr( params32->rect );
             params.dpi = params32->dpi;
             return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, code );
         }
@@ -1701,10 +1758,10 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
             {
                 ULONG rect;
                 UINT dpi;
-            } *params32 = UlongToPtr( param );
+            } *params32 = guest32_host_ptr( param );
             struct get_window_rects_params params;
 
-            params.rect = UlongToPtr( params32->rect );
+            params.rect = guest32_host_ptr( params32->rect );
             params.dpi = params32->dpi;
             return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, code );
         }
@@ -1717,11 +1774,11 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
                 ULONG points;
                 UINT count;
                 UINT dpi;
-            } *params32 = UlongToPtr( param );
+            } *params32 = guest32_host_ptr( param );
             struct map_window_points_params params;
 
             params.hwnd_to = LongToHandle( params32->hwnd_to );
-            params.points = UlongToPtr( params32->points );
+            params.points = guest32_host_ptr( params32->points );
             params.count = params32->count;
             params.dpi = params32->dpi;
             return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, code );
@@ -1734,14 +1791,40 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
                 UINT flags;
                 ULONG input;
                 ULONG lparam;
-            } *params32 = UlongToPtr( param );
+            } *params32 = guest32_host_ptr( param );
             struct send_hardware_input_params params;
 
             params.flags = params32->flags;
-            params.input = UlongToPtr( params32->input );
+            params.input = guest32_host_ptr( params32->input );
             params.lparam = params32->lparam;
             return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, code );
         }
+
+    /* ★★★ 26.08.2026 — ШЕСТЬ КОДОВ ПЕРЕДАЮТ УКАЗАТЕЛЬ, ПЕРЕВЕДЕНЫ БЫЛИ ДРУГИЕ.
+     *
+     * `default` отдавал `param` сырым 32-битным адресом. На x86 это верно, у нас
+     * гостевая память в окне — win32u падает на первом разыменовании.
+     *
+     * Кто чем пользуется — видно в dlls/win32u/window.c:
+     *   ClientToScreen   (POINT *)param      ScreenToClient  (POINT *)param
+     *   GetChildRect     (RECT *)param       GetWindowInfo   (WINDOWINFO *)param
+     *   GetWindowThread  (DWORD *)param      SetDialogInfo   (void *)param
+     * Прочие коды берут числа и дескрипторы — их не трогаем.
+     *
+     * Найдено по отказу Diablo после того, как правка NtUserCallTwoParam провела игру
+     * дальше: последний вызов сменился с 0x133e (CallTwoParam) на 0x1336 (CallHwndParam). */
+    case NtUserCallHwndParam_ClientToScreen:
+    case NtUserCallHwndParam_ScreenToClient:
+    case NtUserCallHwndParam_GetChildRect:
+    case NtUserCallHwndParam_GetWindowInfo:
+    case NtUserCallHwndParam_GetWindowThread:
+    case NtUserCallHwndParam_SetDialogInfo:
+    case NtUserCallHwndParam_GetPresentRect:
+    case NtUserCallHwndParam_ExposeWindowSurface:
+    case NtUserCallHwndParam_SetRawWindowPos:
+    case NtUserCallHwndParam_GetPrivateData:
+    case NtUserCallHwndParam_SetPrivateData:
+        return NtUserCallHwndParam( hwnd, (UINT_PTR)guest32_host_ptr( param ), code );
 
     default:
         return NtUserCallHwndParam( hwnd, param, code );
@@ -1782,6 +1865,36 @@ NTSTATUS WINAPI wow64_NtUserCallOneParam( UINT *args )
     ULONG_PTR arg = get_ulong( &args );
     ULONG code = get_ulong( &args );
 
+    /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 259 — ПЕРЕВОД УКАЗАТЕЛЯ ПО КОДАМ.
+     * Параметр здесь передавался НАСКВОЗЬ, тогда как у соседнего `NtUserCallTwoParam` перевод
+     * по кодам сделан. Для кодов, где параметр — указатель, хозяин получал сырой 32-битный
+     * адрес: у нас 32-битное пространство лежит по ненулевой базе, и такой адрес недействителен.
+     * Так отказывал `D3DKMTOpenAdapterFromGdiDisplayName`, из-за чего `wined3d` не создавал
+     * адаптер (`Failed to initialise output L"\\.\DISPLAY1", hr 0x80070057`), а за ним не
+     * поднимался `ddraw`. Набор кодов конечный (15 в `ntuser.h`), указатель принимают три;
+     * четвёртый — `EnableThunkLock` — это ГОСТЕВОЙ обратный вызов, его переводить нельзя.
+     * Раскладка всех трёх структур одинакова для 32 и 64 бит, поэтому довольно перевода адреса:
+     * `RECT` — четыре LONG, состояние клавиатуры — массив байт, дескриптор адаптера — WCHAR[32]
+     * плюс поля фиксированного размера. */
+    switch (code)
+    {
+    case NtUserCallOneParam_GetPrimaryMonitorRect:
+    case NtUserCallOneParam_D3DKMTOpenAdapterFromGdiDisplayName:
+    case NtUserCallOneParam_GetAsyncKeyboardState:
+    {
+        void *host = guest32_host_ptr( arg );
+
+        if (!host)
+        {
+            set_last_error32( ERROR_INVALID_PARAMETER );
+            return 0;
+        }
+        return NtUserCallOneParam( (UINT_PTR)host, code );
+    }
+    default:
+        break;
+    }
+
     return NtUserCallOneParam( arg, code );
 }
 
@@ -1795,7 +1908,7 @@ NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
     {
     case NtUserCallTwoParam_GetMenuInfo:
         {
-            MENUINFO32 *info32 = UlongToPtr( arg2 );
+            MENUINFO32 *info32 = guest32_host_ptr( arg2 );
             MENUINFO info;
 
             if (!info32 || info32->cbSize != sizeof(*info32))
@@ -1814,6 +1927,39 @@ NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
             if (info.fMask & MIM_STYLE)      info32->dwStyle = info.dwStyle;
             return TRUE;
         }
+
+    /* ★★★ 26.08.2026 — ПЯТЬ КОДОВ ПЕРЕДАЮТ УКАЗАТЕЛИ, ПЕРЕВЕДЁН БЫЛ ОДИН.
+     *
+     * `default` отдавал arg1/arg2 сырыми. На x86 это верно — гость и хозяин делят
+     * адресное пространство. У нас гостевая память i386 в окне по ненулевой базе, и
+     * win32u падает на первом же разыменовании.
+     *
+     * Кто из кодов чем пользуется — видно в dlls/win32u/sysparams.c:
+     *   GetMonitorInfo        arg2 = MONITORINFO *
+     *   MonitorFromRect       arg1 = const RECT *
+     *   SetIMECompositionRect arg2 = const RECT *
+     *   AdjustWindowRect      arg1 = RECT *, arg2 = struct adjust_window_rect_params *
+     *   GetVirtualScreenRect  arg1 = RECT *
+     * Остальные коды берут числа и дескрипторы — их не трогаем.
+     *
+     * Найдено по отказу Diablo: pc-команда LDP W8,W3,[X1] при x0=0x16bf8d0,
+     * x1=0x16bf80c, x2=0x7 — код 7 это и есть AdjustWindowRect, а оба адреса
+     * гостевые. */
+    case NtUserCallTwoParam_GetMonitorInfo:
+        return NtUserCallTwoParam( arg1, (UINT_PTR)guest32_host_ptr( arg2 ), code );
+
+    case NtUserCallTwoParam_MonitorFromRect:
+        return NtUserCallTwoParam( (UINT_PTR)guest32_host_ptr( arg1 ), arg2, code );
+
+    case NtUserCallTwoParam_SetIMECompositionRect:
+        return NtUserCallTwoParam( arg1, (UINT_PTR)guest32_host_ptr( arg2 ), code );
+
+    case NtUserCallTwoParam_AdjustWindowRect:
+        return NtUserCallTwoParam( (UINT_PTR)guest32_host_ptr( arg1 ),
+                                   (UINT_PTR)guest32_host_ptr( arg2 ), code );
+
+    case NtUserCallTwoParam_GetVirtualScreenRect:
+        return NtUserCallTwoParam( (UINT_PTR)guest32_host_ptr( arg1 ), arg2, code );
 
     default:
         return NtUserCallTwoParam( arg1, arg2, code );
@@ -1978,12 +2124,58 @@ NTSTATUS WINAPI wow64_NtUserCreateWindowEx( UINT *args )
     UNICODE_STRING class_name, version, window_name;
     HWND ret;
 
+    /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 217 — СЧЁТЧИК ГОСТЕВЫХ ВЫЗОВОВ.
+     * Замер 216: хозяйская сторона создала 6371 окно класса DIABLO с РАЗНЫМИ дескрипторами,
+     * то есть окна копятся. Неизвестно, зовёт ли столько раз сам гость или размножаем мы.
+     * Этот переходник — единственная дверь из гостя в win32u, поэтому счёт здесь и отвечает.
+     * Гейта нет намеренно: в PE-модуле getenv отсутствует (ловушка 210), а печать ограничена
+     * первыми четырьмя и затем каждой тысячной — это дёшево и доказуемо. */
     ret = NtUserCreateWindowEx( ex_style,
                                 unicode_str_32to64( &class_name, class_name32),
                                 unicode_str_32to64( &version, version32 ),
                                 unicode_str_32to64( &window_name, window_name32 ),
                                 style, x, y, width, height, parent, menu,
                                 instance, params, flags, client_instance, class, ansi );
+    /* Итерация 222: печать перенесена ПОСЛЕ вызова — нужен возвращаемый дескриптор.
+     * Замер 221: игра создаёт окно 6233 раза, ни разу не показывает, не уничтожает и не
+     * выбирает сообщения, то есть до своего цикла сообщений не доходит. Единственное, чего
+     * ещё не видел, — что она получает обратно. Печатаем и сам HWND, и то, что уходит гостю. */
+    {
+        static LONG calls;
+        LONG n = InterlockedIncrement( &calls );
+
+        /* Итерация 245: печать КАЖДОГО создания в конце прогона. Прежний период (первые
+         * четыре и каждая тысячная) давал 36 строк из 32735 вызовов, и отказ в последних
+         * в выборку не попадал по построению — на этом я в 241 заключил «отказов ноль». */
+        /* ★ 26.08: было n <= 4 — из семнадцати окон Diablo прибор показывал четыре, и
+         * диалог (Button + восемь Static) в журнал не попадал вовсе. Сорок хватает на
+         * весь запуск и шумом не становится. */
+        if (n <= 40 || !(n % 1000) || n > 32500)
+        {
+            /* ★ 27.08: ДОБАВЛЕН КЛАСС. Замер Heroes III: 4597 окон с parent=HWND_MESSAGE,
+             * стилем 0 и размером 0x0, все создаются УСПЕШНО и ни одно не уничтожается.
+             * Без имени класса непонятно, чьи это окна и зачем игра их плодит. */
+            char cn[40];
+            unsigned int ci, cl = 0;
+
+            if (class_name.Buffer)
+            {
+                cl = class_name.Length / sizeof(WCHAR);
+                if (cl > sizeof(cn) - 1) cl = sizeof(cn) - 1;
+                for (ci = 0; ci < cl; ci++) cn[ci] = (char)class_name.Buffer[ci];
+            }
+            cn[cl] = 0;
+            /* ★ 30.08, лейн УСТАНОВЩИКИ: добавлены params/inst/menu. Замер 28-й итерации
+             * показал, что в `CREATESTRUCT` гостю приходит `lpCreateParams=0` и
+             * `hInstance=0`, а для диалога через них идёт шаблон. Надо различить
+             * «гость сам передал ноль» и «мы потеряли на границе» — печатаем ВХОДЯЩИЕ. */
+            MESSAGE( "macrunner-wow64win-createwindow: n=%d класс=\"%s\" style=%08x ex=%08x %dx%d parent=%p "
+                     "params=%p inst=%p client_inst=%p menu=%p ВЕРНУЛИ hwnd=%p гостю=%08x\n",
+                     (int)n, cn, style, ex_style, width, height, parent,
+                     params, instance, client_instance, menu,
+                     ret, (unsigned)HandleToUlong( ret ) );
+        }
+    }
     return HandleToUlong( ret );
 }
 
@@ -2433,7 +2625,7 @@ NTSTATUS WINAPI wow64_NtUserGetClipboardData( UINT *args )
     struct get_clipboard_params params;
     HANDLE ret;
 
-    params.data = UlongToPtr( params32->data );
+    params.data = guest32_host_ptr( params32->data );
     params.size = params32->size;
     params.data_size = params32->data_size;
     params.data_only = params32->data_only;
@@ -3093,22 +3285,80 @@ NTSTATUS WINAPI wow64_NtUserRegisterClassExWOW( UINT *args )
 
     wc.cbSize = sizeof(wc);
     wc.style = wc32->style;
-    wc.lpfnWndProc = UlongToPtr( wc32->lpfnWndProc );
+    wc.lpfnWndProc = guest32_opaque_value( wc32->lpfnWndProc );
     wc.cbClsExtra = wc32->cbClsExtra;
     wc.cbWndExtra = wc32->cbWndExtra;
-    wc.hInstance = UlongToPtr( wc32->hInstance );
+    /* MacRunner 2026-08-10, лейн ЛЕСТНИЦА: КЛЮЧ ХРАНЕНИЯ И КЛЮЧ ПОИСКА ДОЛЖНЫ СОВПАДАТЬ.
+     *
+     * Описатель модуля — ключ, по которому win32u находит класс окна. В нашем дереве
+     * `get_ptr` переписан на `guest32_host_ptr`, то есть склеивает 32-битное значение с
+     * базой гостя. Поэтому `NtUserGetClassInfoEx` и `NtUserUnregisterClass` спрашивают
+     * класс по адресу вида 0x300400000, а регистрация здесь клала его под 0x00400000:
+     * поле внутри структуры осталось на прежнем `UlongToPtr`. Ключи не совпадали никогда.
+     *
+     * Измерено 10.08 программой в шестьдесят строк (`scratchpad/win32seq.c`, i386):
+     * `RegisterClassExA` успешен, следующий же `GetClassInfoExA` возвращает 1411
+     * (`ERROR_CLASS_DOES_NOT_EXIST`). Отсюда `CreateWindowEx` возвращает ноль, до
+     * `NtUserCreateWindowEx` дело не доходит, окна нет — и это ровно стена Diablo.
+     *
+     * `guest32_host_ptr(0)` возвращает ноль, поэтому глобальные классы с нулевым
+     * описателем не затрагиваются. */
+    wc.hInstance = guest32_host_ptr( wc32->hInstance );
     wc.hIcon = LongToHandle( wc32->hIcon );
     wc.hCursor = LongToHandle( wc32->hCursor );
     wc.hbrBackground = UlongToHandle( wc32->hbrBackground );
-    wc.lpszMenuName = UlongToPtr( wc32->lpszMenuName );
-    wc.lpszClassName = UlongToPtr( wc32->lpszClassName );
+    wc.lpszMenuName = guest32_host_ptr( wc32->lpszMenuName );
+    wc.lpszClassName = guest32_host_ptr( wc32->lpszClassName );
     wc.hIconSm = LongToHandle( wc32->hIconSm );
 
-    return NtUserRegisterClassExWOW( &wc,
-                                     unicode_str_32to64( &name, name32 ),
-                                     unicode_str_32to64( &version, version32 ),
-                                     client_menu_name_32to64( &client_name, client_name32 ),
-                                     fnid, flags, wow );
+    /* MacRunner 2026-08-10, лейн ЛЕСТНИЦА — ЧТО УХОДИТ ГОСТЮ ОБРАТНО.
+     *
+     * Итерация 178 сузила стену ступени 1 до ОДНОЙ точки: после последней регистрации
+     * класса гость не делает больше ни одного `NtUserCallOneParam`, то есть не доходит даже
+     * до первого `GetSystemMetrics`, который по исходнику игры идёт сразу следом. Возврат
+     * `RegisterClassEx` — это атом класса, а ноль означает неудачу, после которой игра по
+     * своему коду дальше не идёт. Печатаем ровно его.
+     *
+     * Печать через MESSAGE: на PE-стороне stdio нет (`fprintf` не линкуется), а MESSAGE
+     * идёт в stderr безусловно. Формат простой — в `exception.c` уже ловили мусор от `%Iu`.
+     * Потолок 8 строк. */
+    {
+        UNICODE_STRING *pname = unicode_str_32to64( &name, name32 );
+        UNICODE_STRING *pver  = unicode_str_32to64( &version, version32 );
+        ULONG_PTR atom;
+        static unsigned int reg_count;
+
+        atom = NtUserRegisterClassExWOW( &wc, pname, pver,
+                                         client_menu_name_32to64( &client_name, client_name32 ),
+                                         fnid, flags, wow );
+        /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 230: бюджет был `< 8`, и я принял число
+         * НАПЕЧАТАННЫХ строк за число регистраций — на этом в 228 была ошибочно снята версия
+         * «инициализация повторяется». Теперь как в остальных зондах: первые четыре и каждая
+         * тысячная, чтобы счёт был виден при любом порядке величины. */
+        reg_count++;
+        if (reg_count <= 4 || !(reg_count % 1000))
+        {
+            /* Итерация 180: имя класса и код ошибки рядом с атомом. Без имени неизвестно,
+             * ЧЕЙ класс не зарегистрировался, а без ошибки нельзя отличить настоящий отказ
+             * от штатного «класс уже существует» (1410) — второе означало бы, что виноват
+             * повторный вызов, а не регистрация. Имя разворачиваем вручную: помощников
+             * debugstr в этом файле нет, а класс окна всегда ASCII. */
+            char nm[24];
+            unsigned int i, len = 0;
+
+            if (pname && pname->Buffer)
+            {
+                len = pname->Length / sizeof(WCHAR);
+                if (len > sizeof(nm) - 1) len = sizeof(nm) - 1;
+                for (i = 0; i < len; i++) nm[i] = (char)pname->Buffer[i];
+            }
+            nm[len] = 0;
+            MESSAGE( "macrunner-hb-regclass-ret: n=%u atom=%08lx err=%08lx fnid=%08lx flags=%08lx имя=\"%s\" длина=%u\n",
+                     reg_count, (unsigned long)atom, (unsigned long)RtlGetLastWin32Error(),
+                     (unsigned long)fnid, (unsigned long)flags, nm, len );
+        }
+        return atom;
+    }
 }
 
 NTSTATUS WINAPI wow64_NtUserGetRegisteredRawInputDevices( UINT *args )
@@ -3394,6 +3644,16 @@ NTSTATUS WINAPI wow64_NtUserMessageBeep( UINT *args )
     return NtUserMessageBeep( type );
 }
 
+/* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 214.
+ * Здесь одиннадцать раз стояло `(void *)lparam` — приведение 32-битного ГОСТЕВОГО указателя к
+ * хозяйскому. В подлинном Wine это верно: пространство гостя там есть нижние 4 ГБ хозяйского.
+ * У нас гость лежит по ненулевой базе, поэтому такой указатель неотображён.
+ * Замер 213: на WM_NCCREATE (msg=0x81) отказ пришёлся на `ldr w8,[x3]` в message_call_32to64+0x158,
+ * где x3=lparam=0x16bf618 при базе гостя 0x300000000 (верно было бы 0x3016bf618), причём соседний
+ * указатель x20=0x3016bf110 переведён правильно, а база лежала прямо в x21/x22/x25.
+ * Показательно, что ВНУТРЕННИЕ поля этих структур уже переводились через guest32_host_ptr
+ * (например szClass/szTitle в WM_MDICREATE) — не переводился только сам внешний указатель.
+ * Правлю НАБОРОМ все одиннадцать: иначе стена просто переедет на следующее сообщение. */
 static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
                                     void *result_info, DWORD type, BOOL ansi )
 {
@@ -3401,11 +3661,37 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     switch (msg)
     {
+    /* ★★★ 26.08.2026 — СООБЩЕНИЯ, ГДЕ lparam УКАЗЫВАЕТ НА ДАННЫЕ.
+     *
+     * Отказ Diablo пришёлся на `set_window_text + 0x1c` в win32u — это WM_SETTEXT,
+     * копирование строки. Гостевой указатель дошёл сырым: сообщения в этом списке не было.
+     *
+     * Найдено правильным сопоставлением: базы модулей сдвигаются между прогонами, и
+     * пересчёт по базе из ДРУГОГО журнала дал ложную функцию (`stretch_bitmapinfo`) —
+     * прибор, поставленный туда, дал ноль. Теперь win32u печатает свою базу сам, из
+     * конструктора, и адрес разрешается однозначно.
+     *
+     * Здесь только те сообщения, чьи данные ОДИНАКОВЫ в 32 и 64 битах: строки и
+     * структуры из одних LONG/DWORD. WM_NOTIFY намеренно НЕ добавлен — в NMHDR есть
+     * HWND и UINT_PTR, там нужен перевод полей, а не адреса. */
+    case WM_SETTEXT:
+    case WM_GETTEXT:
+    case WM_GETTEXTLENGTH:
+    case WM_ASKCBFORMATNAME:
+    case WM_GETMINMAXINFO:
+    case WM_STYLECHANGING:
+    case WM_STYLECHANGED:
+    case WM_SIZING:
+    case WM_MOVING:
+        if (lparam)
+            lparam = (LPARAM)guest32_host_ptr( lparam );
+        break;
+
     case WM_NCCREATE:
     case WM_CREATE:
         if (lparam)
         {
-            CREATESTRUCT32 *cs32 = (void *)lparam;
+            CREATESTRUCT32 *cs32 = guest32_host_ptr( lparam );
             CREATESTRUCTW cs;
 
             createstruct_32to64( cs32, &cs );
@@ -3426,11 +3712,11 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_MDICREATE:
         {
-            MDICREATESTRUCT32 *cs32 = (void *)lparam;
+            MDICREATESTRUCT32 *cs32 = guest32_host_ptr( lparam );
             MDICREATESTRUCTW cs;
 
-            cs.szClass = UlongToPtr( cs32->szClass );
-            cs.szTitle = UlongToPtr( cs32->szTitle );
+            cs.szClass = guest32_host_ptr( cs32->szClass );
+            cs.szTitle = guest32_host_ptr( cs32->szTitle );
             cs.hOwner = LongToHandle( cs32->hOwner );
             cs.x = cs32->x;
             cs.y = cs32->y;
@@ -3445,7 +3731,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     case WM_WINDOWPOSCHANGING:
     case WM_WINDOWPOSCHANGED:
         {
-            WINDOWPOS32 *winpos32 = (void *)lparam;
+            WINDOWPOS32 *winpos32 = guest32_host_ptr( lparam );
             WINDOWPOS winpos;
 
             winpos_32to64( &winpos, winpos32 );
@@ -3457,7 +3743,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     case WM_NCCALCSIZE:
         if (wparam)
         {
-            NCCALCSIZE_PARAMS32 *params32 = (void *)lparam;
+            NCCALCSIZE_PARAMS32 *params32 = guest32_host_ptr( lparam );
             NCCALCSIZE_PARAMS params;
             WINDOWPOS winpos;
 
@@ -3465,19 +3751,29 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             params.rgrc[1] = params32->rgrc[1];
             params.rgrc[2] = params32->rgrc[2];
             params.lppos = &winpos;
-            winpos_32to64( &winpos, UlongToPtr( params32->lppos ));
+            winpos_32to64( &winpos, guest32_host_ptr( params32->lppos ));
             ret = NtUserMessageCall( hwnd, msg, wparam, (LPARAM)&params, result_info, type, ansi );
             params32->rgrc[0] = params.rgrc[0];
             params32->rgrc[1] = params.rgrc[1];
             params32->rgrc[2] = params.rgrc[2];
-            winpos_64to32( &winpos, UlongToPtr( params32->lppos ));
+            winpos_64to32( &winpos, guest32_host_ptr( params32->lppos ));
             return ret;
         }
-        return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
+        /* MacRunner, лейн ЛЕСТНИЦА, итерация 2609 — СТЕНА СТУПЕНИ 1.
+         * При wparam==0 lparam это ТОЖЕ гостевой указатель: одиночный RECT в экранных
+         * координатах, а не NCCALCSIZE_PARAMS. Перевод стоял только в ветви wparam!=0,
+         * и здесь сырое 32-битное значение уходило в win32u, где defwnd.c:2441 приводит
+         * его к RECT* и читает 16 байт одной командой `ldr q1,[x19]`.
+         * Замер прогона меню-2609: msg=0083 wparam=0 lparam=016bf7cc при базе гостя
+         * 0x300000000 -> c0000005 ровно по адресу самого lparam, поток навсегда встаёт
+         * в segv_handler (4007 отсчётов из 4007), окно не показывается ни разу.
+         * guest32_host_ptr безопасен на нуле (возвращает NULL) и на хозяйском адресе. */
+        return NtUserMessageCall( hwnd, msg, wparam, (LPARAM)guest32_host_ptr( lparam ),
+                                  result_info, type, ansi );
 
     case WM_COMPAREITEM:
         {
-            COMPAREITEMSTRUCT32 *cis32 = (void *)lparam;
+            COMPAREITEMSTRUCT32 *cis32 = guest32_host_ptr( lparam );
             COMPAREITEMSTRUCT cis;
 
             cis.CtlType    = cis32->CtlType;
@@ -3493,7 +3789,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_DELETEITEM:
         {
-            DELETEITEMSTRUCT32 *dis32 = (void *)lparam;
+            DELETEITEMSTRUCT32 *dis32 = guest32_host_ptr( lparam );
             DELETEITEMSTRUCT dis;
 
             dis.CtlType  = dis32->CtlType;
@@ -3506,7 +3802,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_MEASUREITEM:
         {
-            MEASUREITEMSTRUCT32 *mis32 = (void *)lparam;
+            MEASUREITEMSTRUCT32 *mis32 = guest32_host_ptr( lparam );
             MEASUREITEMSTRUCT mis;
 
             mis.CtlType    = mis32->CtlType;
@@ -3527,7 +3823,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_DRAWITEM:
         {
-            DRAWITEMSTRUCT32 *dis32 = (void *)lparam;
+            DRAWITEMSTRUCT32 *dis32 = guest32_host_ptr( lparam );
             DRAWITEMSTRUCT dis;
 
             dis.CtlType       = dis32->CtlType;
@@ -3547,18 +3843,18 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_COPYDATA:
         {
-            COPYDATASTRUCT32 *cds32 = (void *)lparam;
+            COPYDATASTRUCT32 *cds32 = guest32_host_ptr( lparam );
             COPYDATASTRUCT cds;
 
             cds.dwData = cds32->dwData;
             cds.cbData = cds32->cbData;
-            cds.lpData = UlongToPtr( cds32->lpData );
+            cds.lpData = guest32_host_ptr( cds32->lpData );
             return NtUserMessageCall( hwnd, msg, wparam, (LPARAM)&cds, result_info, type, ansi );
         }
 
     case WM_HELP:
         {
-            HELPINFO32 *hi32 = (void *)lparam;
+            HELPINFO32 *hi32 = guest32_host_ptr( lparam );
             HELPINFO hi64;
 
             hi64.cbSize       = sizeof(hi64);
@@ -3583,7 +3879,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_NEXTMENU:
         {
-            MDINEXTMENU32 *next32 = (void *)lparam;
+            MDINEXTMENU32 *next32 = guest32_host_ptr( lparam );
             MDINEXTMENU next;
 
             next.hmenuIn   = LongToHandle( next32->hmenuIn );
@@ -3642,6 +3938,16 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
     UINT type = get_ulong ( &args );
     BOOL ansi = get_ulong( &args );
 
+    /* Итерация 220: пять сообщений на круг — какие именно. */
+    {
+        static LONG mn;
+        LONG k = InterlockedIncrement( &mn );
+
+        if (k <= 12 || !(k % 2000))
+            MESSAGE( "macrunner-wow64win-msgcall: n=%d hwnd=%p msg=%04x wparam=%08x lparam=%08x type=%u\n",
+                     (int)k, hwnd, (unsigned)msg, (unsigned)wparam, (unsigned)lparam, (unsigned)type );
+    }
+
     switch (type)
     {
     case NtUserGetDispatchParams:
@@ -3650,7 +3956,7 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
             struct win_proc_params32 *params32 = result_info;
             struct win_proc_params params;
 
-            if (type == NtUserCallWindowProc) params.func = UlongToPtr( params32->func );
+            if (type == NtUserCallWindowProc) params.func = guest32_opaque_value( params32->func );
 
             if (!NtUserMessageCall( hwnd, msg, wparam, lparam, &params, type, ansi ))
                 return FALSE;
@@ -3704,7 +4010,7 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
             } *params32 = result_info;
             struct send_message_callback_params params;
 
-            params.callback = UlongToPtr( params32->callback );
+            params.callback = guest32_opaque_value( params32->callback );
             params.data = params32->data;
             return message_call_32to64( hwnd, msg, wparam, lparam, &params, type, ansi );
         }
@@ -3724,10 +4030,10 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
             } *params32 = result_info;
             struct ime_driver_call_params params;
             if (msg == WINE_IME_POST_UPDATE) ERR( "Unexpected WINE_IME_POST_UPDATE message\n" );
-            params.himc = UlongToPtr( params32->himc );
-            params.state = UlongToPtr( params32->state );
-            params.compstr = UlongToPtr( params32->compstr );
-            params.key_consumed = UlongToPtr( params32->key_consumed );
+            params.himc = guest32_opaque_value( params32->himc );
+            params.state = guest32_host_ptr( params32->state );
+            params.compstr = guest32_host_ptr( params32->compstr );
+            params.key_consumed = guest32_host_ptr( params32->key_consumed );
             return NtUserMessageCall( hwnd, msg, wparam, lparam, &params, type, ansi );
         }
 
@@ -3806,7 +4112,7 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
             } *params32 = result_info;
             struct post_dde_message_call_params params;
 
-            params.ptr = UlongToPtr(params32->ptr);
+            params.ptr = guest32_host_ptr(params32->ptr);
             params.size = params32->size;
             params.dest_tid = params32->dest_tid;
             return NtUserMessageCall( hwnd, msg, wparam, lparam, &params, type, ansi );
@@ -4059,7 +4365,7 @@ NTSTATUS WINAPI wow64_NtUserRegisterRawInputDevices( UINT *args )
         devices64[i].usUsagePage = devices32[i].usUsagePage;
         devices64[i].usUsage = devices32[i].usUsage;
         devices64[i].dwFlags = devices32[i].dwFlags;
-        devices64[i].hwndTarget = UlongToPtr( devices32[i].hwndTarget );
+        devices64[i].hwndTarget = guest32_opaque_value( devices32[i].hwndTarget );
     }
 
     return NtUserRegisterRawInputDevices( devices64, count, sizeof(*devices64) );
@@ -4288,7 +4594,7 @@ NTSTATUS WINAPI wow64_NtUserSetClassLongPtr( UINT *args )
     if (offset == GCLP_MENUNAME)
     {
         struct client_menu_name menu_name;
-        struct client_menu_name32 *menu_name32 = UlongToPtr( newval );
+        struct client_menu_name32 *menu_name32 = guest32_host_ptr( newval );
         NtUserSetClassLongPtr( hwnd, offset,
                                (UINT_PTR)client_menu_name_32to64( &menu_name, menu_name32 ), ansi );
         client_menu_name_64to32( &menu_name, menu_name32 );
@@ -4320,7 +4626,7 @@ NTSTATUS WINAPI wow64_NtUserSetClipboardData( UINT *args )
     } *params32 = get_ptr( &args );
 
     struct set_clipboard_params params;
-    params.data       = UlongToPtr( params32->data );
+    params.data       = guest32_host_ptr( params32->data );
     params.size       = params32->size;
     params.cache_only = params32->cache_only;
     params.seqno      = params32->seqno;
@@ -4366,7 +4672,7 @@ NTSTATUS WINAPI wow64_NtUserSetCursorIconData( UINT *args )
         ULONG alpha;
         ULONG mask;
         POINT hotspot;
-    } *frames32 = UlongToPtr( desc32->frames );
+    } *frames32 = guest32_host_ptr( desc32->frames );
 
     UNICODE_STRING module, res_name;
     struct cursoricon_desc desc;
@@ -4378,9 +4684,9 @@ NTSTATUS WINAPI wow64_NtUserSetCursorIconData( UINT *args )
     desc.num_steps = desc32->num_steps;
     desc.num_frames = desc32->num_frames;
     desc.delay = desc32->delay;
-    desc.frame_seq = UlongToPtr( desc32->frame_seq );
-    desc.frame_rates = UlongToPtr( desc32->frame_rates );
-    desc.rsrc = UlongToPtr( desc32->rsrc );
+    desc.frame_seq = guest32_host_ptr( desc32->frame_seq );
+    desc.frame_rates = guest32_host_ptr( desc32->frame_rates );
+    desc.rsrc = guest32_host_ptr( desc32->rsrc );
 
     for (i = 0; i < num_frames; i++)
     {
@@ -4638,14 +4944,38 @@ NTSTATUS WINAPI wow64_NtUserSetWindowLong( UINT *args )
     LONG newval = get_ulong( &args );
     BOOL ansi = get_ulong( &args );
 
-    switch (offset)
+    /* ★ 2026-08-30, лейн УСТАНОВЩИКИ — ЧТО ГОСТЬ ПИШЕТ В ОКНО И ЧТО ПОЛУЧАЕТ ОБРАТНО.
+     *
+     * Замер прогона 56: установщик создаёт 10 904 диалога класса #32770 (330x305),
+     * КАЖДЫЙ раз получая годный описатель, и ни разу не добавляет дочерних окон.
+     * Между двумя созданиями он делает ~5 `SetWindowLong` (54 515 на 10 904 окна) и
+     * строит системное меню. Значит обрыв построения диалога происходит именно здесь,
+     * а какие смещения пишутся и что возвращается — не измерено ничем.
+     * Счётчик статический (getenv в PE-модуле запрещён), потолок 60. */
     {
-    case GWLP_HINSTANCE:
-    case GWLP_WNDPROC:
-        return NtUserSetWindowLongPtr( hwnd, offset, (ULONG)newval, ansi );
-    }
+        LONG ret;
 
-    return NtUserSetWindowLong( hwnd, offset, newval, ansi );
+        switch (offset)
+        {
+        case GWLP_HINSTANCE:
+        case GWLP_WNDPROC:
+            ret = (LONG)NtUserSetWindowLongPtr( hwnd, offset, (ULONG)newval, ansi );
+            break;
+        default:
+            ret = NtUserSetWindowLong( hwnd, offset, newval, ansi );
+            break;
+        }
+        {
+            static LONG swl_calls;
+            LONG n = InterlockedIncrement( &swl_calls );
+
+            if (n <= 60)
+                MESSAGE( "macrunner-wow64win-setwindowlong: n=%d hwnd=%p смещение=%d новое=%08x "
+                         "ansi=%d ВЕРНУЛИ=%08x\n",
+                         (int)n, hwnd, (int)offset, (unsigned)newval, (int)ansi, (unsigned)ret );
+        }
+        return ret;
+    }
 }
 
 NTSTATUS WINAPI wow64_NtUserSetWindowLongPtr( UINT *args )
@@ -4924,7 +5254,7 @@ NTSTATUS WINAPI wow64_NtUserThunkedMenuItemInfo( UINT *args )
             info.hbmpChecked = UlongToHandle( info32->hbmpChecked );
             info.hbmpUnchecked = UlongToHandle( info32->hbmpUnchecked );
             info.dwItemData = info32->dwItemData;
-            info.dwTypeData = UlongToPtr( info32->dwTypeData );
+            info.dwTypeData = guest32_host_ptr( info32->dwTypeData );
             info.cch = info32->cch;
             info.hbmpItem = UlongToHandle( info32->hbmpItem );
             break;
@@ -4933,7 +5263,7 @@ NTSTATUS WINAPI wow64_NtUserThunkedMenuItemInfo( UINT *args )
             break;
         case NtUserGetMenuItemInfoA:
         case NtUserGetMenuItemInfoW:
-            info.dwTypeData = UlongToPtr( info32->dwTypeData );
+            info.dwTypeData = guest32_host_ptr( info32->dwTypeData );
             info.cch = info32->cch;
             break;
         }

@@ -35,6 +35,18 @@
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
 
 
+static BOOL trace_process_exit_enabled(void)
+{
+    WCHAR buffer[4];
+    UNICODE_STRING name = RTL_CONSTANT_STRING( L"MACRUNNER_TRACE_PROCESS_EXIT" );
+    UNICODE_STRING value;
+    value.Buffer = buffer;
+    value.Length = 0;
+    value.MaximumLength = sizeof(buffer);
+    return RtlQueryEnvironmentVariable_U( NULL, &name, &value ) != STATUS_VARIABLE_NOT_FOUND;
+}
+
+
 static BOOL is_32b_prefix_on_wow64( void )
 {
     UNICODE_STRING val_str, name_str = RTL_CONSTANT_STRING( L"WINEWOW6432BPREFIXMODE" );
@@ -82,7 +94,17 @@ static RTL_USER_PROCESS_PARAMETERS *process_params_32to64( RTL_USER_PROCESS_PARA
                                       unicode_str_32to64( &dllpath, &params32->DllPath ),
                                       unicode_str_32to64( &curdir, &params32->CurrentDirectory.DosPath ),
                                       unicode_str_32to64( &cmdline, &params32->CommandLine ),
-                                      ULongToPtr( params32->Environment ),
+                                      /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 212.
+                                       * Здесь стоял ULongToPtr — верный для подлинного Wine, где
+                                       * 32-битное пространство гостя есть нижние 4 ГБ хозяйского.
+                                       * У нас гость лежит по ненулевой базе (macOS низ не отдаёт),
+                                       * поэтому указатель приходил БЕЗ базы: замер 211 дал x5 =
+                                       * 0x820bcd0 при базе 0x300000000, и alloc_process_params+0x3c
+                                       * падал на `ldrh w8,[x5]` — чтении WCHAR из блока окружения.
+                                       * guest32_host_ptr уже применяется в этом же файле (строки
+                                       * 188, 202, 249) и консервативен: NULL остаётся NULL, готовый
+                                       * хозяйский указатель не трогается. */
+                                      guest32_host_ptr( params32->Environment ),
                                       unicode_str_32to64( &title, &params32->WindowTitle ),
                                       unicode_str_32to64( &desktop, &params32->Desktop ),
                                       unicode_str_32to64( &shell, &params32->ShellInfo ),
@@ -106,7 +128,9 @@ static RTL_USER_PROCESS_PARAMETERS *process_params_32to64( RTL_USER_PROCESS_PARA
     ret->dwFlags               = params32->dwFlags;
     ret->wShowWindow           = params32->wShowWindow;
     ret->EnvironmentVersion    = params32->EnvironmentVersion;
-    ret->PackageDependencyData = ULongToPtr( params32->PackageDependencyData );
+    /* Итерация 212: тот же класс, что и Environment выше — гостевой указатель, который потом
+     * читает хозяйский код. Правлю парно, потому что иначе стена просто переедет сюда. */
+    ret->PackageDependencyData = guest32_host_ptr( params32->PackageDependencyData );
     ret->ProcessGroupId        = params32->ProcessGroupId;
     ret->LoaderThreads         = params32->LoaderThreads;
     *params = ret;
@@ -173,7 +197,8 @@ static PS_ATTRIBUTE_LIST *ps_attributes_32to64( PS_ATTRIBUTE_LIST **attr, const 
                 UNICODE_STRING path;
 
                 path.Length = ret->Attributes[i].Size;
-                path.Buffer = ret->Attributes[i].ValuePtr;
+                path.Buffer = guest32_host_ptr( attr32->Attributes[i].Value );
+                ret->Attributes[i].ValuePtr = path.Buffer;
                 InitializeObjectAttributes( &attr, &path, OBJ_CASE_INSENSITIVE, 0, 0 );
                 if (get_file_redirect( &attr ))
                 {
@@ -186,12 +211,13 @@ static PS_ATTRIBUTE_LIST *ps_attributes_32to64( PS_ATTRIBUTE_LIST **attr, const 
         case PS_ATTRIBUTE_JOB_LIST:
             {
                 ULONG j, handles_count = attr32->Attributes[i].Size / sizeof(ULONG);
+                ULONG *handles32 = guest32_host_ptr( attr32->Attributes[i].Value );
 
                 ret->Attributes[i].Size     = handles_count * sizeof(HANDLE);
                 ret->Attributes[i].ValuePtr = Wow64AllocateTemp( ret->Attributes[i].Size );
                 for (j = 0; j < handles_count; j++)
                     ((HANDLE *)ret->Attributes[i].ValuePtr)[j] =
-                        LongToHandle( ((LONG *)ULongToPtr(attr32->Attributes[i].Value))[j] );
+                        LongToHandle( ((LONG *)handles32)[j] );
             }
             break;
         case PS_ATTRIBUTE_PARENT_PROCESS:
@@ -232,20 +258,22 @@ static void put_ps_attributes( PS_ATTRIBUTE_LIST32 *attr32, const PS_ATTRIBUTE_L
         {
             CLIENT_ID32 id32;
             ULONG size = min( attr32->Attributes[i].Size, sizeof(id32) );
+            void *dst = guest32_host_ptr( attr32->Attributes[i].Value );
             put_client_id( &id32, attr->Attributes[i].ValuePtr );
-            memcpy( ULongToPtr( attr32->Attributes[i].Value ), &id32, size );
+            if (dst) memcpy( dst, &id32, size );
             if (attr32->Attributes[i].ReturnLength)
-                *(ULONG *)ULongToPtr(attr32->Attributes[i].ReturnLength) = size;
+                *(ULONG *)guest32_host_ptr(attr32->Attributes[i].ReturnLength) = size;
             break;
         }
         case PS_ATTRIBUTE_IMAGE_INFO:
         {
             SECTION_IMAGE_INFORMATION32 info32;
             ULONG size = min( attr32->Attributes[i].Size, sizeof(info32) );
+            void *dst = guest32_host_ptr( attr32->Attributes[i].Value );
             put_section_image_info( &info32, attr->Attributes[i].ValuePtr );
-            memcpy( ULongToPtr( attr32->Attributes[i].Value ), &info32, size );
+            if (dst) memcpy( dst, &info32, size );
             if (attr32->Attributes[i].ReturnLength)
-                *(ULONG *)ULongToPtr(attr32->Attributes[i].ReturnLength) = size;
+                *(ULONG *)guest32_host_ptr(attr32->Attributes[i].ReturnLength) = size;
             break;
         }
         case PS_ATTRIBUTE_TEB_ADDRESS:
@@ -253,9 +281,10 @@ static void put_ps_attributes( PS_ATTRIBUTE_LIST32 *attr32, const PS_ATTRIBUTE_L
             TEB **teb = attr->Attributes[i].ValuePtr;
             ULONG teb32 = PtrToUlong( *teb ) + 0x2000;
             ULONG size = min( attr->Attributes[i].Size, sizeof(teb32) );
-            memcpy( ULongToPtr( attr32->Attributes[i].Value ), &teb32, size );
+            void *dst = guest32_host_ptr( attr32->Attributes[i].Value );
+            if (dst) memcpy( dst, &teb32, size );
             if (attr32->Attributes[i].ReturnLength)
-                *(ULONG *)ULongToPtr(attr32->Attributes[i].ReturnLength) = size;
+                *(ULONG *)guest32_host_ptr(attr32->Attributes[i].ReturnLength) = size;
             break;
         }
         }
@@ -390,6 +419,16 @@ NTSTATUS WINAPI wow64_NtCreateThreadEx( UINT *args )
     *handle_ptr = 0;
     if (is_process_wow64( process ))
     {
+        /* ★★★★★ МЕЛКИЕ, ИТЕРАЦИЯ 67 — С ЧЕМ СОЗДАЁТСЯ ПОТОК (повтор замера 66).
+         * Прошлая попытка сорвалась не из-за этой печати, а из-за переполнения диска
+         * (итерация 66). Создание потока происходит единицы раз за прогон, поэтому
+         * возмущение мало; датчик `regedit`=4112 сверяется ДО и ПОСЛЕ. */
+        {
+            static unsigned mr_ct_n;
+            if (mr_ct_n++ < 12)
+                MESSAGE( "macrunner-createthread: n=%u start=%p param=%p flags=%08lx\n",
+                         mr_ct_n, start, param, (unsigned long)flags );
+        }
         status = NtCreateThreadEx( &handle, access, objattr_32to64( &attr, attr32 ), process,
                                    start, param, flags, get_zero_bits( zero_bits ),
                                    stack_commit, stack_reserve,
@@ -963,12 +1002,29 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
     case ProcessPriorityClass:   /* PROCESS_PRIORITY_CLASS */
     case ProcessBasePriority:   /* ULONG */
     case ProcessPriorityBoost:  /* ULONG */
-    case ProcessExecuteFlags:   /* ULONG */
     case ProcessPagePriority:   /* MEMORY_PRIORITY_INFORMATION */
     case ProcessPowerThrottlingState:   /* PROCESS_POWER_THROTTLING_STATE */
     case ProcessLeapSecondInformation:   /* PROCESS_LEAP_SECOND_INFO */
     case ProcessWineGrantAdminToken:   /* NULL */
         return NtSetInformationProcess( handle, class, ptr, len );
+
+    case ProcessExecuteFlags:   /* ULONG */
+        /* MacRunner 04.09.2026 — ПЕРЕНОС ИЗ АПСТРИМА (wine c57ec80d21fe,
+         * 01.07.2026, Ryan Houdek). Игра может переключать DEP НА ХОДУ, и
+         * тогда страницы, бывшие данными, становятся исполняемыми (и
+         * наоборот). Эмулятору об этом надо СКАЗАТЬ: у нас переведённый код
+         * закеширован по адресу, и смена прав делает кеш негодным.
+         *
+         * Замерено сверкой интерфейсов: это было ЕДИНСТВЕННОЕ расхождение
+         * BTCpu между нашим Wine 11.0 и апстримом. В апстримном описании
+         * названа мишень: «Fixes games that toggle DEP at runtime. Like
+         * Bioshock.» */
+        {
+            NTSTATUS status = NtSetInformationProcess( handle, class, ptr, len );
+            if (!status && pBTCpuNotifyProcessExecuteFlagsChange)
+                pBTCpuNotifyProcessExecuteFlagsChange( *(ULONG *)ptr );
+            return status;
+        }
 
     case ProcessAccessToken: /* PROCESS_ACCESS_TOKEN */
         if (len == sizeof(PROCESS_ACCESS_TOKEN32))
@@ -1165,8 +1221,29 @@ NTSTATUS WINAPI wow64_NtTerminateProcess( UINT *args )
 
     NTSTATUS status;
 
+    if (trace_process_exit_enabled())
+    {
+        if (current_machine == IMAGE_FILE_MACHINE_I386)
+        {
+            I386_CONTEXT ctx = { CONTEXT_I386_FULL };
+            ULONG *stack = NULL;
+            ULONG sample[8] = { 0 };
+
+            if (!RtlWow64GetThreadContext( GetCurrentThread(), &ctx ))
+                stack = guest32_host_ptr( ctx.Esp );
+            if (stack) memcpy( sample, stack, sizeof(sample) );
+            MESSAGE( "macrunner-wow64-exit: i386-context eip=%08lx esp=%08lx ebp=%08lx eax=%08lx stack=%08lx,%08lx,%08lx,%08lx,%08lx,%08lx,%08lx,%08lx\n",
+                     ctx.Eip, ctx.Esp, ctx.Ebp, ctx.Eax, sample[0], sample[1],
+                     sample[2], sample[3], sample[4], sample[5], sample[6], sample[7] );
+        }
+        MESSAGE( "macrunner-wow64-exit: stage=NtTerminateProcess_enter pid=%lu tid=%lu handle=%p exit_code=0x%lx\n",
+                 GetCurrentProcessId(), GetCurrentThreadId(), handle, exit_code );
+    }
     if (!handle && pBTCpuProcessTerm) pBTCpuProcessTerm( handle, FALSE, 0 );
     status = NtTerminateProcess( handle, exit_code );
+    if (trace_process_exit_enabled())
+        MESSAGE( "macrunner-wow64-exit: stage=NtTerminateProcess_after pid=%lu tid=%lu status=0x%lx\n",
+                 GetCurrentProcessId(), GetCurrentThreadId(), status );
     if (!handle && pBTCpuProcessTerm) pBTCpuProcessTerm( handle, TRUE, status );
     return status;
 }

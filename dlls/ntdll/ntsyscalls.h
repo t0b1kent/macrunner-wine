@@ -266,7 +266,7 @@
     SYSCALL_ENTRY( 0x0106, NtWow64ReadVirtualMemory64, 28 ) \
     SYSCALL_ENTRY( 0x0107, NtWow64WriteVirtualMemory64, 28 ) \
     SYSCALL_ENTRY( 0x0108, __wine_rpc_NtReadFile, 36 )
-#ifdef _WIN64
+#if defined(_WIN64) || (defined(WINE_UNIX_LIB) && defined(__LP64__))
 #define ALL_SYSCALLS \
     SYSCALL_ENTRY( 0x0000, NtAccessCheck, 64 ) \
     SYSCALL_ENTRY( 0x0001, NtWorkerFactoryWorkerReady, 0 ) \

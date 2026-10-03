@@ -279,6 +279,24 @@ int __cdecl wmain( int argc, WCHAR *argv[] )
         { NULL, NULL }
     };
 
-    StartServiceCtrlDispatcherW( service_table );
+    if (!StartServiceCtrlDispatcherW( service_table ) &&
+        GetLastError() == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT)
+    {
+        /* MacRunner: run standalone when raw-exec'd without an SCM.  On the fast-path
+         * prefix the RpcSs service is registered but never SCM-started, so a direct
+         * `wine rpcss.exe` would otherwise exit in milliseconds (no service-controller
+         * connection) before RPCSS_Initialize, leaving ncalrpc:[irpcss] uncreated and
+         * COM clients hitting 0x6ba RPC_S_SERVER_UNAVAILABLE.  Initialize the RPC
+         * interfaces directly and block so the endpoints stay up for the process
+         * lifetime (the launcher reaps it on teardown). */
+        RPC_STATUS ret = RPCSS_Initialize();
+
+        if (ret) WARN( "standalone RPCSS_Initialize failed, status %ld.\n", ret );
+        else
+        {
+            exit_event = CreateEventW( NULL, TRUE, FALSE, NULL );
+            WaitForSingleObject( exit_event, INFINITE );
+        }
+    }
     return 0;
 }

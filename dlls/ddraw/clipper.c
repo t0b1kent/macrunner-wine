@@ -53,6 +53,7 @@ BOOL ddraw_clipper_is_valid(const struct ddraw_clipper *clipper)
 
 static HRESULT WINAPI ddraw_clipper_QueryInterface(IDirectDrawClipper *iface, REFIID iid, void **object)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_QueryInterface\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
 
     TRACE("iface %p, iid %s, object %p.\n", iface, debugstr_guid(iid), object);
@@ -76,6 +77,7 @@ static HRESULT WINAPI ddraw_clipper_QueryInterface(IDirectDrawClipper *iface, RE
 
 static ULONG WINAPI ddraw_clipper_AddRef(IDirectDrawClipper *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_AddRef\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
     ULONG refcount;
 
@@ -92,6 +94,7 @@ static ULONG WINAPI ddraw_clipper_AddRef(IDirectDrawClipper *iface)
 
 static ULONG WINAPI ddraw_clipper_Release(IDirectDrawClipper *iface)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_Release\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
     ULONG refcount;
 
@@ -120,6 +123,7 @@ static ULONG WINAPI ddraw_clipper_Release(IDirectDrawClipper *iface)
 
 static HRESULT WINAPI ddraw_clipper_SetHWnd(IDirectDrawClipper *iface, DWORD flags, HWND window)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_SetHWnd\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
 
     TRACE("iface %p, flags %#lx, window %p.\n", iface, flags, window);
@@ -135,6 +139,8 @@ static HRESULT WINAPI ddraw_clipper_SetHWnd(IDirectDrawClipper *iface, DWORD fla
 
     wined3d_mutex_lock();
     clipper->window = window;
+    clipper->clip_list_changed = TRUE;      /* окно сменилось — список тоже */
+    SetRectEmpty(&clipper->window_rect_seen);
     wined3d_mutex_unlock();
 
     return DD_OK;
@@ -198,6 +204,7 @@ static HRGN get_window_region(HWND window)
 static HRESULT WINAPI ddraw_clipper_GetClipList(IDirectDrawClipper *iface, RECT *rect,
         RGNDATA *clip_list, DWORD *clip_list_size)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_GetClipList\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
     HRGN region;
 
@@ -280,6 +287,7 @@ static HRESULT WINAPI ddraw_clipper_GetClipList(IDirectDrawClipper *iface, RECT 
  *****************************************************************************/
 static HRESULT WINAPI ddraw_clipper_SetClipList(IDirectDrawClipper *iface, RGNDATA *region, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_SetClipList\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
 
     TRACE("iface %p, region %p, flags %#lx.\n", iface, region, flags);
@@ -294,6 +302,8 @@ static HRESULT WINAPI ddraw_clipper_SetClipList(IDirectDrawClipper *iface, RGNDA
         wined3d_mutex_unlock();
         return DDERR_CLIPPERISUSINGHWND;
     }
+
+    clipper->clip_list_changed = TRUE;
 
     if (clipper->region)
         DeleteObject(clipper->region);
@@ -313,6 +323,7 @@ static HRESULT WINAPI ddraw_clipper_SetClipList(IDirectDrawClipper *iface, RGNDA
 
 static HRESULT WINAPI ddraw_clipper_GetHWnd(IDirectDrawClipper *iface, HWND *window)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_GetHWnd\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
 
     TRACE("iface %p, window %p.\n", iface, window);
@@ -330,6 +341,7 @@ static HRESULT WINAPI ddraw_clipper_GetHWnd(IDirectDrawClipper *iface, HWND *win
 static HRESULT WINAPI ddraw_clipper_Initialize(IDirectDrawClipper *iface,
         IDirectDraw *ddraw, DWORD flags)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_Initialize\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
 
     TRACE("iface %p, ddraw %p, flags %#lx.\n", iface, ddraw, flags);
@@ -352,15 +364,37 @@ static HRESULT WINAPI ddraw_clipper_Initialize(IDirectDrawClipper *iface,
 
 static HRESULT WINAPI ddraw_clipper_IsClipListChanged(IDirectDrawClipper *iface, BOOL *changed)
 {
+    { static int _n; if (_n++ < 3) ERR( "macrunner-ddraw-карта: ddraw_clipper_IsClipListChanged\n" ); }
     struct ddraw_clipper *clipper = impl_from_IDirectDrawClipper(iface);
 
-    FIXME("iface %p, changed %p stub!\n", iface, changed);
+    TRACE("iface %p, changed %p.\n", iface, changed);
 
     if (!ddraw_clipper_is_valid(clipper))
         return DDERR_INVALIDPARAMS;
+    if (!changed)
+        return DDERR_INVALIDPARAMS;
 
-    /* XXX What is safest? */
-    *changed = FALSE;
+    wined3d_mutex_lock();
+
+    /* Оконный клиппер: область задаёт само окно, и она меняется без вызовов к
+     * нам — сверяем с тем, что видели в прошлый раз. */
+    if (clipper->window)
+    {
+        RECT now = {0};
+
+        GetClientRect(clipper->window, &now);
+        MapWindowPoints(clipper->window, NULL, (POINT *)&now, 2);
+        if (!EqualRect(&now, &clipper->window_rect_seen))
+        {
+            clipper->clip_list_changed = TRUE;
+            clipper->window_rect_seen = now;
+        }
+    }
+
+    *changed = clipper->clip_list_changed;
+    clipper->clip_list_changed = FALSE;   /* «изменился с прошлого запроса» */
+
+    wined3d_mutex_unlock();
 
     return DD_OK;
 }

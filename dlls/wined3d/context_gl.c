@@ -1311,6 +1311,38 @@ static void wined3d_context_gl_update_window(struct wined3d_context_gl *context_
     context_gl->internal_format_set = 0;
 }
 
+/* MacRunner 2026-09-02 — РЕЖИМ H у Diablo (0 кадров, миллионы wglMakeCurrent, поток CS вечно в
+ * wined3d_device_gl_delete_opengl_contexts_cs). Механизм: `while (device->context_count) destroy(contexts[0])`
+ * → cleanup → submit_command_fence → wined3d_fence_issue → context_acquire → у потока CS больше нет своего
+ * контекста в device->contexts → wined3d_swapchain_gl_get_context СОЗДАЁТ новый → count снова >0 → destroy →
+ * cleanup → ... Эталон (Wine 11.0) сторожит только случай c.destroyed (см. комментарий ниже) — тот же самый
+ * механизм («we'd end up back here again»), но лишь для чужого потока. Здесь та же защита обобщена: если у
+ * потока не осталось другого контекста этого устройства, выпуск забора ОБЯЗАН создать контекст — вместо него
+ * glFinish, как и в ветке destroyed. БЕЗУСЛОВНО: доказано парным замером на одном файле 02.09 (гейт ВЫКЛ — glf-off-4:
+ * cs-op застрял на 19, спин WindowFromDC; гейт ВКЛ — glf-on-1: cs-op 19→38, штатный выход); гейт снят по правилу
+ * «доказанное лечение безусловно». */
+static BOOL wined3d_context_gl_cleanup_needs_glfinish(const struct wined3d_context_gl *context_gl)
+{
+    const struct wined3d_device *device = context_gl->c.device;
+    DWORD tid = GetCurrentThreadId();
+    static unsigned int macrunner_n;
+    unsigned int i, n;
+
+    if (device)
+    {
+        for (i = 0; i < device->context_count; ++i)
+        {
+            if (device->contexts[i] != &context_gl->c && wined3d_context_gl(device->contexts[i])->tid == tid)
+                return FALSE;
+        }
+    }
+    n = ++macrunner_n;
+    if (n <= 2)
+        MESSAGE("macrunner-wined3d: cleanup-glfinish n=%u context=%p tid=%04lx contexts=%u — забор не выпускаем, glFinish (выпуск создал бы новый контекст и зациклил снос)\n",
+                n, context_gl, (unsigned long)tid, device ? device->context_count : 0);
+    return TRUE;
+}
+
 static void wined3d_context_gl_cleanup(struct wined3d_context_gl *context_gl)
 {
     struct wined3d_pipeline_statistics_query *pipeline_statistics_query;
@@ -1356,7 +1388,7 @@ static void wined3d_context_gl_cleanup(struct wined3d_context_gl *context_gl)
          *
          * If fences aren't supported there should be nothing to wait for
          * anyway, so just do nothing in that case. */
-        if (context_gl->c.destroyed)
+        if (context_gl->c.destroyed || wined3d_context_gl_cleanup_needs_glfinish(context_gl))
         {
             gl_info->gl_ops.gl.p_glFinish();
         }

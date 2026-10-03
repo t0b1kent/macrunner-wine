@@ -36,6 +36,7 @@
 #include "winuser.h"
 #include "winternl.h"
 #include "kernelbase.h"
+#include "macrunner_wcstombs_probe.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(nls);
@@ -320,6 +321,197 @@ static unsigned int nb_codepages;
 
 static struct norm_table *norm_info;
 
+#define MACRUNNER_HB_WCSTOMBS_PROBE_MAGIC 0x57564350u /* WCVP */
+
+struct macrunner_hb_wcstombs_probe_state
+{
+    DWORD magic;
+    volatile int32_t enabled;
+    volatile int32_t once;
+};
+
+static struct macrunner_hb_wcstombs_probe_state macrunner_hb_wcstombs_owner_view_state
+    __attribute__((section(".mrdiag"), used, aligned(4))) =
+    { MACRUNNER_HB_WCSTOMBS_PROBE_MAGIC, -1, 0 };
+
+static struct macrunner_hb_wcstombs_probe_state *macrunner_hb_wcstombs_probe_state(void)
+{
+    extern IMAGE_DOS_HEADER __ImageBase;
+    const IMAGE_DOS_HEADER *dos = &__ImageBase;
+    const IMAGE_NT_HEADERS *nt;
+    const IMAGE_SECTION_HEADER *section;
+    unsigned int i;
+
+    nt = (const IMAGE_NT_HEADERS *)((const char *)dos + dos->e_lfanew);
+    section = IMAGE_FIRST_SECTION( nt );
+    for (i = 0; i < nt->FileHeader.NumberOfSections; i++, section++)
+    {
+        struct macrunner_hb_wcstombs_probe_state *state;
+        SIZE_T offset;
+
+        if (memcmp( section->Name, ".mrdiag", sizeof(".mrdiag") - 1 )) continue;
+        for (offset = 0; offset + sizeof(*state) <= section->Misc.VirtualSize;
+             offset += sizeof(DWORD))
+        {
+            state = (void *)((char *)dos + section->VirtualAddress + offset);
+            if (state->magic == MACRUNNER_HB_WCSTOMBS_PROBE_MAGIC) return state;
+        }
+    }
+    return &macrunner_hb_wcstombs_owner_view_state;
+}
+
+static BOOL macrunner_hb_trace_wcstombs_owner_view_enabled(
+    struct macrunner_hb_wcstombs_probe_state *state )
+{
+    static const WCHAR nameW[] = L"MACRUNNER_HB_TRACE_WCSTOMBS_OWNER_VIEW";
+    WCHAR valueW[2] = {0};
+    UNICODE_STRING name, value;
+    int32_t enabled, expected;
+
+    enabled = __atomic_load_n( &state->enabled, __ATOMIC_ACQUIRE );
+    if (enabled >= 0) return enabled;
+
+    name.Buffer = (WCHAR *)nameW;
+    name.Length = sizeof(nameW) - sizeof(*nameW);
+    name.MaximumLength = sizeof(nameW);
+    value.Buffer = valueW;
+    value.Length = 0;
+    value.MaximumLength = sizeof(valueW);
+    enabled = !RtlQueryEnvironmentVariable_U( NULL, &name, &value ) &&
+              macrunner_hb_wcstombs_probe_env_enabled( (const uint16_t *)valueW, value.Length );
+
+    expected = -1;
+    __atomic_compare_exchange_n( &state->enabled, &expected,
+                                 enabled, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE );
+    return __atomic_load_n( &state->enabled, __ATOMIC_ACQUIRE );
+}
+
+static unsigned int macrunner_hb_wcstombs_owner_view_source( const WCHAR *src,
+                                                             unsigned int srclen,
+                                                             WCHAR values[2],
+                                                             const char **state )
+{
+    static const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                                  PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                                  PAGE_EXECUTE_WRITECOPY;
+    MEMORY_BASIC_INFORMATION info = {0};
+    SIZE_T ret_size;
+    NTSTATUS status;
+    unsigned int count;
+
+    if (!src || !srclen)
+    {
+        *state = "empty";
+        return 0;
+    }
+
+    status = NtQueryVirtualMemory( GetCurrentProcess(), src, MemoryBasicInformation,
+                                   &info, sizeof(info), &ret_size );
+    count = macrunner_hb_wcstombs_probe_readable_source_count(
+        (uintptr_t)src, srclen, (uintptr_t)info.BaseAddress, info.RegionSize,
+        !status && info.State == MEM_COMMIT,
+        !status && !(info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+        !!(info.Protect & readable) );
+    if (!count)
+    {
+        *state = "unreadable";
+        return 0;
+    }
+
+    values[0] = src[0];
+    if (count > 1) values[1] = src[1];
+    *state = "readable";
+    return count;
+}
+
+static const char *macrunner_hb_wcstombs_owner_name( enum macrunner_hb_wcstombs_owner_class class )
+{
+    switch (class)
+    {
+    case MACRUNNER_HB_WCSTOMBS_OWNER_ANSI: return "ANSI";
+    case MACRUNNER_HB_WCSTOMBS_OWNER_OEM: return "OEM";
+    case MACRUNNER_HB_WCSTOMBS_OWNER_CODEPAGES: return "codepages";
+    default: return "other";
+    }
+}
+
+static void macrunner_hb_trace_wcstombs_owner_view( const CPTABLEINFO *info,
+                                                    const USHORT *table,
+                                                    const WCHAR *src,
+                                                    unsigned int srclen,
+                                                    char *dst,
+                                                    unsigned int dstlen )
+{
+    struct macrunner_hb_wcstombs_probe_state *state;
+    struct macrunner_hb_wcstombs_owner owner;
+    WCHAR values[2] = {0};
+    const char *src_state;
+    unsigned int src_count;
+
+    state = macrunner_hb_wcstombs_probe_state();
+    if (!macrunner_hb_wcstombs_probe_try_begin(
+            &state->once, macrunner_hb_trace_wcstombs_owner_view_enabled( state ), dstlen,
+            (uintptr_t)info->DBCSOffsets, (uintptr_t)table ))
+        return;
+
+    owner = macrunner_hb_wcstombs_probe_classify_owner(
+        (uintptr_t)info, (uintptr_t)&ansi_cpinfo, (uintptr_t)&oem_cpinfo,
+        (uintptr_t)codepages, ARRAY_SIZE(codepages), sizeof(codepages[0]) );
+    src_count = macrunner_hb_wcstombs_owner_view_source( src, srclen, values, &src_state );
+
+    MESSAGE( "macrunner-hb-wcstombs-owner-view: tid=%p ret=%p probe_state=%p cp=%u info=%p "
+             "owner=%s owner_index=%d ansi=%p oem=%p codepages=%p codepages_end=%p "
+             "nb_addr=%p nb=%u dbcs=%p wide=%p src=%p srclen=%u dst=%p dstlen=%u "
+             "src_state=%s src_count=%u src0=%04x src1=%04x\n",
+             NtCurrentTeb()->ClientId.UniqueThread, __builtin_return_address(0), state,
+             (unsigned int)info->CodePage, info, macrunner_hb_wcstombs_owner_name( owner.class ),
+             owner.index, &ansi_cpinfo, &oem_cpinfo, codepages,
+             codepages + ARRAY_SIZE(codepages), &nb_codepages, nb_codepages,
+             info->DBCSOffsets, table, src, srclen, dst, dstlen, src_state, src_count,
+             (unsigned int)values[0], (unsigned int)values[1] );
+}
+
+/* Готовность описателя кодовой страницы — по САМИМ ТАБЛИЦАМ, а не по номеру страницы.
+ *
+ * Номер как признак врал: в AI War 2 в `ansi_cpinfo` оказывалось CodePage=301 —
+ * несуществующая страница — при НУЛЕВЫХ MultiByteTable/WideCharTable. Ненулевой мусор
+ * выдавал себя за «уже готово», ленивая инициализация пропускалась, и цикл
+ * перекодировки разыменовывал ноль.
+ *
+ * У UTF-8 таблиц нет ПО УСТРОЙСТВУ (RtlInitCodePageTable копирует статический
+ * описатель без таблиц — перекодировка алгоритмическая), поэтому UTF-8 готов всегда. */
+static int macrunner_hb_cp_ready( const CPTABLEINFO *info )
+{
+    if (!info->CodePage) return 0;
+    if (info->CodePage == CP_UTF8) return 1;
+    return info->MultiByteTable && info->WideCharTable;
+}
+
+static void init_default_codepage_tables(void)
+{
+    USHORT utf8[2] = { 0, CP_UTF8 };
+    USHORT *ansi_ptr = NtCurrentTeb()->Peb->AnsiCodePageData ? NtCurrentTeb()->Peb->AnsiCodePageData : utf8;
+    USHORT *oem_ptr = NtCurrentTeb()->Peb->OemCodePageData ? NtCurrentTeb()->Peb->OemCodePageData : utf8;
+    UINT was_ansi = ansi_cpinfo.CodePage, was_oem = oem_cpinfo.CodePage;
+    int did_ansi = 0, did_oem = 0;
+    static int mr_said;
+
+    if (!macrunner_hb_cp_ready( &ansi_cpinfo )) { RtlInitCodePageTable( ansi_ptr, &ansi_cpinfo ); did_ansi = 1; }
+    if (!macrunner_hb_cp_ready( &oem_cpinfo ))  { RtlInitCodePageTable( oem_ptr,  &oem_cpinfo );  did_oem  = 1; }
+
+    /* Проба: чем СТАЛИ таблицы и делала ли эта попытка вообще что-нибудь. Нужна, чтобы
+     * отличить «init_locale не звался» от «звался, но PEB не отдал данные страницы». */
+    if (mr_said++ < 12)
+        MESSAGE( "macrunner-hb-cp-init: pid=%04x n=%d peb_ansi=%p peb_oem=%p "
+                 "было_ansi=%u было_oem=%u делал_ansi=%d делал_oem=%d "
+                 "стало_ansi=%u ansi_mb=%p ansi_wc=%p стало_oem=%u oem_mb=%p oem_wc=%p\n",
+                 (unsigned int)GetCurrentProcessId(), mr_said,
+                 NtCurrentTeb()->Peb->AnsiCodePageData, NtCurrentTeb()->Peb->OemCodePageData,
+                 was_ansi, was_oem, did_ansi, did_oem,
+                 ansi_cpinfo.CodePage, ansi_cpinfo.MultiByteTable, ansi_cpinfo.WideCharTable,
+                 oem_cpinfo.CodePage, oem_cpinfo.MultiByteTable, oem_cpinfo.WideCharTable );
+}
+
 struct sortguid
 {
     GUID  id;          /* sort GUID */
@@ -525,6 +717,41 @@ static void load_sortdefault_nls(void)
                                     locale_table->nb_lcnames * sizeof(*locale_sorts) );
 }
 
+/* MacRunner stopgap (Lane D 2026-06-15): the ARM64X kernelbase twin carries TWO copies of the
+ * init-populated locale globals in .data.  Native init code (load_locale_nls/load_sortdefault_nls/
+ * init_locale) writes the native-view copy, but the export-reachable native NLS functions
+ * (GetStringTypeW/LCMapString/CompareString/get_language_sort/...) read linker-layout-specific
+ * EC-view copies which no code ever writes (image DVRT has no .data entries to coalesce the two
+ * views; the x64 side is .hexpthk thunks into ARM64, so there is no x64 init that writes the EC
+ * copy).  Mirror each initialised global into its exact EC-view copy so native importers (e.g.
+ * DXMT) read valid locale tables instead of NULL.  Guarded to the ARM64X image (CHPE metadata) so
+ * pure x86_64/i386 kernelbase builds are untouched.  TODO: replace once general ARM64X .data
+ * view-coherence lands (see reports/research/arm64x-sync-stopgaps.md). */
+/* Mirror one native-view global into its EC-view copy below.  noinline + opaque pointer
+ * parameter so _FORTIFY_SOURCE cannot infer a sub-object (size 0) destination and insert a
+ * __memcpy_chk that would abort at runtime. */
+/* ★★★★★★ 03.09.2026 — ДЕЛЬТЫ ПРОТУХЛИ ПОСЛЕ ПОЛНОЙ ПЕРЕСБОРКИ.
+ *
+ * Константы жёстко зашиты, а раскладка .data задаётся компоновщиком и меняется при
+ * любой перестановке кода. Сверка по символам разложенного kernelbase.dll (llvm-nm,
+ * пара одноимённых символов native/EC) дала:
+ *     CORE  (sort, locale_table, locale_strings, codepages, intl_key,
+ *            ansi_cpinfo, oem_cpinfo, current_locale_sort)      = 0x2800   было 0x27e8
+ *     ENTRY (entry_sintlsymbol и прочие entry_*)                 = 0x1b08   было 0x1b00
+ * Промах 24 байта по ядру и 8 байт по входам: зеркало писало НЕ ТУДА. Следствие —
+ * Diablo гибнет на старте (3 прогона из 7, ровно 107 строк): в `wcslen` приходит
+ * 0x3f003f, то есть DefaultChar из CPTABLEINFO вместо указателя на строку.
+ *
+ * Строки «sync-locale-ec: verify …» читают по ТЕМ ЖЕ дельтам, поэтому печатали
+ * соседей и дефект маскировали — сверка, повторяющая ошибку, не сверка.
+ *
+ * ЭТО НЕ ЛЕЧЕНИЕ, А ОБНОВЛЁННЫЙ КОСТЫЛЬ. Числа протухнут снова при следующей
+ * перестановке .data. Чтобы протухание перестало быть молчаливым, заведена
+ * механическая сверка `scripts/сверка-дельт-зеркала.sh`: она достаёт настоящие
+ * дельты из собранного двоичного файла и падает, если они разошлись с этими
+ * константами. Настоящее лечение — вычислять дельту из метаданных ARM64X в рантайме
+ * и при несовпадении НЕ ПИСАТЬ, а громко сообщать. */
+
 
 static const struct sortguid *find_sortguid( const GUID *guid )
 {
@@ -670,6 +897,55 @@ static const struct sortguid *get_language_sort( const WCHAR *name )
     GUID guid;
     HKEY key = 0;
     DWORD size, type;
+
+#if defined(__aarch64__) || defined(__arm64ec__)
+    /* ★★★★★★ 05.09.2026 — ПРИБОР «ВОШЛИ В МЁРТВУЮ ПОЛОВИНУ ARM64X». ОПЫТ СНЯТ, СТОРОЖ ОСТАВЛЕН.
+     *
+     * ЧТО ЗДЕСЬ БЫЛО. С 04.09 стояла проба `macrunner-arm64x-проба-sort`: она БЕЗУСЛОВНО печатала
+     * по строке на каждую половину каждого процесса с адресами восьми глобалов. Свой вопрос она
+     * закрыла — 05.09 в госте pid=0020 она дала ровно то, ради чего ставилась:
+     *     вид=EC     &sort=…7762F8 guid_count=75  locale_table=…B902688   ЗАПОЛНЕНА
+     *     вид=native &sort=…773AF0 guid_count=0   locale_table=0          ПУСТА
+     * Дальше опыт стал шумом: 13 строк на прогон в процессах, где никакого дефекта нет.
+     *
+     * ЧТО ОСТАЛОСЬ И ПОЧЕМУ ЭТО ПРИБОР, А НЕ ОПЫТ. У образа ARM64X два тела этой функции и две
+     * копии `.data`; `DllMain` заполняет только ту, чья точка входа отработала (в x64-процессе —
+     * EC). Если разрешение импортов когда-нибудь снова отдаст адрес из МЁРТВОЙ половины, эта
+     * функция разыменует нули и процесс умрёт с c0000005 по адресу 0 — отказ, который 04.09
+     * стоил дня разбора и выглядел как «GetLocaleInfoW возвращает 87».
+     *
+     * Условие `!locale_table` — это и есть «я исполняюсь в половине, которую никто не
+     * инициализировал»: в здоровом процессе `init_locale` присваивает `locale_table` ДО первого
+     * вызова `get_language_sort` (load_locale_nls -> ... -> get_language_sort), поэтому сторож
+     * не может сработать ложно. Он ничего не чинит и не маскирует — он НАЗЫВАЕТ: свою половину,
+     * адрес своей копии и АДРЕС ВОЗВРАТА, то есть того, кто в мёртвую половину вошёл. Именно
+     * этих двух чисел не хватало 04.09.
+     *
+     * Лечение причины — в загрузчике: `macrunner_hb_module_live_half_is_ec`
+     * (engine/wine/dlls/ntdll/loader.c) заставляет разрешение импортов брать тела ЖИВОЙ половины. */
+    if (!locale_table || !sort.guid_count)
+    {
+        static unsigned int alarm_done;
+
+        if (!alarm_done)
+        {
+            alarm_done = 1;
+            MESSAGE( "macrunner-arm64x-мёртвая-половина: pid=%04x вид=%s get_language_sort "
+                     "&sort=%p guid_count=%u &locale_table=%p locale_table=%p "
+                     "&user_locale=%p user_locale=%p вошли_из=%p\n",
+                     (unsigned int)GetCurrentProcessId(),
+#ifdef __arm64ec__
+                     "EC",
+#else
+                     "native",
+#endif
+                     (void *)&sort, sort.guid_count,
+                     (void *)&locale_table, (void *)locale_table,
+                     (void *)&user_locale, (void *)user_locale,
+                     __builtin_return_address(0) );
+        }
+    }
+#endif
 
     if (name == LOCALE_NAME_USER_DEFAULT)
     {
@@ -1910,8 +2186,6 @@ static void update_locale_registry(void)
  */
 void init_locale( HMODULE module )
 {
-    USHORT utf8[2] = { 0, CP_UTF8 };
-    USHORT *ansi_ptr, *oem_ptr;
     WCHAR bufferW[LOCALE_NAME_MAX_LENGTH];
     DYNAMIC_TIME_ZONE_INFORMATION timezone;
     const WCHAR *user_locale_name;
@@ -1941,10 +2215,7 @@ void init_locale( HMODULE module )
 
     NtGetNlsSectionPtr( 12, NormalizationC, NULL, (void **)&norm_info, &size );
 
-    ansi_ptr = NtCurrentTeb()->Peb->AnsiCodePageData ? NtCurrentTeb()->Peb->AnsiCodePageData : utf8;
-    oem_ptr = NtCurrentTeb()->Peb->OemCodePageData ? NtCurrentTeb()->Peb->OemCodePageData : utf8;
-    RtlInitCodePageTable( ansi_ptr, &ansi_cpinfo );
-    RtlInitCodePageTable( oem_ptr, &oem_cpinfo );
+    init_default_codepage_tables();
 
     RegCreateKeyExW( HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Control\\Nls",
                      0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &nls_key, NULL );
@@ -1953,7 +2224,43 @@ void init_locale( HMODULE module )
     RegCreateKeyExW( HKEY_CURRENT_USER, L"Control Panel\\International",
                      0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &intl_key, NULL );
 
+    /* ★★★★★★★ 03.09.2026 — ЗЕРКАЛО EC УДАЛЕНО. Оно было не лечением, а дефектом.
+     *
+     * Заплатка копировала «нативную» копию каждого глобала в «EC-копию» по зашитой
+     * дельте. Разбор показал три вещи разом:
+     *   1. дельта протухала при КАЖДОЙ пересборке (0x27e8 -> 0x2800 -> 0x2808 за час);
+     *   2. НЕВЕРЕН БЫЛ ЗНАК: близнец лежит на native+Δ, а писали в native−Δ, то есть
+     *      ни в одну из двух копий — в постороннюю память, портя то, что там лежало;
+     *   3. дельта не одна даже внутри модуля: 0x2800 у 72 глобалов, 0x1b08 у 67,
+     *      0x1b00 у 5, плюс 0x3420 и 0xc — двумя константами это не описывается.
+     * Метаданные ARM64X помочь не могут: в таблице 17 исправлений, все в заголовке и
+     * .rdata, в .data ни одного.
+     *
+     * И главное — зеркало НИКОМУ НЕ НУЖНО. Замер с гейтом, отключавшим его целиком:
+     *   Diablo   без зеркала 3 прогона: этажи 10, 10, 7 (с ним было 9, 7, 10, 7, 7)
+     *   AI War 2 с зеркалом 4358 строк / без 4364, отказов 0 в обоих
+     * AI War 2 — та самая мишень, ради которой заплатку и писали.
+     *
+     * Нативные функции NLS читают НИЖНЮЮ, нативную копию: init_locale, get_language_sort
+     * и find_sortguid адресуют только её (66/10/2 обращения, к верхней ноль). Верхняя
+     * копия существует потому, что этот файл компилируется дважды — для aarch64 и для
+     * arm64ec, — и её читает только EC-код, которого на нашем пути нет.
+     *
+     * Поэтому здесь больше ничего не вызывается. Разбор целиком:
+     * память zerkalo-ec-pisalo-v-mimo-znak-delty. */
+
+    /* ★★★ 03.09.2026 — ШАГОМЕР init_locale.
+     *
+     * Замер серией: Diablo гибнет на старте в 3 прогонах из 7, ровно на 107-й строке
+     * журнала. Последняя строка — сверка зеркала EC, первая отсутствующая —
+     * `init_locale done`. То есть смерть ВНУТРИ init_locale, между этими точками.
+     * Дальше идут ровно два кандидата, и шагомер разделяет их за один прогон:
+     * если печатается «шаг=2», значит get_language_sort прошла и виноват часовой пояс. */
+    MESSAGE( "macrunner-init-locale-шаг: pid=%04x шаг=1 перед get_language_sort\n",
+             (unsigned int)GetCurrentProcessId() );
     current_locale_sort = get_language_sort( LOCALE_NAME_USER_DEFAULT );
+    MESSAGE( "macrunner-init-locale-шаг: pid=%04x шаг=2 sort=%p\n",
+             (unsigned int)GetCurrentProcessId(), current_locale_sort );
 
     if (GetDynamicTimeZoneInformation( &timezone ) != TIME_ZONE_ID_INVALID &&
         !RegCreateKeyExW( HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Control\\TimeZoneInformation",
@@ -1968,6 +2275,9 @@ void init_locale( HMODULE module )
 
     /* Update registry contents if the user locale has changed.
      * This simulates the action of the Windows control panel. */
+
+    MESSAGE( "macrunner-init-locale-шаг: pid=%04x шаг=3 после часового пояса\n",
+             (unsigned int)GetCurrentProcessId() );
 
     user_locale_name = locale_strings + user_locale->sname + 1;
     count = sizeof(bufferW);
@@ -2200,6 +2510,20 @@ static const CPTABLEINFO *get_codepage_table( UINT codepage )
     unsigned int i;
     USHORT *ptr;
     SIZE_T size;
+
+    /* ★★★★★★ 02.09.2026 — ПРИЗНАК ГОТОВНОСТИ ПО ТАБЛИЦАМ, А НЕ ПО НОМЕРУ СТРАНИЦЫ.
+     *
+     * AI War 2 (гость x86-64) гибнет в `wcstombs_codepage` на нулевой базе таблицы. Проба в
+     * развилке назвала причину: просят CP_ACP, а `ansi_cpinfo` содержит `CodePage=301` —
+     * несуществующую страницу — при НУЛЕВЫХ `MultiByteTable` и `WideCharTable`. В том же
+     * процессе сверка зеркала EC печатает cp=1252 с верными указателями, то есть сюда
+     * приходит другая, недозаполненная копия структуры.
+     *
+     * Ленивая инициализация стояла под `!CodePage`, и ненулевой мусор выдавал себя за
+     * «уже готово»: init пропускался, таблицы оставались пустыми, цикл перекодировки
+     * разыменовывал ноль. Признак готовности — САМИ ТАБЛИЦЫ, а не номер страницы. */
+    if (!macrunner_hb_cp_ready( &ansi_cpinfo ) || !macrunner_hb_cp_ready( &oem_cpinfo ))
+        init_default_codepage_tables();
 
     switch (codepage)
     {
@@ -2982,6 +3306,7 @@ static int wcstombs_dbcs( const CPTABLEINFO *info, const WCHAR *src, unsigned in
 
     if (!dstlen)
     {
+        macrunner_hb_trace_wcstombs_owner_view( info, table, src, srclen, dst, dstlen );
         for (i = 0; srclen; src++, srclen--, i++) if (table[*src] & 0xff00) i++;
         return i;
     }
@@ -7402,6 +7727,27 @@ INT WINAPI DECLSPEC_HOTPATCH WideCharToMultiByte( UINT codepage, DWORD flags, LP
                       WC_COMPOSITECHECK | WC_NO_BEST_FIT_CHARS))
         {
             SetLastError( ERROR_INVALID_FLAGS );
+            return 0;
+        }
+        /* ★ 02.09.2026 — КАКУЮ КОДОВУЮ СТРАНИЦУ ПРОСЯТ, КОГДА ТАБЛИЦА ПУСТА.
+         *
+         * AI War 2 (гость x86-64) гибнет в `wcstombs_codepage+0x2e4` на
+         * `ldrb w11,[x21,x11]`: база таблицы НУЛЕВАЯ, индекс — символ 0x5c. Глобальные
+         * `ansi_cpinfo`/`oem_cpinfo` зеркалятся в EC верно (замерено: указатели совпадают,
+         * cp=1252), значит сюда приходит ДРУГАЯ таблица. Печатаем ровно в развилке и
+         * ТОЛЬКО когда таблица пуста — шума нет, а «пусто» перестаёт быть безымянным.
+         *
+         * Заодно НЕ ДАЁМ упасть: пустая таблица это неверный параметр, а не повод
+         * разыменовывать ноль. Прежнее поведение — падение в цикле перекодировки. */
+        if (info->CodePage != CP_UTF8 && !info->WideCharTable)
+        {
+            static int mr_said;
+            if (mr_said++ < 8)
+                MESSAGE( "macrunner-hb-cp-пустая-таблица: просили=%u таблица_cp=%u mb=%p wc=%p "
+                         "ansi_cp=%u ansi_wc=%p oem_cp=%u\n",
+                         codepage, info->CodePage, info->MultiByteTable, info->WideCharTable,
+                         ansi_cpinfo.CodePage, ansi_cpinfo.WideCharTable, oem_cpinfo.CodePage );
+            SetLastError( ERROR_INVALID_PARAMETER );
             return 0;
         }
         if (info->CodePage == CP_UTF8)

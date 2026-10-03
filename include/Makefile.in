@@ -362,6 +362,7 @@ SOURCES = \
 	gdiplustypes.h \
 	getdts.idl \
 	guiddef.h \
+	hb_probe.h \
 	hidusage.h \
 	highlevelmonitorconfigurationapi.h \
 	hlguids.h \
@@ -977,6 +978,7 @@ SOURCES = \
 	wine/irpcss.idl \
 	wine/itss.idl \
 	wine/list.h \
+	wine/macrunner_modmap.h \
 	wine/mfinternal.idl \
 	wine/mmsystem16.h \
 	wine/mscvpdb.h \

@@ -391,6 +391,36 @@ static int rpcrt4_conn_np_read(RpcConnection *conn, void *buffer, unsigned int c
     HANDLE event;
     NTSTATUS status;
 
+    {   /* ★★★★★★ MacRunner 2026-09-01 — ОТРАВЛЕНИЕ БУДУЩЕГО КАДРА.
+         *
+         * Отказ: `ret` в kernelbase!WaitForSingleObject берёт x30 из своего слота
+         * [sp+0x18], а там указатель в область RPC. Осталось два объяснения, и они
+         * взаимоисключающи:
+         *   (а) слот кто-то затирает ПОСЛЕ пролога;
+         *   (б) пролог `str x30,[sp,#0x18]` не выполнялся, и в слоте лежит старый мусор.
+         * Аппаратные сторожа писателя не нашли, но доказать (б) не могли.
+         *
+         * Кладём узнаваемый узор в память НИЖЕ нашего sp — туда, где ляжет кадр
+         * WaitForSingleObject (она глубже нас примерно на 0xc8). Если при отказе x30
+         * окажется узором — верно (б). Если снова указателем RPC — верно (а).
+         *
+         * Правка в rpcrt4, а НЕ в ntdll.so: отказ управляется раскладкой кода ntdll.so
+         * (прибор, не исполняющийся до отказа, гасил 6 отказов из 6 в 0 из 9), а на
+         * раскладку rpcrt4 он не смотрит.
+         *
+         * Гейт MACRUNNER_HB_POISON_STACK=1, умолчание ВЫКЛ. */
+        static int otrava = -1;
+        if (otrava < 0) { const char *v = getenv( "MACRUNNER_HB_POISON_STACK" );
+                          otrava = (v && *v && *v != '0') ? 1 : 0; }
+        if (otrava)
+        {
+            volatile ULONG_PTR yakor;
+            volatile ULONG_PTR *nizhe = (volatile ULONG_PTR *)&yakor;
+            int i_;
+            for (i_ = 1; i_ <= 96; i_++)
+                nizhe[-i_] = (ULONG_PTR)0x0BADF00D00000000ull | (ULONG_PTR)i_;
+        }
+    }
     event = get_np_event(connection);
     if (!event)
         return -1;

@@ -4,8 +4,8 @@ UNIXLIB   = ntdll.so
 IMPORTLIB = ntdll
 IMPORTS   = $(TOMCRYPT_PE_LIBS) $(MUSL_PE_LIBS)
 EXTRAINCL = $(TOMCRYPT_PE_CFLAGS)
-UNIX_CFLAGS  = $(UNWIND_CFLAGS) $(HWLOC_CFLAGS)
-UNIX_LIBS    = $(IOKIT_LIBS) $(COREFOUNDATION_LIBS) $(CORESERVICES_LIBS) $(RT_LIBS) $(PTHREAD_LIBS) $(UNWIND_LIBS) $(I386_LIBS) $(PROCSTAT_LIBS) $(HWLOC_LIBS)
+UNIX_CFLAGS  = $(UNWIND_CFLAGS) $(HWLOC_CFLAGS) -I$(top_srcdir)/../hyperbridge/include
+UNIX_LIBS    = $(IOKIT_LIBS) $(COREFOUNDATION_LIBS) $(CORESERVICES_LIBS) $(RT_LIBS) $(PTHREAD_LIBS) $(UNWIND_LIBS) $(I386_LIBS) $(PROCSTAT_LIBS) $(HWLOC_LIBS) $(top_srcdir)/../hyperbridge/libhyperbridge.a
 
 EXTRADLLFLAGS = -nodefaultlibs
 i386_EXTRADLLFLAGS = -Wl,--image-base,0x7bc00000
@@ -24,6 +24,8 @@ SOURCES = \
 	large_int.c \
 	loader.c \
 	locale.c \
+	macrunner_guest_peb_observer.c \
+	macrunner_hb_pe.c \
 	math.c \
 	misc.c \
 	path.c \
@@ -53,6 +55,8 @@ SOURCES = \
 	unix/msync.c \
 	unix/loader.c \
 	unix/loadorder.c \
+	unix/macrunner_guest_peb_observer.c \
+	unix/macrunner_hb.c \
 	unix/process.c \
 	unix/registry.c \
 	unix/security.c \

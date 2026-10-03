@@ -3,7 +3,12 @@ MODULE    = win32u.dll
 UNIXLIB   = win32u.so
 IMPORTLIB = win32u
 IMPORTS   = ntdll
-UNIX_CFLAGS  = $(FREETYPE_CFLAGS) $(FONTCONFIG_CFLAGS)
+# ★ 06.09.2026, лейн ПРИБОРЫ-3 — hb_probe.h для юниксовой половины win32u.
+# База лейна писала «hb_probe применим только там, где линкуется libhyperbridge.a,
+# а в win32u.so его НЕТ» и честно называла это ограничением НАШЕГО устройства.
+# Ограничение снято: заголовок виден, реализация включается ОДНИМ файлом (dib.c),
+# и вся библиотека при этом НЕ линкуется — win32u.so не нужен транслятор.
+UNIX_CFLAGS  = $(FREETYPE_CFLAGS) $(FONTCONFIG_CFLAGS) -I$(top_srcdir)/../hyperbridge/include
 UNIX_LIBS    = $(CORETEXT_LIBS) $(APPKIT_LIBS) $(PTHREAD_LIBS) -lm
 
 EXTRADLLFLAGS = -nodefaultlibs

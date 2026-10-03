@@ -878,6 +878,11 @@ static BOOL install_wine_mono(void)
     if (!get_mono_path(mono_path, FALSE))
     {
         TRACE("mono runtime not found\n");
+        if (GetEnvironmentVariableW( L"WINE_MONO_NO_INSTALL", NULL, 0 ))
+        {
+            WARN( "mono runtime not found; skipping GUI installer because WINE_MONO_NO_INSTALL is set\n" );
+            return TRUE;
+        }
         return invoke_appwiz();
     }
 
@@ -947,7 +952,12 @@ static BOOL install_wine_mono(void)
             ERR("MsiInstallProduct failed, err=%i\n", res);
     }
 
-    ret = invoke_appwiz();
+    if (GetEnvironmentVariableW( L"WINE_MONO_NO_INSTALL", NULL, 0 ))
+    {
+        WARN( "mono support package not found; skipping GUI installer because WINE_MONO_NO_INSTALL is set\n" );
+        ret = TRUE;
+    }
+    else ret = invoke_appwiz();
 
 end:
     if (hmsi)

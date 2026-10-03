@@ -1,0 +1,19 @@
+# Portable equivalent of the published 1.0.7 configure record.
+# Use bash build-recipes/configure.sh to set compilers and create sibling sources.
+# From _build after staging; paths are relative to the public checkout:
+
+./source-wine/configure \
+  --prefix="$PWD/../_install" \
+  --enable-archs=aarch64,arm64ec,x86_64,i386 \
+  --disable-tests --without-x --without-alsa --without-capi --without-oss --without-pulse --with-coreaudio \
+  'CC=ccache /usr/bin/clang' \
+  'CXX=ccache /usr/bin/clang++' \
+  "CFLAGS=-O2 -arch arm64 -mmacosx-version-min=14.0 -I$(brew --prefix)/include" \
+  "LDFLAGS=-arch arm64 -mmacosx-version-min=14.0 -L$(brew --prefix)/lib" \
+  "CPPFLAGS=-I$(brew --prefix)/include"
+
+# PE compilers: the verified llvm-mingw-20260505-ucrt-macos-universal archive,
+# aarch64/arm64ec/x86_64/i686-w64-mingw32-gcc and corresponding g++ wrappers,
+# each prefixed with ccache. configure.sh exports *_CC and *_CXX.
+# PATH selects Homebrew bison and flex; pkg-config selects the Homebrew libraries.
+# The --no-create --no-recursion flags in the old config.status recheck are omitted.

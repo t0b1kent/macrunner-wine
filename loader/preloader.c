@@ -1300,7 +1300,7 @@ static void preload_reserve( const char *str )
     /* sanity checks */
     if (end <= start) start = end = NULL;
     else if ((char *)end > preloader_start &&
-             (char *)start <= preloader_end)
+             (char *)start < preloader_end)
     {
         wld_printf( "WINEPRELOADRESERVE range %p-%p overlaps preloader %p-%p\n",
                      start, end, preloader_start, preloader_end );

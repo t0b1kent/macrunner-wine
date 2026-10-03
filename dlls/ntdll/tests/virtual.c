@@ -800,6 +800,13 @@ static void test_NtAllocateVirtualMemoryEx_address_requirements(void)
                                         PAGE_EXECUTE_READWRITE, ext, 1);
     ok(status == STATUS_INVALID_PARAMETER, "Unexpected status %08lx.\n", status);
 
+    a.HighestEndingAddress = (void *)0x20001000;
+    size = 0x10000;
+    addr = NULL;
+    status = pNtAllocateVirtualMemoryEx(NtCurrentProcess(), &addr, &size, MEM_RESERVE,
+                                        PAGE_EXECUTE_READWRITE, ext, 1);
+    ok(status == STATUS_INVALID_PARAMETER, "Unexpected status %08lx.\n", status);
+
     a.HighestEndingAddress = (void *)(0x20001000 - 2);
     size = 0x10000;
     addr = NULL;
@@ -1931,6 +1938,12 @@ static void test_NtMapViewOfSectionEx(void)
     a.LowestStartingAddress = NULL;
     a.Alignment = 0;
     a.HighestEndingAddress = (void *)(0x20001000 + 1);
+    size = 0x10000;
+    ptr = NULL;
+    status = pNtMapViewOfSectionEx( mapping, process, &ptr, &offset, &size, 0, PAGE_READWRITE, ext, 1 );
+    ok(status == STATUS_INVALID_PARAMETER, "Unexpected status %08lx.\n", status);
+
+    a.HighestEndingAddress = (void *)0x20001000;
     size = 0x10000;
     ptr = NULL;
     status = pNtMapViewOfSectionEx( mapping, process, &ptr, &offset, &size, 0, PAGE_READWRITE, ext, 1 );

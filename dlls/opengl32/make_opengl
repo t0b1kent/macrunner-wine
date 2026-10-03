@@ -514,7 +514,32 @@ sub generate_unix_thunk($$$$)
             }
             else
             {
-                $call_args .= " ULongToPtr(params->$pname),";
+                # ★★★ MacRunner 26.08.2026 — ГОСТЕВОЙ УКАЗАТЕЛЬ ПЕРЕВОДИТСЯ, А НЕ РАСШИРЯЕТСЯ.
+                #
+                # ULongToPtr отдаёт голый 32-битный адрес. На x86 это верно: там гость и
+                # хозяин делят адресное пространство. У нас гостевая память i386 живёт в
+                # ОКНЕ по ненулевой базе — macOS не отдаёт нижние 4 ГБ (замерено 10.08:
+                # __PAGEZERO меньше 4 ГБ убивает процесс). Хозяин, получив такой адрес,
+                # падает на первом чтении: снимок зависшего Diablo показал
+                # wglGetProcAddress -> bsearch -> сигнал -> обработчик по кругу.
+                #
+                # Ветвь выше уже отделила СМЕЩЕНИЯ (GLsizeiptr/GLintptr) — они числа и
+                # переводу не подлежат. Здесь остаются настоящие указатели; исключаем из
+                # них только ДЕСКРИПТОРЫ, адресом не являющиеся.
+                # ★ ПОПРАВКА 27.08: правило «имя на h» ДЫРЯВОЕ. Дескрипторы зовутся и
+                # newContext, oldContext, rc, dc, sync, queryHandle — все без 'h'. Перевод
+                # такого дескриптора ломает wglMakeCurrent, и wined3d не может создать
+                # GL-контекст: игра показывает «Direct Draw Error … unknown error».
+                # Судим ПО ТИПУ, а не по имени.
+                if ($arg_type =~ /\b(HGLRC|HDC|HANDLE|HPBUFFERARB|HWND|GLsync|HPBUFFEREXT)\b/ ||
+                    $arg_type =~ /^\s*(const\s+)?H[A-Z]/)
+                {
+                    $call_args .= " ULongToPtr(params->$pname),";
+                }
+                else
+                {
+                    $call_args .= " macrunner_guest32_host_ptr(params->$pname),";
+                }
                 $need_manual_thunk = 1 if $arg_type =~ /(\*.*\*|(sizei|int)ptr.*\*)/;
                 $need_lock = 1 if $arg_type =~ /GLsync/;
             }
@@ -1524,30 +1549,61 @@ foreach (sort keys %ext_functions)
     print OUT generate_unix_thunk($_, $ext_functions{$_}, 0, "ext");
 }
 
+my @native_unix_funcs;
+foreach (sort keys %wgl_functions)
+{
+    next if defined $manual_win_functions{$_};
+    push @native_unix_funcs, "wgl_$_";
+}
+foreach (sort keys %norm_functions)
+{
+    next if defined $manual_win_functions{$_};
+    push @native_unix_funcs, "gl_$_";
+}
+foreach (sort keys %ext_functions)
+{
+    next if $_ =~ /^egl/; # unix-side only API
+    next if defined $manual_win_functions{$_};
+    push @native_unix_funcs, "ext_$_";
+}
+
+print OUT <<'EOF';
+#if defined(__APPLE__) && defined(__aarch64__)
+/* Recover a missing PE thread pointer from native TLS before entering GL code. */
+#define DECLARE_OPENGL_UNIX_ENTRY(name, type) \
+static NTSTATUS name##_with_teb( void *args ) \
+{ \
+    struct type *params = args; \
+    if (!params->teb && !(params->teb = NtCurrentTeb())) return STATUS_INVALID_PARAMETER; \
+    return name( args ); \
+}
+
+EOF
+foreach (@native_unix_funcs)
+{
+    my $params_type = $_;
+    $params_type =~ s/^(?:wgl|gl|ext)_//;
+    printf OUT "DECLARE_OPENGL_UNIX_ENTRY( %s, %s_params )\n", $_, $params_type;
+}
+print OUT <<'EOF';
+
+#undef DECLARE_OPENGL_UNIX_ENTRY
+#define OPENGL_UNIX_ENTRY(name) name##_with_teb
+#else
+#define OPENGL_UNIX_ENTRY(name) name
+#endif
+
+EOF
 print OUT "const unixlib_entry_t __wine_unix_call_funcs[] =\n";
 print OUT "{\n";
 print OUT "    process_attach,\n";
 print OUT "    thread_attach,\n";
 print OUT "    process_detach,\n";
 print OUT "    get_pixel_formats,\n";
-foreach (sort keys %wgl_functions)
-{
-    next if defined $manual_win_functions{$_};
-    printf OUT "    wgl_%s,\n", $_;
-}
-foreach (sort keys %norm_functions)
-{
-    next if defined $manual_win_functions{$_};
-    printf OUT "    gl_%s,\n", $_;
-}
-foreach (sort keys %ext_functions)
-{
-    next if $_ =~ /^egl/; # unix-side only API
-    next if defined $manual_win_functions{$_};
-    printf OUT "    ext_%s,\n", $_;
-}
+printf OUT "    OPENGL_UNIX_ENTRY( %s ),\n", $_ foreach @native_unix_funcs;
 print OUT "};\n\n";
 print OUT "C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == funcs_count);\n\n";
+print OUT "#undef OPENGL_UNIX_ENTRY\n\n";
 
 print OUT "#ifdef _WIN64\n\n";
 print OUT "extern NTSTATUS wow64_thread_attach( void *args );\n";

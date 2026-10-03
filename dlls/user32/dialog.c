@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <errno.h>
@@ -30,6 +31,13 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dialog);
 
+static BOOL trace_secondary_window_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) enabled = getenv("MACRUNNER_TRACE_SECONDARY_WINDOW") != NULL;
+    return enabled;
+}
 
 #define DIALOG_CLASS_ATOM    MAKEINTATOM(32770)  /* Dialog */
 
@@ -603,6 +611,15 @@ static HWND DIALOG_CreateIndirect( HINSTANCE hInst, LPCVOID dlgTemplate,
         }
     }
 
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=dialog_create_before pid=%lu owner=%p unicode=%d "
+                 "style=0x%lx ex_style=0x%lx pos=%ld,%ld size=%ldx%ld caption=%s class=%s modal=%d\n",
+                 GetCurrentProcessId(), owner, unicode, template.style, template.exStyle,
+                 pos.x, pos.y, size.cx, size.cy,
+                 debugstr_w( template.caption ),
+                 IS_INTRESOURCE( template.className ) ? "(atom)" : debugstr_w( template.className ),
+                 modal_owner != NULL );
+
     if (unicode)
     {
         hwnd = CreateWindowExW(template.exStyle, template.className, template.caption,
@@ -637,11 +654,18 @@ static HWND DIALOG_CreateIndirect( HINSTANCE hInst, LPCVOID dlgTemplate,
         HeapFree( GetProcessHeap(), 0, caption_tmp );
     }
 
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=dialog_create_after pid=%lu owner=%p hwnd=%p "
+                 "style=0x%lx ex_style=0x%lx last_error=%lu\n",
+                 GetCurrentProcessId(), owner, hwnd, template.style, template.exStyle, GetLastError() );
+
     if (!hwnd)
     {
         if (hUserFont) DeleteObject( hUserFont );
         if (hMenu) NtUserDestroyMenu( hMenu );
         if (disabled_owner) NtUserEnableWindow( disabled_owner, TRUE );
+        if (trace_secondary_window_enabled())
+            fprintf( stderr, "macrunner-secondary: stage=dialog_create_fail owner=%p\n", owner );
         return 0;
     }
 
@@ -706,10 +730,15 @@ static HWND DIALOG_CreateIndirect( HINSTANCE hInst, LPCVOID dlgTemplate,
             NtUserShowWindow( hwnd, SW_SHOWNORMAL ); /* SW_SHOW doesn't always work */
             UpdateWindow( hwnd );
         }
+        if (trace_secondary_window_enabled())
+            fprintf( stderr, "macrunner-secondary: stage=dialog_create_success hwnd=%p owner=%p visible=%d\n",
+                     hwnd, owner, !!(GetWindowLongW( hwnd, GWL_STYLE ) & WS_VISIBLE) );
         return hwnd;
     }
     if (disabled_owner) NtUserEnableWindow( disabled_owner, TRUE );
     if (IsWindow(hwnd)) NtUserDestroyWindow( hwnd );
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-secondary: stage=dialog_controls_fail hwnd=%p owner=%p\n", hwnd, owner );
     return 0;
 }
 

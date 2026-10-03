@@ -1884,7 +1884,7 @@ static BOOL handle_syscall_fault( ucontext_t *sigcontext, void *stack_ptr,
         *(--stack) = 0xdeadbabe;  /* return address */
         ESP_sig(sigcontext) = (DWORD)stack;
         EIP_sig(sigcontext) = (DWORD)longjmp;
-        ntdll_get_thread_data()->jmp_buf = NULL;
+        ntdll_set_exception_jmp_buf( NULL );
     }
     else
     {

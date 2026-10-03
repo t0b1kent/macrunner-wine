@@ -215,6 +215,7 @@ static char * getenv_helper(const char *name)
     int idx;
 
     if (!name) return NULL;
+    if (env_init(FALSE, FALSE)) return NULL;
 
     idx = env_get_index(name);
     if (!MSVCRT__environ[idx]) return NULL;

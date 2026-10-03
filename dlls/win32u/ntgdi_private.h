@@ -25,6 +25,17 @@
 #include <math.h>
 #include "win32u_private.h"
 
+#ifndef __has_attribute
+# define __has_attribute(x) 0
+#endif
+#ifndef MACRUNNER_ARM64_MS_SYSCALL_ABI
+# if defined(WINE_UNIX_LIB) && defined(__APPLE__) && defined(__aarch64__) && __has_attribute(ms_abi)
+#  define MACRUNNER_ARM64_MS_SYSCALL_ABI __attribute__((ms_abi))
+# else
+#  define MACRUNNER_ARM64_MS_SYSCALL_ABI
+# endif
+#endif
+
 /* extra stock object: default 1x1 bitmap for memory DCs */
 #define DEFAULT_BITMAP (STOCK_LAST+1)
 

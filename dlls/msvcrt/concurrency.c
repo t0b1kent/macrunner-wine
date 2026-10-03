@@ -1410,7 +1410,7 @@ static void ThreadScheduler_dtor(ThreadScheduler *this)
         SetEvent(this->shutdown_events[i]);
     operator_delete(this->shutdown_events);
 
-    this->cs.DebugInfo->Spare[0] = 0;
+    SET_CS_DEBUG_NAME(&this->cs, 0);
     DeleteCriticalSection(&this->cs);
 
     if (!list_empty(&this->scheduled_chores))
@@ -1646,7 +1646,7 @@ static ThreadScheduler* ThreadScheduler_ctor(ThreadScheduler *this,
     this->shutdown_events = NULL;
 
     InitializeCriticalSectionEx(&this->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-    this->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": ThreadScheduler");
+    SET_CS_DEBUG_NAME(&this->cs, __FILE__ ": ThreadScheduler");
 
     list_init(&this->scheduled_chores);
     return this;
@@ -3535,7 +3535,7 @@ _ReentrantBlockingLock* __thiscall _ReentrantBlockingLock_ctor(_ReentrantBlockin
     TRACE("(%p)\n", this);
 
     InitializeCriticalSectionEx(&this->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-    this->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": _ReentrantBlockingLock");
+    SET_CS_DEBUG_NAME(&this->cs, __FILE__ ": _ReentrantBlockingLock");
     return this;
 }
 
@@ -3546,7 +3546,7 @@ void __thiscall _ReentrantBlockingLock_dtor(_ReentrantBlockingLock *this)
 {
     TRACE("(%p)\n", this);
 
-    this->cs.DebugInfo->Spare[0] = 0;
+    SET_CS_DEBUG_NAME(&this->cs, 0);
     DeleteCriticalSection(&this->cs);
 }
 

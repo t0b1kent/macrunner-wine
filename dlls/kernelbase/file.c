@@ -63,12 +63,58 @@ typedef struct
 
 #define FIND_FIRST_MAGIC  0xc0ffee11
 
+/* info structure for FindFirstStream handle */
+typedef struct
+{
+    DWORD magic;
+} FIND_STREAM_INFO;
+
+#define FIND_STREAM_MAGIC 0xc0ffee12
+
+typedef struct
+{
+    ULONG LogicalBytesPerSector;
+    ULONG PhysicalBytesPerSectorForAtomicity;
+    ULONG PhysicalBytesPerSectorForPerformance;
+    ULONG FileSystemEffectivePhysicalBytesPerSectorForAtomicity;
+    ULONG Flags;
+    ULONG ByteOffsetForSectorAlignment;
+    ULONG ByteOffsetForPartitionAlignment;
+} FILE_STORAGE_INFO_LOCAL;
+
+typedef struct
+{
+    DWORD Flags;
+} FILE_CASE_SENSITIVE_INFO_LOCAL;
+
+#define STORAGE_INFO_FLAGS_ALIGNED_DEVICE              0x00000001
+#define STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE 0x00000002
+
 static const UINT max_entry_size = offsetof( FILE_ID_EXTD_BOTH_DIRECTORY_INFORMATION, FileName[256] );
 
 const WCHAR windows_dir[] = L"C:\\windows";
 const WCHAR system_dir[] = L"C:\\windows\\system32";
 
 static BOOL oem_file_apis;
+
+static BOOL macrunner_file_trace_name_interesting( LPCWSTR filename )
+{
+    static const WCHAR langs_xml[] = L"langs.xml";
+    static const WCHAR config_xml[] = L"config.xml";
+    static const WCHAR langs_model_xml[] = L"langs.model.xml";
+    unsigned int len;
+
+    if (!filename) return FALSE;
+    len = wcslen( filename );
+    while (len && (filename[len - 1] == '\\' || filename[len - 1] == '/')) len--;
+    if (len >= ARRAY_SIZE(langs_xml) - 1 &&
+        !wcsicmp( filename + len - (ARRAY_SIZE(langs_xml) - 1), langs_xml )) return TRUE;
+    if (len >= ARRAY_SIZE(config_xml) - 1 &&
+        !wcsicmp( filename + len - (ARRAY_SIZE(config_xml) - 1), config_xml )) return TRUE;
+    if (len >= ARRAY_SIZE(langs_model_xml) - 1 &&
+        !wcsicmp( filename + len - (ARRAY_SIZE(langs_model_xml) - 1), langs_model_xml )) return TRUE;
+    return FALSE;
+}
 
 
 static void WINAPI read_write_apc( void *apc_user, PIO_STATUS_BLOCK io, ULONG reserved )
@@ -832,6 +878,15 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateFileW( LPCWSTR filename, DWORD access, DWO
            (sharing & FILE_SHARE_WRITE) ? "FILE_SHARE_WRITE " : "",
            (sharing & FILE_SHARE_DELETE) ? "FILE_SHARE_DELETE " : "",
            creation, attributes);
+    if (macrunner_file_trace_name_interesting( filename ))
+    {
+        void *caller = __builtin_return_address(0), *caller1 = __builtin_return_address(1), *caller_base = NULL;
+        RtlPcToFileHeader( caller, &caller_base );
+        WARN( "macrunner-kernelbase-file: CreateFileW-enter file=%s "
+              "access=%08lx sharing=%08lx creation=%lu attrs=%08lx caller=%p caller1=%p caller_base=%p\n",
+              debugstr_w(filename), access, sharing, creation, attributes,
+              caller, caller1, caller_base );
+    }
 
     if ((GetVersion() & 0x80000000) && !wcsncmp( filename, L"\\\\.\\", 4 ) &&
         !RtlIsDosDeviceName_U( filename + 4 ) &&
@@ -874,6 +929,16 @@ HANDLE WINAPI DECLSPEC_HOTPATCH CreateFileW( LPCWSTR filename, DWORD access, DWO
                            NULL, attributes & FILE_ATTRIBUTE_VALID_FLAGS, sharing,
                            nt_disposition[creation - CREATE_NEW],
                            get_nt_file_options( attributes, creation ), NULL, 0 );
+    if (macrunner_file_trace_name_interesting( filename ))
+    {
+        void *caller = __builtin_return_address(0), *caller1 = __builtin_return_address(1), *caller_base = NULL;
+        RtlPcToFileHeader( caller, &caller_base );
+        WARN( "macrunner-kernelbase-file: CreateFileW-after file=%s "
+              "access_arg=%08lx nt_access=%08lx status=%08lx handle=%p info=%s caller=%p caller1=%p caller_base=%p\n",
+              debugstr_w(filename), access, access | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
+              status, status ? 0 : ret, wine_dbgstr_longlong(io.Information),
+              caller, caller1, caller_base );
+    }
     if (status)
     {
         if (vxd_name && vxd_name[0])
@@ -1282,19 +1347,21 @@ HANDLE WINAPI DECLSPEC_HOTPATCH FindFirstFileExW( LPCWSTR filename, FINDEX_INFO_
 
     TRACE( "%s %d %p %d %p %lx\n", debugstr_w(filename), level, data, search_op, filter, flags );
 
-    if (flags & ~FIND_FIRST_EX_LARGE_FETCH)
+    if (flags & ~(FIND_FIRST_EX_CASE_SENSITIVE | FIND_FIRST_EX_LARGE_FETCH))
     {
-        FIXME("flags not implemented 0x%08lx\n", flags );
+        WARN("unsupported flags 0x%08lx\n", flags );
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return INVALID_HANDLE_VALUE;
     }
     if (search_op != FindExSearchNameMatch && search_op != FindExSearchLimitToDirectories)
     {
-        FIXME( "search_op not implemented 0x%08x\n", search_op );
+        WARN( "unsupported search_op 0x%08x\n", search_op );
         SetLastError( ERROR_INVALID_PARAMETER );
         return INVALID_HANDLE_VALUE;
     }
     if (level != FindExInfoStandard && level != FindExInfoBasic)
     {
-        FIXME("info level %d not implemented\n", level );
+        WARN("unsupported info level %d\n", level );
         SetLastError( ERROR_INVALID_PARAMETER );
         return INVALID_HANDLE_VALUE;
     }
@@ -1473,9 +1540,48 @@ HANDLE WINAPI FindFirstFileNameW( const WCHAR *file_name, DWORD flags, DWORD *le
  */
 HANDLE WINAPI FindFirstStreamW( const WCHAR *filename, STREAM_INFO_LEVELS level, void *data, DWORD flags )
 {
-    FIXME("(%s, %d, %p, %lx): stub!\n", debugstr_w(filename), level, data, flags);
-    SetLastError( ERROR_HANDLE_EOF );
-    return INVALID_HANDLE_VALUE;
+    WIN32_FIND_STREAM_DATA *stream_data = data;
+    BY_HANDLE_FILE_INFORMATION info;
+    FIND_STREAM_INFO *stream_info;
+    HANDLE file;
+
+    TRACE( "%s, %d, %p, %lx\n", debugstr_w(filename), level, data, flags );
+
+    if (!data || level != FindStreamInfoStandard || flags)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    file = CreateFileW( filename, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0 );
+    if (file == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
+
+    if (!GetFileInformationByHandle( file, &info ))
+    {
+        CloseHandle( file );
+        return INVALID_HANDLE_VALUE;
+    }
+    CloseHandle( file );
+
+    if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+    {
+        SetLastError( ERROR_HANDLE_EOF );
+        return INVALID_HANDLE_VALUE;
+    }
+
+    if (!(stream_info = HeapAlloc( GetProcessHeap(), 0, sizeof(*stream_info) )))
+    {
+        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+        return INVALID_HANDLE_VALUE;
+    }
+    stream_info->magic = FIND_STREAM_MAGIC;
+
+    stream_data->StreamSize.HighPart = info.nFileSizeHigh;
+    stream_data->StreamSize.LowPart = info.nFileSizeLow;
+    lstrcpyW( stream_data->cStreamName, L"::$DATA" );
+
+    return stream_info;
 }
 
 
@@ -1597,7 +1703,16 @@ BOOL WINAPI DECLSPEC_HOTPATCH FindNextFileW( HANDLE handle, WIN32_FIND_DATAW *da
  */
 BOOL WINAPI FindNextStreamW( HANDLE handle, void *data )
 {
-    FIXME( "(%p, %p): stub!\n", handle, data );
+    FIND_STREAM_INFO *info = handle;
+
+    TRACE( "%p, %p\n", handle, data );
+
+    if (!handle || handle == INVALID_HANDLE_VALUE || info->magic != FIND_STREAM_MAGIC)
+    {
+        SetLastError( ERROR_INVALID_HANDLE );
+        return FALSE;
+    }
+
     SetLastError( ERROR_HANDLE_EOF );
     return FALSE;
 }
@@ -1634,6 +1749,11 @@ BOOL WINAPI DECLSPEC_HOTPATCH FindClose( HANDLE handle )
                 RtlDeleteCriticalSection( &info->cs );
                 HeapFree( GetProcessHeap(), 0, info );
             }
+        }
+        else if (info->magic == FIND_STREAM_MAGIC)
+        {
+            info->magic = 0;
+            HeapFree( GetProcessHeap(), 0, info );
         }
     }
     __EXCEPT_PAGE_FAULT
@@ -1718,7 +1838,19 @@ UINT WINAPI DECLSPEC_HOTPATCH GetCurrentDirectoryA( UINT buflen, LPSTR buf )
         SetLastError( ERROR_FILENAME_EXCED_RANGE );
         return 0;
     }
-    return copy_filename_WtoA( bufferW, buf, buflen );
+    {
+        /* Итерация 297: Storm!SFileOpenArchive (ординал 266) начинается с проверки имени и при
+         * пустой строке сразу возвращает ноль с кодом 87, НЕ обращаясь к файлу — ровно наша
+         * картина (архив найден атрибутами, открытия нет). Имя строится из этого вызова,
+         * поэтому печатаем, что мы отдаём игре. */
+        UINT r = copy_filename_WtoA( bufferW, buf, buflen );
+        static LONG cd_n;
+        LONG k = InterlockedIncrement( &cd_n );
+        if (k <= 12)
+            MESSAGE( "macrunner-curdir: n=%d buflen=%u ret=%u путь=\"%s\"\n",
+                     (int)k, buflen, r, (r && buf) ? buf : "(пусто)" );
+        return r;
+    }
 }
 
 
@@ -2334,6 +2466,38 @@ UINT WINAPI DECLSPEC_HOTPATCH GetSystemDirectoryA( LPSTR path, UINT count )
  */
 UINT WINAPI DECLSPEC_HOTPATCH GetSystemDirectoryW( LPWSTR path, UINT count )
 {
+    /* ★★★★★★ MacRunner 2026-08-29 — ЧТО МЫ ОТДАЁМ КАК СИСТЕМНЫЙ КАТАЛОГ.
+     *
+     * Установщик Diablo (InnoSetup) собирает путь из GetSystemDirectory + "\shell32.dll"
+     * и получает `D:\windows\systdm32\thell320dll.dll`. В самом exe строки `system32`
+     * НЕТ, а `shell32.dll` есть — значит первую половину дал ИМЕННО ЭТОТ вызов, и она
+     * пришла искажённой: `C`→`D`, `e`→`d`. Байты имени — корректный UTF-16, выравнивание 0,
+     * то есть память не «съехала», а содержит другие символы.
+     *
+     * Интерпретатор даёт ТО ЖЕ искажение, что и JIT (замер 29.08), поэтому исполнение
+     * инструкций ни при чём — печатаем сам источник. */
+    {
+        static int n;
+        if (n++ < 8)
+        {
+            const WCHAR *w = system_dir;
+            unsigned i, c = 0;
+            char hex[40 * 5 + 1];
+            int off = 0;
+            static const char hd[] = "0123456789abcdef";
+
+            while (w && w[c] && c < 40) c++;
+            for (i = 0; i < c; i++)
+            {
+                unsigned v = w[i];
+                hex[off++] = hd[(v >> 12) & 0xf]; hex[off++] = hd[(v >> 8) & 0xf];
+                hex[off++] = hd[(v >> 4) & 0xf];  hex[off++] = hd[v & 0xf];
+                hex[off++] = ' ';
+            }
+            hex[off > 0 ? off - 1 : 0] = 0;
+            ERR( "macrunner-sysdir: n=%d адрес=%p длина=%u | %s\n", n, system_dir, c, hex );
+        }
+    }
     return copy_filename( system_dir, path, count );
 }
 
@@ -3141,13 +3305,62 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetFileInformationByHandleEx( HANDLE handle, FILE_
     switch (class)
     {
     case FileRemoteProtocolInfo:
+        if (!info)
+        {
+            SetLastError( ERROR_NOACCESS );
+            return FALSE;
+        }
+        if (size < sizeof(FILE_REMOTE_PROTOCOL_INFO))
+        {
+            SetLastError( ERROR_BAD_LENGTH );
+            return FALSE;
+        }
+        memset( info, 0, sizeof(FILE_REMOTE_PROTOCOL_INFO) );
+        ((FILE_REMOTE_PROTOCOL_INFO *)info)->StructureVersion = 1;
+        ((FILE_REMOTE_PROTOCOL_INFO *)info)->StructureSize = sizeof(FILE_REMOTE_PROTOCOL_INFO);
+        return TRUE;
+
     case FileStorageInfo:
+        if (!info)
+        {
+            SetLastError( ERROR_NOACCESS );
+            return FALSE;
+        }
+        if (size < sizeof(FILE_STORAGE_INFO_LOCAL))
+        {
+            SetLastError( ERROR_BAD_LENGTH );
+            return FALSE;
+        }
+        memset( info, 0, sizeof(FILE_STORAGE_INFO_LOCAL) );
+        ((FILE_STORAGE_INFO_LOCAL *)info)->LogicalBytesPerSector = 512;
+        ((FILE_STORAGE_INFO_LOCAL *)info)->PhysicalBytesPerSectorForAtomicity = 512;
+        ((FILE_STORAGE_INFO_LOCAL *)info)->PhysicalBytesPerSectorForPerformance = 512;
+        ((FILE_STORAGE_INFO_LOCAL *)info)->FileSystemEffectivePhysicalBytesPerSectorForAtomicity = 512;
+        ((FILE_STORAGE_INFO_LOCAL *)info)->Flags = STORAGE_INFO_FLAGS_ALIGNED_DEVICE |
+                                                   STORAGE_INFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE;
+        return TRUE;
+
+    case FileCaseSensitiveInfo:
+        if (!info)
+        {
+            SetLastError( ERROR_NOACCESS );
+            return FALSE;
+        }
+        if (size < sizeof(FILE_CASE_SENSITIVE_INFO_LOCAL))
+        {
+            SetLastError( ERROR_BAD_LENGTH );
+            return FALSE;
+        }
+        memset( info, 0, sizeof(FILE_CASE_SENSITIVE_INFO_LOCAL) );
+        return TRUE;
+
+    case FileNormalizedNameInfo:
+        status = NtQueryInformationFile( handle, &io, info, size, FileNameInformation );
+        break;
+
     case FileDispositionInfoEx:
     case FileRenameInfoEx:
-    case FileCaseSensitiveInfo:
-    case FileNormalizedNameInfo:
-        FIXME( "%p, %u, %p, %lu\n", handle, class, info, size );
-        SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
+        SetLastError( ERROR_INVALID_PARAMETER );
         return FALSE;
 
     case FileStreamInfo:

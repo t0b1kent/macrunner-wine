@@ -37,6 +37,56 @@
 #pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
 
 
+/* MacRunner ui-input trace: proof of the Cocoa-side keyboard/focus chain.
+ * Same env gates as the macrunner-ui-input stages in event.c/mouse.c/cocoa_app.m. */
+static BOOL macrunner_ui_input_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
+
+
+/* MacRunner 2026-07-29 (HK E2E lane): the keyboard-only gate, matching keyboard.c's.
+ * The gate above also lights per-ProcessEvents traces elsewhere, which is a
+ * multi-hundred-MB log at Unity frame rates, so every HK run uses the narrow
+ * MACRUNNER_TRACE_WINEMAC_KEYS instead — and that left the two most load-bearing
+ * traces in this file (wine_window_keyDown, postKey_posted) permanently dark on
+ * exactly the runs that needed them. */
+static BOOL macrunner_key_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_KEYS") != NULL ||
+                  macrunner_ui_input_trace_enabled();
+    return enabled;
+}
+
+
+/* MacRunner 2026-07-29 (HK E2E lane) — TEST LEVER, default OFF:
+ * MACRUNNER_MACDRV_TEST_NO_KEYWINDOW=1 makes every WineWindow refuse to become key.
+ *
+ * It exists to give the last hop of the keyboard chain a 40-second test harness.
+ * Hollow Knight reproduces "AppKit delivers the key, NSApp has no key window, the
+ * event dies before -[WineWindow keyDown:]" only after a ~25-minute stochastic boot
+ * (2 of 3 boots stall or abort before the menu).  tools/winkeyprobe.c exercises the
+ * same path in 20 seconds but ACTIVATES itself, so it always has a key window and
+ * cannot reproduce the defect.  This lever puts the probe into HK's state on demand.
+ * Test-only: never set it in a real run. */
+static BOOL macrunner_test_no_keywindow(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) enabled = getenv("MACRUNNER_MACDRV_TEST_NO_KEYWINDOW") != NULL;
+    return enabled;
+}
+
+
 @interface NSWindow (PrivatePreventsActivation)
 
 /* Needed to ensure proper behavior after adding or removing
@@ -46,6 +96,23 @@
 
 @end
 
+
+static void clampRectToPrimaryScreen(NSRect* rect)
+{
+    NSRect screen = [[NSScreen screens][0] frame];
+    if (rect->origin.x < screen.origin.x)
+        rect->origin.x = screen.origin.x;
+    if (rect->origin.y < screen.origin.y)
+        rect->origin.y = screen.origin.y;
+    if (rect->origin.x + rect->size.width > NSMaxX(screen))
+        rect->origin.x = NSMaxX(screen) - rect->size.width;
+    if (rect->origin.y + rect->size.height > NSMaxY(screen))
+        rect->origin.y = NSMaxY(screen) - rect->size.height;
+    if (rect->size.width > screen.size.width)
+        rect->size.width = screen.size.width;
+    if (rect->size.height > screen.size.height)
+        rect->size.height = screen.size.height;
+}
 
 static NSUInteger style_mask_for_features(const struct macdrv_window_features* wf)
 {
@@ -982,7 +1049,11 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
 
     - (CALayer*) makeBackingLayer
     {
-        CAMetalLayer *layer = [WineMetalLayer layer];   /* CW HACK 22435 */
+#if defined(__x86_64__) || defined(__aarch64__)
+        CAMetalLayer *layer = [WineMetalLayer layer];   /* CW HACK 22435 — D3DMetal/DXMT live present */
+#else
+        CAMetalLayer *layer = [CAMetalLayer layer];
+#endif
         layer.device = _device;
         layer.framebufferOnly = YES;
         layer.magnificationFilter = kCAFilterNearest;
@@ -1021,6 +1092,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
 
         [[WineApplicationController sharedController] flipRect:&window_frame];
+        clampRectToPrimaryScreen(&window_frame);
 
         window = [[[self alloc] initWithContentRect:window_frame
                                           styleMask:style_mask_for_features(wf)
@@ -1745,6 +1817,22 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
                 [NSApp unhide:nil];
             wasVisible = [self isVisible];
 
+            /* ★★★★★ MacRunner 2026-08-29 — НЕДОСТАЮЩЕЕ ЗВЕНО ЦЕПОЧКИ АКТИВАЦИИ.
+             * Замер Diablo (reports/lanes/diablo/180, 109 строк этого же прибора) показал:
+             * `stage=активация_вход` не печатается НИ РАЗУ, `applicationDidBecomeActive` тоже.
+             * То есть активация не запрашивается вовсе — а без неё нет ключевого окна,
+             * нет WM_ACTIVATEAPP и нет отрисовки. Здесь видно, ПОЧЕМУ не запрашивается. */
+            if (macrunner_ui_input_trace_enabled())
+            {
+                fprintf(stderr,
+                        "macrunner-ui-input: stage=orderBelow_активация hwnd=%p activate=%d "
+                        "preventsAppActivation=%d политика=%ld app_active=%d hidden=%d wasVisible=%d\n",
+                        hwnd, (int)activate, (int)self.preventsAppActivation,
+                        (long)[NSApp activationPolicy], (int)[NSApp isActive],
+                        (int)[NSApp isHidden], (int)wasVisible);
+                fflush(stderr);
+            }
+
             if (activate)
                 [controller tryToActivateIgnoringOtherApps:YES];
 
@@ -1958,6 +2046,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         /* Origin is (left, top) in a top-down space.  Need to convert it to
            (left, bottom) in a bottom-up space. */
         [[WineApplicationController sharedController] flipRect:&contentRect];
+        clampRectToPrimaryScreen(&contentRect);
 
         /* The back end is establishing a new window size and position.  It's
            not interested in any stale events regarding those that may be sitting
@@ -2139,10 +2228,21 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         event->key.modifiers = modifiers;
         event->key.time_ms   = [controller ticksForEventTime:[theEvent timestamp]];
 
+        macdrv_return_route_observe("macdrv-nsevent", hwnd, (void *)self, keyCode, 0,
+                                    pressed, modifiers, event->key.time_ms);
+
         if ((cgevent = [theEvent CGEvent]))
             controller.keyboardType = CGEventGetIntegerValueField(cgevent, kCGKeyboardEventKeyboardType);
 
         [queue postEvent:event];
+
+        if (macrunner_key_trace_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=postKey_posted hwnd=%p window=%p keycode=%u pressed=%d queue=%p\n",
+                    hwnd, self, keyCode, pressed, queue);
+            fflush(stderr);
+        }
 
         macdrv_release_event(event);
 
@@ -2452,13 +2552,35 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
      */
     - (BOOL) canBecomeKeyWindow
     {
+        if (macrunner_test_no_keywindow()) return NO;   /* test lever, see above */
         if (causing_becomeKeyWindow == self) return YES;
-        if (self.disabled || self.noForeground) return NO;
+        if (self.disabled || self.noForeground)
+        {
+            if (macrunner_ui_input_trace_enabled())
+            {
+                fprintf(stderr,
+                        "macrunner-ui-input: stage=canBecomeKeyWindow_NO hwnd=%p window=%p disabled=%d noForeground=%d\n",
+                        hwnd, self, self.disabled, self.noForeground);
+                fflush(stderr);
+            }
+            return NO;
+        }
         if ([self isKeyWindow]) return YES;
 
         // If a window's collectionBehavior says it participates in cycling,
         // it must return YES from this method to actually be eligible.
-        return ![self isExcludedFromWindowsMenu];
+        if ([self isExcludedFromWindowsMenu])
+        {
+            if (macrunner_ui_input_trace_enabled())
+            {
+                fprintf(stderr,
+                        "macrunner-ui-input: stage=canBecomeKeyWindow_NO hwnd=%p window=%p excludedFromWindowsMenu=1\n",
+                        hwnd, self);
+                fflush(stderr);
+            }
+            return NO;
+        }
+        return YES;
     }
 
     - (BOOL) canBecomeMainWindow
@@ -2551,7 +2673,26 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
            views.  We want to bypass that feature, so directly route key-down
            events to -keyDown:. */
         if (type == NSEventTypeKeyDown)
+        {
+            /* MacRunner 2026-07-29 (HK E2E lane): this dispatch is where the keyboard
+             * chain can still die silently.  -[NSResponder keyDown:] walks the responder
+             * chain, so which object firstResponder actually is decides whether
+             * -[WineWindow keyDown:] is ever reached, and both traces downstream of here
+             * are on the INPUT gate, which HK runs never set.  Print it on the cheap KEYS
+             * gate instead: key events only, so there is no per-frame cost. */
+            if (macrunner_key_trace_enabled())
+            {
+                NSResponder* fr = [self firstResponder];
+                fprintf(stderr,
+                        "macrunner-ui-input: stage=wine_window_sendEvent_keydown hwnd=%p window=%p "
+                        "keycode=%hu firstResponder=%p class=%s isKey=%d\n",
+                        hwnd, self, [event keyCode], fr,
+                        fr ? [NSStringFromClass([fr class]) UTF8String] : "(nil)",
+                        (int)[self isKeyWindow]);
+                fflush(stderr);
+            }
             [[self firstResponder] keyDown:event];
+        }
         else
         {
             if (!draggingPhase && maximized && ![self isMovable] &&
@@ -2903,6 +3044,15 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
      */
     - (void) keyDown:(NSEvent *)theEvent
     {
+        if (macrunner_key_trace_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=wine_window_keyDown hwnd=%p window=%p keycode=%hu repeat=%d key=%d app_active=%d\n",
+                    hwnd, self, [theEvent keyCode], [theEvent isARepeat],
+                    [self isKeyWindow], [[NSApplication sharedApplication] isActive]);
+            fflush(stderr);
+        }
+
         if ([theEvent isARepeat])
         {
             if (!allowKeyRepeats)
@@ -3030,6 +3180,15 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
     {
         WineApplicationController* controller = [WineApplicationController sharedController];
         NSEvent* event = [controller lastFlagsChanged];
+
+        if (macrunner_ui_input_trace_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=windowDidBecomeKey hwnd=%p window=%p app_active=%d\n",
+                    hwnd, self, [[NSApplication sharedApplication] isActive]);
+            fflush(stderr);
+        }
+
         if (event)
             [self flagsChanged:event];
 
@@ -3142,6 +3301,14 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
     - (void)windowDidResignKey:(NSNotification *)notification
     {
         macdrv_event* event;
+
+        if (macrunner_ui_input_trace_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=windowDidResignKey hwnd=%p window=%p\n",
+                    hwnd, self);
+            fflush(stderr);
+        }
 
         if (causing_becomeKeyWindow) return;
         if ([[WineApplicationController sharedController] temporarilyIgnoreResignEventsForDialog]) return;
@@ -3511,6 +3678,58 @@ void* macdrv_get_window_hwnd(macdrv_window w)
 }
 
 /***********************************************************************
+ *              macdrv_get_return_route_window_state
+ */
+void macdrv_get_return_route_window_state(
+        macdrv_window w, struct macdrv_return_route_window_state *state)
+{
+@autoreleasepool
+{
+    WineWindow *window = (WineWindow *)w;
+    dispatch_block_t query;
+
+    if (!state) return;
+    memset(state, 0, sizeof(*state));
+    query = ^{
+        NSWindow *key_window = [NSApp keyWindow];
+        NSWindow *main_window = [NSApp mainWindow];
+
+        state->app_active = [NSApp isActive];
+        if (window)
+        {
+            state->cocoa_window_id = (unsigned long long)[window windowNumber];
+            state->window_hwnd = macdrv_get_window_hwnd((macdrv_window)window);
+            state->window_key = [window isKeyWindow];
+            state->window_main = [window isMainWindow];
+        }
+        if (key_window)
+        {
+            state->key_window_id = (unsigned long long)[key_window windowNumber];
+            if ([key_window isKindOfClass:[WineWindow class]])
+                state->key_window_hwnd =
+                    macdrv_get_window_hwnd((macdrv_window)key_window);
+        }
+        if (main_window)
+        {
+            state->main_window_id = (unsigned long long)[main_window windowNumber];
+            if ([main_window isKindOfClass:[WineWindow class]])
+                state->main_window_hwnd =
+                    macdrv_get_window_hwnd((macdrv_window)main_window);
+        }
+    };
+    /* OnMainThread reposts the block to the main run loop and semaphore-waits
+       for it; called from a main-thread run-loop block (e.g. the async-show
+       window block that runs the return-route observer) that is a guaranteed
+       self-deadlock. On the main thread the query is already safe to run
+       inline. */
+    if ([NSThread isMainThread])
+        query();
+    else
+        OnMainThread(query);
+}
+}
+
+/***********************************************************************
  *              macdrv_set_cocoa_window_features
  *
  * Update a Cocoa window's features.
@@ -3580,15 +3799,136 @@ void macdrv_order_cocoa_window(macdrv_window w, macdrv_window p,
     WineWindow* prev = (WineWindow*)p;
     WineWindow* next = (WineWindow*)n;
 
+    /* MacRunner 2026-08-22, лейн ЛЕСТНИЦА, итерация 2670.
+     * window.c:1059 ставит data->on_screen = TRUE БЕЗУСЛОВНО, сразу после этого вызова, не
+     * спрашивая Cocoa-сторону ни о чём.  Поэтому on_screen=1 в трассе winshow не значит, что
+     * окно показано: замер 2669 дал on_screen 0->1 при пустом списке окон macOS.
+     * Тут заказ уходит в OnMainThreadAsync и до сих пор не имел НИ ОДНОЙ печати, так что
+     * различить «блок не выполнился» и «выполнился, а окна не видно» было нечем.
+     * Три маркера ровно за этим, все через уже доказанный гейт MACRUNNER_HB_TRACE_WINSHOW:
+     *   scheduled — заказ поставлен в очередь (печатается синхронно, здесь);
+     *   enter     — блок ПОШЁЛ на главном потоке, с политикой активации ДО заказа;
+     *   done      — заказ выполнен, политика ПОСЛЕ, и видно ли окно на самом деле.
+     * Политика печатается по обе стороны, потому что поднять её до Regular могут только
+     * cocoa_app.m:489 и cocoa_window.m:3853, и обоих на этом пути нет. */
+    if (getenv("MACRUNNER_HB_TRACE_WINSHOW"))
+    {
+        fprintf(stderr, "macrunner-winshow: stage=objc-order-scheduled cocoa=%p prev=%p next=%p activate=%d\n",
+                window, prev, next, activate);
+        fflush(stderr);
+    }
     OnMainThreadAsync(^{
+        int trace = getenv("MACRUNNER_HB_TRACE_WINSHOW") != NULL;
+        if (trace)
+        {
+            fprintf(stderr, "macrunner-winshow: stage=objc-order-enter cocoa=%p activate=%d policy=%ld visible=%d\n",
+                    window, activate, (long)[NSApp activationPolicy], (int)[window isVisible]);
+            fflush(stderr);
+        }
         [window orderBelow:prev
                    orAbove:next
                   activate:activate];
+        if (trace)
+        {
+            fprintf(stderr, "macrunner-winshow: stage=objc-order-done cocoa=%p policy=%ld visible=%d key=%d "
+                            "miniaturized=%d alpha=%.2f level=%ld\n",
+                    window, (long)[NSApp activationPolicy], (int)[window isVisible],
+                    (int)[window isKeyWindow], (int)[window isMiniaturized],
+                    (double)[window alphaValue], (long)[window level]);
+            fflush(stderr);
+        }
+        /* MacRunner 2026-08-29 — активация в Cocoa АСИНХРОННА: `key` сразу после
+         * orderBelow: ещё нулевой даже когда окно вот-вот станет ключевым.
+         * Первый замер («key=0, фокуса нет») был сделан именно так и потому ничего
+         * не доказывал. Смотрим повторно спустя время — это и есть настоящий ответ. */
+        if (trace)
+        {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(300 * NSEC_PER_MSEC)),
+                           dispatch_get_main_queue(), ^{
+                fprintf(stderr, "macrunner-winshow: stage=objc-order-спустя-300мс cocoa=%p "
+                                "приложение_активно=%d key=%d main=%d visible=%d политика=%ld\n",
+                        window, (int)[NSApp isActive], (int)[window isKeyWindow],
+                        (int)[window isMainWindow], (int)[window isVisible],
+                        (long)[NSApp activationPolicy]);
+                fflush(stderr);
+            });
+        }
     });
     [window.queue discardEventsMatchingMask:event_mask_for_type(WINDOW_BROUGHT_FORWARD)
                                   forWindow:window];
     [next.queue discardEventsMatchingMask:event_mask_for_type(WINDOW_BROUGHT_FORWARD)
                                 forWindow:next];
+}
+
+/***********************************************************************
+ *              macdrv_async_show_cocoa_window
+ */
+void macdrv_async_show_cocoa_window(macdrv_window w, bool activate)
+{
+    WineWindow* window = [(WineWindow*)w retain];
+
+    if (!window) return;
+    if (getenv("MACRUNNER_HB_TRACE_WINSHOW"))
+    {
+        fprintf(stderr, "macrunner-winshow: stage=objc-schedule-delayed-show cocoa=%p activate=%d\n",
+                window, activate);
+        fflush(stderr);
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1000 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        if (getenv("MACRUNNER_HB_TRACE_WINSHOW"))
+        {
+            fprintf(stderr, "macrunner-winshow: stage=objc-before-order-front cocoa=%p activate=%d\n",
+                    window, activate);
+            fflush(stderr);
+        }
+        [window orderFront:nil];
+        if (macdrv_return_route_focus_milestones_enabled())
+            macdrv_return_route_observe("macdrv-window-map", window.hwnd, (void *)window,
+                                        36, 0, -1, 0, 0);
+        if (getenv("MACRUNNER_HB_TRACE_WINSHOW"))
+        {
+            fprintf(stderr, "macrunner-winshow: stage=objc-after-order-front cocoa=%p activate=%d\n",
+                    window, activate);
+            fflush(stderr);
+        }
+        if (activate && ![window isKeyWindow] && !window.disabled && !window.noForeground)
+        {
+            WineApplicationController *controller = [WineApplicationController sharedController];
+
+            if (getenv("MACRUNNER_HB_TRACE_WINSHOW"))
+            {
+                fprintf(stderr, "macrunner-winshow: stage=objc-before-window-got-focus cocoa=%p activate=%d\n",
+                        window, activate);
+                fflush(stderr);
+            }
+            /* The async fallback show used to only order the window front and
+               post the Win32 focus event: the app was never transformed to
+               foreground and the window never made key, so a normally
+               launched game window stayed visible-but-unfocused and keyboard
+               input routed to the previously active app (2026-07-20: game
+               window on-screen with Win32 focus set, while the host frontmost
+               app remained another process and an explicit
+               NSRunningApplication activation request was accepted but not
+               honored). Make the process activatable and mirror the
+               makeFocused:activate path for this same activate-requested,
+               eligible window. The controller foreground-transform helper is
+               NOT usable here: its NSMenu initWithTitle: throws on a
+               bundle-less process (bundleName == nil). */
+            if ([NSApp activationPolicy] != NSApplicationActivationPolicyRegular)
+                [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+            [controller tryToActivateIgnoringOtherApps:YES];
+            [window makeKeyWindow];
+            [controller windowGotFocus:window];
+            if (getenv("MACRUNNER_HB_TRACE_WINSHOW"))
+            {
+                fprintf(stderr, "macrunner-winshow: stage=objc-after-window-got-focus cocoa=%p activate=%d\n",
+                        window, activate);
+                fflush(stderr);
+            }
+        }
+        [window release];
+    });
 }
 
 /***********************************************************************

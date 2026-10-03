@@ -24,6 +24,10 @@
 
 @class WineEventQueue;
 
+extern BOOL macdrv_return_route_focus_milestones_enabled(void);
+extern void macdrv_return_route_observe(const char *stage, void *hwnd, void *cocoa_window,
+                                        unsigned int keycode, unsigned int vkey, int pressed,
+                                        unsigned int flags, unsigned int event_time);
 
 @interface WineWindow : NSPanel <NSWindowDelegate>
 {

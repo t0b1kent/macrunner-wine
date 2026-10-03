@@ -77,6 +77,23 @@ static struct session_thread_data *get_session_thread_data(void)
 {
     struct user_thread_info *thread_info = get_user_thread_info();
     if (!thread_info->session_data) thread_info->session_data = calloc(1, sizeof(*thread_info->session_data));
+    /* ★★★ 03.09.2026 — ОТКУДА БЕРЁТСЯ КЕШИРОВАННЫЙ УКАЗАТЕЛЬ ОЧЕРЕДИ.
+     *
+     * `Setup.tmp` падает в `get_shared_queue` по указателю 0x3004c7fa0, а проба в
+     * `find_shared_session_object` показала, что законные объекты лежат по
+     * 0x7ffd0b... — значит указатель НЕГОДНЫЙ, а не столкнувшийся с нашим резервом.
+     * Данные потока живут в `TEB->Win32ClientInfo`, и у процесса через WoW64 есть ДВА
+     * блока потока; сегодня на этой же путанице уже попались два наших прибора.
+     * Печатаем TEB, сам блок и кешированный указатель — видно сразу, тот ли блок. */
+    {
+        static int mr_said;
+        const char *v = getenv( "MACRUNNER_WIN32U_SHARED_PROBE" );
+        if (v && *v && *v != '0' && mr_said++ < 8)
+            MESSAGE( "macrunner-данные-потока: teb=%p info=%p данные=%p очередь=%p рабстол=%p\n",
+                     NtCurrentTeb(), thread_info, thread_info->session_data,
+                     thread_info->session_data ? (void *)thread_info->session_data->shared_queue : NULL,
+                     thread_info->session_data ? (void *)thread_info->session_data->shared_desktop : NULL );
+    }
     return thread_info->session_data;
 }
 
@@ -126,12 +143,11 @@ static NTSTATUS map_shared_session_block( SIZE_T offset, SIZE_T size, struct ses
         WARN( "Failed to open shared session section, status %#x\n", status );
     else
     {
-        if ((status = NtMapViewOfSection( handle, GetCurrentProcess(), (void **)&block->data, 0, 0,
-                                          &off, &block->size, ViewUnmap, 0, PAGE_READONLY )))
+        if ((status = win32u_map_view_of_section( handle, GetCurrentProcess(), (void **)&block->data, 0, 0,
+                                                  &off, &block->size, ViewUnmap, 0, PAGE_READONLY )))
             WARN( "Failed to map shared session block, status %#x\n", status );
         else
         {
-            list_add_tail( &session_blocks, &block->entry );
             block->offset = off.QuadPart;
             assert( block->offset + block->size > block->offset );
         }
@@ -143,34 +159,56 @@ static NTSTATUS map_shared_session_block( SIZE_T offset, SIZE_T size, struct ses
     return status;
 }
 
-static NTSTATUS find_shared_session_block( SIZE_T offset, SIZE_T size, struct session_block **ret )
+static struct session_block *find_cached_session_block( SIZE_T offset, SIZE_T size )
 {
     struct session_block *block;
+
+    LIST_FOR_EACH_ENTRY( block, &session_blocks, struct session_block, entry )
+    {
+        if (block->offset < offset && offset + size <= block->offset + block->size)
+            return block;
+    }
+
+    return NULL;
+}
+
+static NTSTATUS find_shared_session_block( SIZE_T offset, SIZE_T size, struct session_block **ret )
+{
+    struct session_block *block, *mapped;
     UINT status;
 
     assert( offset + size > offset );
 
     pthread_mutex_lock( &session_lock );
-
-    LIST_FOR_EACH_ENTRY( block, &session_blocks, struct session_block, entry )
+    if ((block = find_cached_session_block( offset, size )))
     {
-        if (block->offset < offset && offset + size <= block->offset + block->size)
-        {
-            *ret = block;
-            pthread_mutex_unlock( &session_lock );
-            return STATUS_SUCCESS;
-        }
+        *ret = block;
+        pthread_mutex_unlock( &session_lock );
+        return STATUS_SUCCESS;
     }
+    pthread_mutex_unlock( &session_lock );
 
-    if ((status = map_shared_session_block( offset, size, ret )))
+    if ((status = map_shared_session_block( offset, size, &mapped )))
     {
         WARN( "Failed to map session block for offset %s, size %s, status %#x\n",
             wine_dbgstr_longlong(offset), wine_dbgstr_longlong(size), status );
+        return status;
     }
 
+    pthread_mutex_lock( &session_lock );
+    if ((block = find_cached_session_block( offset, size )))
+    {
+        pthread_mutex_unlock( &session_lock );
+        NtUnmapViewOfSection( GetCurrentProcess(), (void *)mapped->data );
+        free( mapped );
+        *ret = block;
+        return STATUS_SUCCESS;
+    }
+    list_add_tail( &session_blocks, &mapped->entry );
+    *ret = mapped;
     pthread_mutex_unlock( &session_lock );
 
-    return status;
+    return STATUS_SUCCESS;
 }
 
 const shared_object_t *find_shared_session_object( object_id_t id, mem_size_t offset )
@@ -182,6 +220,25 @@ const shared_object_t *find_shared_session_object( object_id_t id, mem_size_t of
     if (id && !(status = find_shared_session_block( offset, sizeof(*object), &block )))
     {
         object = (const shared_object_t *)(block->data + offset - block->offset);
+        /* ★★★ 03.09.2026 — ОТКУДА БЕРЁТСЯ УКАЗАТЕЛЬ РАЗДЕЛЯЕМОГО ОБЪЕКТА.
+         *
+         * `Setup.tmp` (вторая ступень установщика GTA Vice City) падает в
+         * `get_shared_queue` по KERN_PROTECTION_FAILURE, и адрес отказа попадает внутрь
+         * нашей же зарезервированной дыры на 8,4 ГБ. Два чтения равновероятны:
+         * отображение сессии легло в этот диапазон (столкновение) — или указатель
+         * посчитан неверно и попал туда случайно. Печатаем СОСТАВЛЯЮЩИЕ расчёта:
+         * база блока, его смещение и запрошенное смещение. Гейт, первые восемь раз. */
+        {
+            static int mr_said;
+            const char *v = getenv( "MACRUNNER_WIN32U_SHARED_PROBE" );
+            /* MESSAGE, а не ERR: обвязка ставит WINEDEBUG=-all, при нём ERR молчит
+             * (записано в памяти err-nevidim-pri-winedebug-all, и я на это наступил). */
+            if (v && *v && *v != '0' && mr_said++ < 8)
+                MESSAGE( "macrunner-shared-объект: block=%p data=%p block_off=%s offset=%s -> object=%p\n",
+                     block, block ? block->data : NULL,
+                     wine_dbgstr_longlong( block ? block->offset : 0 ),
+                     wine_dbgstr_longlong( offset ), object );
+        }
         if (id == shared_object_get_id( object )) return object;
         WARN( "Session object id doesn't match expected id %s\n", wine_dbgstr_longlong(id) );
     }
@@ -287,7 +344,32 @@ static NTSTATUS try_get_shared_input( UINT tid, struct object_lock *lock, const 
 
         cache->id = locator.id;
         cache->object = find_shared_session_object( locator.id, locator.offset );
-        if (!(object = cache->object)) return STATUS_INVALID_HANDLE;
+        if (!(object = cache->object))
+        {
+            /* MacRunner 2026-08-13, лейн ЛЕСТНИЦА, итерация 807 — БЕЗУСЛОВНЫЙ ЗОНД НА ОТКАЗ.
+             *
+             * Именно отсюда берётся `c0000008`, которым кончаются все четыре прогона Diablo
+             * (итерация 806: `macrunner-fgwnd: hwnd=0x0 status=c0000008`, 24 раза за прогон).
+             * Причин ровно две, и по одному статусу они НЕ различаются:
+             *   locator.id == 0  — у сервера нет потока переднего плана (штатное «окна ещё нет»);
+             *   locator.id != 0  — локатор есть, а объект в общей памяти не находится (это уже
+             *                      наша поломка отображения сессии).
+             * Печатаем оба числа плюс разрядность вызывающего, иначе чинить будем наугад. */
+            static unsigned probe_n;
+            if (probe_n < 64)
+            {
+                probe_n++;
+                fprintf( stderr, "macrunner-shminput-fail: n=%u tid=%u locator_id=%s "
+                         "offset=%u pid=%p thread=%p wow=%s\n",
+                         probe_n, tid, locator.id ? "НЕ_НОЛЬ" : "0",
+                         (unsigned)locator.offset,
+                         NtCurrentTeb()->ClientId.UniqueProcess,
+                         NtCurrentTeb()->ClientId.UniqueThread,
+                         NtCurrentTeb()->WowTebOffset ? "да" : "нет" );
+                fflush( stderr );
+            }
+            return STATUS_INVALID_HANDLE;
+        }
     }
 
     /* check object validity by comparing ids, within the object seqlock */
@@ -782,18 +864,16 @@ BOOL WINAPI NtUserSetObjectInformation( HANDLE handle, INT index, void *info, DW
     return ret;
 }
 
-#ifdef _WIN64
-static inline TEB64 *NtCurrentTeb64(void) { return NULL; }
-#else
-static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiBatchCount; }
-#endif
-
 HWND get_desktop_window(void)
 {
     struct ntuser_thread_info *thread_info = NtUserGetThreadInfo();
     BOOL is_service;
 
-    if (thread_info->top_window) return UlongToHandle( thread_info->top_window );
+    if (thread_info->top_window)
+    {
+        register_builtin_classes();
+        return UlongToHandle( thread_info->top_window );
+    }
 
     /* don't create an actual explorer desktop window for services */
     is_service = is_service_process();
@@ -823,6 +903,7 @@ HWND get_desktop_window(void)
         PS_CREATE_INFO create_info;
         WCHAR desktop[MAX_PATH];
         PEB *peb = NtCurrentTeb()->Peb;
+        TEB64 *teb64;
         HANDLE process, thread;
         unsigned int status;
 
@@ -858,13 +939,14 @@ HWND get_desktop_window(void)
         ps_attr.Attributes[0].ValuePtr     = (WCHAR *)appnameW;
         ps_attr.Attributes[0].ReturnLength = NULL;
 
-        if (NtCurrentTeb64() && !NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR])
+        teb64 = win32u_current_teb64();
+        if (teb64 && !teb64->TlsSlots[WOW64_TLS_FILESYSREDIR])
         {
-            NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR] = TRUE;
+            teb64->TlsSlots[WOW64_TLS_FILESYSREDIR] = TRUE;
             status = NtCreateUserProcess( &process, &thread, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS,
                                           NULL, NULL, 0, THREAD_CREATE_FLAGS_CREATE_SUSPENDED, &params,
                                           &create_info, &ps_attr );
-            NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR] = FALSE;
+            teb64->TlsSlots[WOW64_TLS_FILESYSREDIR] = FALSE;
         }
         else
             status = NtCreateUserProcess( &process, &thread, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS,
@@ -872,9 +954,35 @@ HWND get_desktop_window(void)
                                           &create_info, &ps_attr );
         if (!status)
         {
+            /* MacRunner 2026-08-21, лейн ПРИБОРЫ — БЕЗУСЛОВНЫЙ ЗОНД (образец macrunner-hb-vmprobe).
+             *
+             * Замер лейна: на фазе загрузки 87-90 % ВСЕГО ожидания рабочего потока приходится на
+             * `NtUserWaitForInputIdle` (44,4 % и 45,2 % времени потока у HK; 98-99 % ожидания у
+             * Diablo). Но профиль НЕ РАЗЛИЧАЕТ две дороги в эту функцию:
+             *   1) ЭТОТ запуск explorer.exe для рабочего стола — наш накладной расход;
+             *   2) собственный вызов WaitForInputIdle из гостя (Diablo.exe — запускальщик и
+             *      зовёт его на своего ребёнка) — расход самой игры, лечить нечего.
+             * Обе ведут в ту же реализацию `win32u`, поэтому по предкам их не развести.
+             *
+             * Соседний `TRACE_(win)( "started explorer" )` для этого НЕ ГОДИТСЯ: каналы Wine до
+             * наших журналов не доходят (правило проекта, строк `err:` нет ни в одном прогоне за
+             * всю историю). Поэтому печать через fprintf(stderr) — так же, как уже сделано в
+             * этом файле для `macrunner-shminput-fail`.
+             *
+             * Печать БЕЗУСЛОВНАЯ и без гейта: путь проходится один-два раза на процесс (дальше
+             * `thread_info->top_window` уже задан и блок пропускается целиком), флуда быть не
+             * может, а гейт превратил бы улику в лотерею. */
+            LARGE_INTEGER hb_t0, hb_t1;
+            unsigned int hb_pid = (unsigned int)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess;
+
             NtResumeThread( thread, NULL );
             TRACE_(win)( "started explorer\n" );
+            fprintf( stderr, "macrunner-explorer-wait: enter pid=%04x timeout_ms=10000\n", hb_pid );
+            NtQuerySystemTime( &hb_t0 );
             NtUserWaitForInputIdle( process, 10000, FALSE );
+            NtQuerySystemTime( &hb_t1 );
+            fprintf( stderr, "macrunner-explorer-wait: leave pid=%04x waited_ms=%llu\n", hb_pid,
+                     (unsigned long long)((hb_t1.QuadPart - hb_t0.QuadPart) / 10000) );
             NtClose( thread );
             NtClose( process );
         }

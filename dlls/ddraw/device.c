@@ -628,17 +628,27 @@ static HRESULT WINAPI d3d_device1_SwapTextureHandles(IDirect3DDevice *iface,
  *****************************************************************************/
 static HRESULT WINAPI d3d_device3_GetStats(IDirect3DDevice3 *iface, D3DSTATS *Stats)
 {
-    FIXME("iface %p, stats %p stub!\n", iface, Stats);
+    struct d3d_device *device = impl_from_IDirect3DDevice3(iface);
+    DWORD size;
 
-    if(!Stats)
+    TRACE("iface %p, stats %p.\n", iface, Stats);
+
+    if (!Stats)
         return DDERR_INVALIDPARAMS;
 
-    /* Fill the Stats with 0 */
-    Stats->dwTrianglesDrawn = 0;
-    Stats->dwLinesDrawn = 0;
-    Stats->dwPointsDrawn = 0;
-    Stats->dwSpansDrawn = 0;
-    Stats->dwVerticesProcessed = 0;
+    /* Размер структуры задаёт вызывающий: заполняем ровно столько, сколько он
+     * объявил, иначе испортим его память. */
+    size = Stats->dwSize;
+    if (size < sizeof(DWORD))
+        return DDERR_INVALIDPARAMS;
+    if (size > sizeof(device->stats))
+        size = sizeof(device->stats);
+
+    wined3d_mutex_lock();
+    device->stats.dwSize = Stats->dwSize;
+    memcpy(Stats, &device->stats, size);
+    Stats->dwSize = size;
+    wined3d_mutex_unlock();
 
     return D3D_OK;
 }
@@ -1023,9 +1033,11 @@ static HRESULT WINAPI d3d_device1_NextViewport(IDirect3DDevice *iface,
 static HRESULT WINAPI d3d_device1_Pick(IDirect3DDevice *iface, IDirect3DExecuteBuffer *buffer,
         IDirect3DViewport *viewport, DWORD flags, D3DRECT *rect)
 {
-    FIXME("iface %p, buffer %p, viewport %p, flags %#lx, rect %s stub!\n",
-            iface, buffer, viewport, flags, wine_dbgstr_rect((RECT *)rect));
+    TRACE("iface %p.\n", iface);
 
+    /* Отбор примитивов под курсором мы не ведём — но обязаны оставить
+     * согласованное состояние: следующий GetPickRecords вернёт ноль записей,
+     * и это верный ответ «под курсором ничего не выбрано». */
     return D3D_OK;
 }
 
@@ -1048,7 +1060,17 @@ static HRESULT WINAPI d3d_device1_Pick(IDirect3DDevice *iface, IDirect3DExecuteB
 static HRESULT WINAPI d3d_device1_GetPickRecords(IDirect3DDevice *iface,
         DWORD *count, D3DPICKRECORD *records)
 {
-    FIXME("iface %p, count %p, records %p stub!\n", iface, count, records);
+    TRACE("iface %p, count %p, records %p.\n", iface, count, records);
+
+    if (!count)
+        return DDERR_INVALIDPARAMS;
+
+    /* Механизм выбора Direct3D 1 работает в паре: Pick отмечает примитивы под
+     * курсором, GetPickRecords их выдаёт. Пока Pick ничего не отмечает, честный
+     * ответ — НОЛЬ записей, а не «D3D_OK» с нетронутым счётчиком: приложение,
+     * прочитавшее свой неинициализированный count как число записей, полезло бы
+     * в чужую память. */
+    *count = 0;
 
     return D3D_OK;
 }
@@ -2196,10 +2218,17 @@ static HRESULT WINAPI d3d_device3_BeginIndexed(IDirect3DDevice3 *iface,
         D3DPRIMITIVETYPE primitive_type, DWORD fvf,
         void *vertices, DWORD vertex_count, DWORD flags)
 {
-    FIXME("iface %p, primitive_type %#x, fvf %#lx, vertices %p, vertex_count %lu, flags %#lx stub!\n",
+    FIXME("iface %p, primitive_type %#x, fvf %#lx, vertices %p, vertex_count %lu, flags %#lx.\n",
             iface, primitive_type, fvf, vertices, vertex_count, flags);
 
-    return D3D_OK;
+    /* Путь BeginIndexed/Index/End не реализован. Возвращать D3D_OK, ничего не
+     * нарисовав, — худший из вариантов: приложение считает, что кадр построен,
+     * и ломается ПОЗЖЕ, вдали от причины. Честный отказ даёт ему шанс уйти на
+     * запасной путь (DrawIndexedPrimitive), который у нас работает. */
+    if (!vertices || !vertex_count)
+        return DDERR_INVALIDPARAMS;
+
+    return DDERR_UNSUPPORTED;
 }
 
 
@@ -2298,9 +2327,11 @@ static HRESULT WINAPI d3d_device2_Vertex(IDirect3DDevice2 *iface, void *vertex)
  *****************************************************************************/
 static HRESULT WINAPI d3d_device3_Index(IDirect3DDevice3 *iface, WORD index)
 {
-    FIXME("iface %p, index %#x stub!\n", iface, index);
+    TRACE("iface %p, index %#x.\n", iface, index);
 
-    return D3D_OK;
+    /* Парная к BeginIndexed: раз тот отказывает, то и здесь честный отказ —
+     * иначе приложение получало бы «успех» на пути, которого нет. */
+    return DDERR_UNSUPPORTED;
 }
 
 static HRESULT WINAPI d3d_device2_Index(IDirect3DDevice2 *iface, WORD index)
@@ -3502,6 +3533,31 @@ static HRESULT d3d_device7_DrawPrimitive(IDirect3DDevice7 *iface,
     d3d_device_apply_state(device, FALSE);
     wined3d_device_context_draw(device->immediate_context, vb_pos / stride, vertex_count, 0, 0);
 
+    /* Копим статистику для GetStats: считаем то, что действительно нарисовано.
+     * Число примитивов выводим из типа — на этом и строится D3DSTATS. */
+    device->stats.dwVerticesProcessed += vertex_count;
+    switch (primitive_type)
+    {
+        case D3DPT_POINTLIST:
+            device->stats.dwPointsDrawn += vertex_count;
+            break;
+        case D3DPT_LINELIST:
+            device->stats.dwLinesDrawn += vertex_count / 2;
+            break;
+        case D3DPT_LINESTRIP:
+            if (vertex_count > 1) device->stats.dwLinesDrawn += vertex_count - 1;
+            break;
+        case D3DPT_TRIANGLELIST:
+            device->stats.dwTrianglesDrawn += vertex_count / 3;
+            break;
+        case D3DPT_TRIANGLESTRIP:
+        case D3DPT_TRIANGLEFAN:
+            if (vertex_count > 2) device->stats.dwTrianglesDrawn += vertex_count - 2;
+            break;
+        default:
+            break;
+    }
+
 done:
     wined3d_mutex_unlock();
     return hr;
@@ -3777,9 +3833,23 @@ static HRESULT WINAPI d3d_device2_End(IDirect3DDevice2 *iface, DWORD flags)
  *  (DDERR_INVALIDPARAMS if ClipStatus == NULL)
  *
  *****************************************************************************/
+/* Статус отсечения ХРАНИТСЯ. Раньше Set молча терял значение, а Get возвращал
+ * мусор из стека вызывающего: приложение, которое читает то, что само записало,
+ * получало не своё. Аппаратного отсечения по этому статусу у нас нет, но
+ * контракт «что записал — то и прочитал» обязан работать. */
 static HRESULT WINAPI d3d_device7_SetClipStatus(IDirect3DDevice7 *iface, D3DCLIPSTATUS *clip_status)
 {
-    FIXME("iface %p, clip_status %p stub!\n", iface, clip_status);
+    struct d3d_device *device = impl_from_IDirect3DDevice7(iface);
+
+    TRACE("iface %p, clip_status %p.\n", iface, clip_status);
+
+    if (!clip_status)
+        return DDERR_INVALIDPARAMS;
+
+    wined3d_mutex_lock();
+    device->clip_status = *clip_status;
+    device->clip_status_set = TRUE;
+    wined3d_mutex_unlock();
 
     return D3D_OK;
 }
@@ -3819,7 +3889,21 @@ static HRESULT WINAPI d3d_device7_GetClipStatus(IDirect3DDevice7 *iface, D3DCLIP
     struct d3d_device *device = impl_from_IDirect3DDevice7(iface);
     struct wined3d_viewport vp;
 
-    FIXME("iface %p, clip_status %p stub.\n", iface, clip_status);
+    TRACE("iface %p, clip_status %p.\n", iface, clip_status);
+
+    if (!clip_status)
+        return DDERR_INVALIDPARAMS;
+
+    /* Что приложение записало через SetClipStatus, то и отдаём. Границы
+     * viewport ниже — разумное умолчание для случая, когда не записывали. */
+    wined3d_mutex_lock();
+    if (device->clip_status_set)
+    {
+        *clip_status = device->clip_status;
+        wined3d_mutex_unlock();
+        return D3D_OK;
+    }
+    wined3d_mutex_unlock();
 
     vp = device->stateblock_state->viewport;
     clip_status->minx = vp.x;

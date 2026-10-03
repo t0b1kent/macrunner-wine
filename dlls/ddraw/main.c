@@ -359,6 +359,18 @@ static HRESULT DDRAW_Create(const GUID *guid, void **out, IUnknown *outer_unknow
  ***********************************************************************/
 HRESULT WINAPI DECLSPEC_HOTPATCH DirectDrawCreate(GUID *driver_guid, IDirectDraw **ddraw, IUnknown *outer)
 {
+    /* MacRunner 2026-08-27, Diablo — ВЕХИ ПУТИ DirectDraw.
+     * Игра выходит ШТАТНО (NtTerminateProcess) на 23 с, не нарисовав кадра и не открыв
+     * ни одного .mpq, хотя ddraw.dll и Storm.dll загружены. Канал trace с i386-стороны
+     * не работает (см. память проекта), поэтому вехи печатаем через ERR — он виден. */
+    /* MacRunner 2026-08-29 — ПЕЧАТАЕМ ИДЕНТИФИКАТОР ПРОЦЕССА.
+     *
+     * Журнал wine показывает только идентификатор ПОТОКА (`0134:`), и по нему
+     * нельзя сказать, чей это поток. Я на этом уже ошибся: решил, что поток,
+     * родившийся через 12 мс после CreateProcessA, принадлежит дочернему
+     * процессу — а это была догадка. Печатаем pid прямо. */
+    ERR( "macrunner-ddraw-веха: DirectDrawCreate вход pid=%04lx tid=%04lx\n",
+         (unsigned long)GetCurrentProcessId(), (unsigned long)GetCurrentThreadId() );
     HRESULT hr;
 
     TRACE("driver_guid %s, ddraw %p, outer %p.\n",
@@ -736,12 +748,36 @@ static HRESULT WINAPI ddraw_class_factory_CreateInstance(IClassFactory *iface,
  *  S_OK, because it's a stub
  *
  *******************************************************************************/
+/* Счётчик блокировок сервера: пока он не нулевой, модуль не должен выгружаться.
+ * Раньше здесь стоял `return S_OK` без учёта — то есть COM-клиент, честно
+ * взявший блокировку, не получал никакой гарантии, и выгрузка могла произойти
+ * у него под руками. */
+static LONG ddraw_server_locks;
+
 static HRESULT WINAPI ddraw_class_factory_LockServer(IClassFactory *iface, BOOL dolock)
 {
-    FIXME("iface %p, dolock %#x stub!\n", iface, dolock);
+    LONG locks;
+
+    TRACE("iface %p, dolock %#x.\n", iface, dolock);
+
+    if (dolock)
+        locks = InterlockedIncrement(&ddraw_server_locks);
+    else
+        locks = InterlockedDecrement(&ddraw_server_locks);
+
+    if (locks < 0)
+    {
+        /* Больше снятий, чем блокировок — ошибка вызывающего. Не уводим счётчик
+         * в минус: иначе одна лишняя разблокировка отменила бы чужую честную. */
+        WARN("Unbalanced LockServer(FALSE), clamping.\n");
+        InterlockedIncrement(&ddraw_server_locks);
+    }
 
     return S_OK;
 }
+
+/* Значение счётчика: пригодится, когда у ddraw появится DllCanUnloadNow.
+ * Сейчас важен сам учёт — блокировка клиента больше не теряется. */
 
 /*******************************************************************************
  * The class factory VTable
@@ -754,6 +790,104 @@ static const IClassFactoryVtbl IClassFactory_Vtbl =
     ddraw_class_factory_CreateInstance,
     ddraw_class_factory_LockServer
 };
+
+/***********************************************************************
+ *  Недокументированные функции ddraw, которых ждёт DDrawCompat (DDRAW.@)
+ *
+ * ★★★★★ MacRunner 2026-08-28 — ЗАКРЫТ ВЕСЬ КЛАСС, А НЕ ОДИН СЛУЧАЙ.
+ *
+ * Замер: DDrawCompat (родная библиотека Diablo из GOG-сборки) ищет в ddraw ШЕСТЬ
+ * недокументированных функций. У нас четыре из них были опасны:
+ *
+ *   AcquireDDThreadLock          отсутствовала  -> GetProcAddress = NULL -> вызов по нулю
+ *   ReleaseDDThreadLock          отсутствовала  -> то же (это и роняло второй процесс)
+ *   DDInternalLock               `@ stub`       -> EXCEPTION_WINE_STUB
+ *   DDInternalUnlock             `@ stub`       -> EXCEPTION_WINE_STUB
+ *   CompleteCreateSysmemSurface  отсутствовала  -> вызов по нулю
+ *   D3DParseUnknownCommand       отсутствовала  -> вызов по нулю
+ *
+ * Почему `@ stub` не годится как «временное решение»: он разворачивается в
+ * `__wine_spec_unimplemented_stub` (ntdll/exception.c:812), а тот поднимает
+ * EXCEPTION_WINE_STUB с флагом **EXCEPTION_NONCONTINUABLE** в вечном цикле
+ * `for (;;) RtlRaiseException(...)`. То есть вызов заглушки — гарантированная смерть
+ * процесса, которую вызывающий не может ни поймать, ни обойти. Заглушка не «отложенная
+ * реализация», а мина.
+ *
+ * Поэтому здесь настоящие реализации по смыслу каждой функции.
+ */
+
+/* Блокировка поверхности. В настоящем ddraw пара защищает доступ к пикселям от других
+ * потоков; у нас ту же роль играет wined3d_mutex, которым пользуется весь остальной ddraw
+ * (см. main.c:84). Рекурсивность мьютекса допускает вложенные захваты, как ждёт вызывающий. */
+void WINAPI DDInternalLock(void *surface)
+{
+    TRACE("surface %p.\n", surface);
+    wined3d_mutex_lock();
+}
+
+void WINAPI DDInternalUnlock(void *surface)
+{
+    TRACE("surface %p.\n", surface);
+    wined3d_mutex_unlock();
+}
+
+/* Завершение создания поверхности в системной памяти. Наш путь создания поверхностей уже
+ * доводит её до готового состояния в `ddraw_surface_create`, поэтому дополнительного шага
+ * не требуется — сообщаем успех. Возвращать ошибку нельзя: вызывающий трактует её как
+ * «поверхность непригодна» и уходит в свой обработчик отказа. */
+HRESULT WINAPI CompleteCreateSysmemSurface(void *surface)
+{
+    TRACE("surface %p.\n", surface);
+    return DD_OK;
+}
+
+/* Разбор неизвестной команды execute-buffer (Direct3D 3 и старше). Мы такие команды не
+ * поддерживаем, и это ЗАКОННЫЙ ответ: настоящий ddraw тоже отвечает отказом на команду,
+ * которую не знает. Важно именно вернуть код, а не умереть внутри — вызывающий на отказ
+ * рассчитан. Смещение продвигаем на нулевую длину, чтобы разбор не зациклился. */
+HRESULT WINAPI D3DParseUnknownCommand(void *command, void **next_command)
+{
+    FIXME("command %p, next_command %p: команда не поддержана, отвечаем отказом.\n",
+          command, next_command);
+    if (next_command) *next_command = command;
+    return DDERR_INVALIDPARAMS;
+}
+
+/***********************************************************************
+ *  AcquireDDThreadLock / ReleaseDDThreadLock (DDRAW.@)
+ *
+ * ★★★★★ MacRunner 2026-08-28 — НЕДОСТАЮЩАЯ ПАРА, ИЗ-ЗА КОТОРОЙ ПАДАЛ DDrawCompat.
+ *
+ * Это недокументированная пара блокировки из настоящего ddraw.dll. В нашем `ddraw.spec` её
+ * не было вовсе, и `LdrGetProcedureAddress` честно отвечал «не найдено»:
+ *
+ *     macrunner-ldr-proc-miss: функция="ReleaseDDThreadLock" модуль=ddraw.dll
+ *
+ * DDrawCompat (родная библиотека Diablo из GOG-сборки, 1 790 976 байт) берёт адрес через
+ * GetProcAddress, получает NULL и ВЫЗЫВАЕТ его — отсюда отказ, который мы видели как
+ * `c0000005 addr=00000000 info0=8` (info0=8 это EXECUTE_FAULT, то есть переход по нулю),
+ * и падение второго процесса игры.
+ *
+ * Ровно та же болезнь, что была у Hollow Knight с отключённым `Galaxy64.dll` (запись 149):
+ * игра рассчитывает на библиотеку, её нет, и обработчик на это не рассчитан.
+ *
+ * Заглушкой (`@ stub`) обойтись нельзя: GetProcAddress тогда вернёт адрес, а вызов упадёт
+ * внутри неё — падение просто переедет. Поэтому реализуем по существу: пара защищает
+ * внутреннее состояние ddraw, и у нас для этого уже есть `wined3d_mutex`, которым пользуется
+ * весь остальной ddraw (main.c:84). Рекурсивность мьютекса позволяет вложенные захваты,
+ * как и ожидает вызывающий.
+ */
+void WINAPI AcquireDDThreadLock(void)
+{
+    TRACE("\n");
+    wined3d_mutex_lock();
+}
+
+void WINAPI ReleaseDDThreadLock(void)
+{
+    TRACE("\n");
+    wined3d_mutex_unlock();
+}
 
 HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **out)
 {

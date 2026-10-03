@@ -109,3 +109,22 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
 {
     init,
 };
+
+#ifdef _WIN64
+
+/* MacRunner 2026-08-10, лейн ЛЕСТНИЦА. Без этой таблицы 32-битный гость не получает
+ * unix-часть win32u: `get_builtin_unix_funcs` ищет для него ИМЕННО
+ * `__wine_unix_call_wow64_funcs` (ntdll/unix/virtual.c) и, не найдя, возвращает
+ * STATUS_ENTRYPOINT_NOT_FOUND (c0000139). Замер: у ЛЮБОЙ 32-битной программы, которая
+ * трогает user32/gdi32, инициализация win32u не проходит — воспроизводится программой
+ * в 20 строк (RegisterClassA + CreateWindowExA). `winemac.so` и `winemetal.so` обе
+ * таблицы отдают, `win32u.so` — только первую.
+ *
+ * `init` не читает `args`, поэтому переходник по разрядности не нужен: та же функция
+ * годится обоим вызывающим. */
+const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+{
+    init,
+};
+
+#endif

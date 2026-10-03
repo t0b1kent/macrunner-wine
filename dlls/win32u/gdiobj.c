@@ -27,6 +27,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <unistd.h>   /* итерация 813: getpid() для сопоставления писателя и читателя */
 
 #include "windef.h"
 #include "winbase.h"
@@ -42,9 +43,39 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(gdi);
 
+/* ★ 06.09.2026 — реализация прибора в dib.c, здесь только заголовок. */
+#include "hb_probe.h"
+
+/* Имя второго прибора НАЧИНАЕТСЯ с `stockobj`, чтобы прежний потребитель
+ * (`scripts/инварианты.sh`, поиск подстроки `macrunner-stockobj`) продолжал
+ * находить обе выборки, а не потерял половину при разведении. */
+HB_PROBE_DEFINE(pr_stockobj, "stockobj",
+                "вызовы NtGdiGetStockObject с ГОДНЫМ номером объекта "
+                "(0 <= obj <= STOCK_LAST+1, кроме 9). Недопустимые номера — те, что валят "
+                "assert строкой ниже, — считает ОТДЕЛЬНЫЙ прибор stockobj-негодный: "
+                "у них своя выборка и свой потолок, складывать эти два числа нельзя",
+                NULL, 8);
+HB_PROBE_DEFINE(pr_stockobj_bad, "stockobj-негодный",
+                "вызовы NtGdiGetStockObject с номером, который валит assert "
+                "(obj < 0, obj > STOCK_LAST+1 либо obj == 9) — стена ступени 1. "
+                "Годные вызовы сюда НЕ попадают",
+                NULL, 32);
+
 #define FIRST_GDI_HANDLE 32
 
 static GDI_SHARED_MEMORY *gdi_shared;
+/* Итерация 814: свидетели завода. Строка `gdiinit` печатается в самой ранней фазе процесса,
+ * когда stderr может быть ещё не сведён в журнал, поэтому её ОТСУТСТВИЕ ничего не доказывает
+ * (замер 813). Эти два значения печатаются ПОЗДНО — в строке промаха, где stderr заведомо
+ * работает: счётчик отвечает «завод был или нет», а сохранённый указатель — «подменили или
+ * нет». */
+static unsigned gdi_init_done;
+static GDI_SHARED_MEMORY *gdi_shared_at_init;
+/* Итерация 815: чей поток ведёт завод. Нужен ИМЕННО он, а не просто флаг: место вызова
+ * (`class.c:264`) прямо предупреждает — «bootstrap can load cursors before shared session init
+ * returns», то есть в `GetStockObject` можно войти ПОВТОРНО из того же потока, что выполняет
+ * `gdi_init`. Если такой поток заставить ждать готовности, он будет ждать сам себя. */
+static ULONG gdi_init_tid;
 static GDI_HANDLE_ENTRY *next_free;
 static GDI_HANDLE_ENTRY *next_unused;
 static LONG debug_count;
@@ -571,12 +602,59 @@ static void init_gdi_shared(void)
     next_unused = gdi_shared->Handles + FIRST_GDI_HANDLE;
 
 #ifndef _WIN64
-    if (NtCurrentTeb()->GdiBatchCount)
+    if (win32u_current_teb64())
     {
-        TEB64 *teb64 = (TEB64 *)(UINT_PTR)NtCurrentTeb()->GdiBatchCount;
+        TEB64 *teb64 = win32u_current_teb64();
         PEB64 *peb64 = (PEB64 *)(UINT_PTR)teb64->Peb;
-        peb64->GdiSharedHandleTable = (UINT_PTR)gdi_shared;
-        return;
+        if (teb64->Peb && !((UINT_PTR)peb64 & (sizeof(ULONG64) - 1)))
+        {
+            peb64->GdiSharedHandleTable = (UINT_PTR)gdi_shared;
+            return;
+        }
+        WARN( "invalid wow64 PEB64 mirror target teb64=%p peb64=%p\n", teb64, peb64 );
+    }
+#else
+    if (NtCurrentTeb()->WowTebOffset)
+    {
+        /* MacRunner 2026-08-10, лейн ЛЕСТНИЦА — ПЕРЕВОД ГОСТЕВОГО АДРЕСА.
+         *
+         * Здесь корень ранней смерти ступени 1, доказанный итерацией 174 тремя
+         * сходимостями: машинный код (`ldr w8,[x8,#0x30]` затем `str w19,[x8,#0x94]`),
+         * заголовок (`PEB32.GdiSharedHandleTable` = 0x94) и арифметика отказа
+         * (`si_addr = 0x201094` при `teb32->Peb = 0x201000`).
+         *
+         * `teb32->Peb` — адрес В ГОСТЕВОМ пространстве. В апстриме 32-битный гость лежит в
+         * нижних 4 ГБ тождественно, поэтому приведение к указателю там ВЕРНО. У нас гость
+         * живёт по ненулевой базе (наблюдал 0x3/0x5/0xb/0xd × 4 ГБ), и запись уходит по
+         * непереведённому адресу — процесс гибнет на третьей секунде.
+         *
+         * Прерывистость отсюда же: сторож `if (teb32->Peb)` пропускает запись, пока поле
+         * ещё ноль, поэтому часть прогонов выживала — та самая «половина» из итераций 163-165.
+         *
+         * Гейт снят 02.09.2026, правка безусловна.
+         * чтобы мерить чередованием. */
+        TEB32 *teb32 = (TEB32 *)((char *)NtCurrentTeb() + NtCurrentTeb()->WowTebOffset);
+        PEB32 *peb32 = (PEB32 *)(UINT_PTR)teb32->Peb;
+        if (teb32->Peb)
+        {
+            /* Гейт MACRUNNER_HB_GDI_PEB32_XLAT снят 02.09.2026: выключенная ветка оставляла
+             * teb32->Peb гостевым адресом в хозяйском пространстве, отчего gdi32 читал по
+             * NULL (0x30e у Heroes, 0x33e у UT99). Перевод адреса безусловен. */
+            {
+                extern unsigned long long macrunner_hb_wow64_guest32_base(void);
+                unsigned long long base = macrunner_hb_wow64_guest32_base();
+                if (base)
+                {
+                    peb32 = (PEB32 *)(UINT_PTR)(base + (unsigned long long)teb32->Peb);
+                    /* Печать через stderr, а НЕ через ERR(): канал err в этом проекте до
+                     * журналов не доходит ни в одном прогоне за всю историю. */
+                    fprintf( stderr, "macrunner-hb-gdi-peb32-xlat: guest=%08x base=%llx host=%p\n",
+                             (unsigned int)teb32->Peb, base, peb32 );
+                    fflush( stderr );
+                }
+            }
+            peb32->GdiSharedHandleTable = PtrToUlong( gdi_shared );
+        }
     }
 #endif
     /* NOTE: Windows uses 32-bit for 32-bit kernel */
@@ -588,6 +666,42 @@ static void init_gdi_shared(void)
  */
 HGDIOBJ WINAPI GetStockObject( INT obj )
 {
+    /* MacRunner 2026-08-13, лейн ЛЕСТНИЦА, итерация 810 — ЧТО ИМЕННО СЮДА ПЕРЕДАЮТ.
+     *
+     * Итерация 809 разрешила адрес ловушки ступени 1: `win32u.so + 0x129b78`, символ
+     * `_GetStockObject.cold.1 + 40` — то есть провалившийся `assert` строкой ниже. Осталось
+     * узнать значение и вызывающего.
+     *
+     * Печатаются ДВА набора: первые 8 вызовов БЕЗУСЛОВНО и все недопустимые (потолок 32).
+     * Только недопустимых было бы мало: их отсутствие не отличалось бы от молчащего зонда, а
+     * это ровно та ловушка, на которой лейн уже терял прогоны. */
+    /* ★★ 06.09.2026, лейн ПРИБОРЫ-3 — ОДНА СТРОКА, ДВЕ ПОПУЛЯЦИИ, ТРИ ДЕФЕКТА.
+     *
+     *     if (bad ? (probe_bad < 32 && ++probe_bad) : (probe_all < 8 && ++probe_all))
+     *
+     * 1. ДВЕ РАЗНЫЕ ВЫБОРКИ печатались под ОДНИМ именем и с РАЗНЫМИ потолками (32 и 8).
+     *    Сложить их числа нельзя, а из журнала это не видно — ровно так у нас уже вышло
+     *    с write-deny, где тяжёлый диапазон печатался без потолка;
+     * 2. `++probe_N` стоит СПРАВА от `&&` и потому НЕ выполняется, когда потолок уже
+     *    выбран: счётчик считает НАПЕЧАТАННОЕ, а не случившееся;
+     * 3. молчание после потолка неотличимо от «недопустимых вызовов не было» — а именно
+     *    этим прибором scripts/инварианты.sh проверяет стену ступени 1.
+     *
+     * Разведено на два прибора со своими популяциями и потолками; учёт всегда, печать
+     * ограничена, число объявляет себя нижней границей само. */
+    {
+        int bad = (obj < 0 || obj > STOCK_LAST + 1 || obj == 9);
+
+        HB_PROBE_LOOKED( &pr_stockobj );
+        HB_PROBE_LOOKED( &pr_stockobj_bad );
+        if (bad)
+            HB_PROBE_SAY( &pr_stockobj_bad, "obj=%d годен=0 STOCK_LAST=%d вызвал=%p\n",
+                          (int)obj, (int)STOCK_LAST, __builtin_return_address(0) );
+        else
+            HB_PROBE_SAY( &pr_stockobj, "obj=%d годен=1 STOCK_LAST=%d вызвал=%p\n",
+                          (int)obj, (int)STOCK_LAST, __builtin_return_address(0) );
+        fflush( stderr );
+    }
     assert( obj >= 0 && obj <= STOCK_LAST + 1 && obj != 9 );
 
     switch (obj)
@@ -606,7 +720,58 @@ HGDIOBJ WINAPI GetStockObject( INT obj )
         break;
     }
 
-    return entry_to_handle( handle_entry( ULongToHandle( obj + FIRST_GDI_HANDLE )));
+    /* MacRunner 2026-08-13, лейн ЛЕСТНИЦА, итерация 811 — ПОЧЕМУ ЗАПИСЬ НЕ НАХОДИТСЯ.
+     *
+     * Итерация 810 доказала дизассемблером: ловушка `brk #1` стоит сразу за `WARN("invalid
+     * handle")` из встроенной `handle_entry`, а номер объекта ДОПУСТИМ в 65 случаях из 65.
+     * Значит запись дескриптора пуста либо чужая. Здесь печатаются те пять чисел, которые
+     * различают эти два случая, и ничего больше.
+     *
+     * Отдельно и НЕЗАВИСИМО — защита от ловушки: `entry_to_handle` разыменовывает ноль без
+     * проверки, и это неопределённое поведение. Windows на недопустимый номер отдаёт NULL, а
+     * не падает. Гейт `MACRUNNER_WIN32U_STOCKOBJ_NULL_OK` по умолчанию ВКЛЮЧЁН (отключение
+     * значением `0`): выключенное по умолчанию лекарство — главная статья потерь проекта.
+     * Два вопроса разделены гейтом, поэтому одна сборка отвечает на оба. */
+    {
+        HGDIOBJ handle = ULongToHandle( obj + FIRST_GDI_HANDLE );
+        GDI_HANDLE_ENTRY *entry = handle_entry( handle );
+
+        if (!entry)
+        {
+            static unsigned probe_n;
+            unsigned int idx = LOWORD( handle );
+            const char *off = getenv( "MACRUNNER_WIN32U_STOCKOBJ_NULL_OK" );
+            int null_ok = !(off && off[0] == '0');
+
+            if (probe_n < 32)
+            {
+                probe_n++;
+                fprintf( stderr, "macrunner-stockobj-miss: n=%u obj=%d idx=%u shared=%p "
+                         "тип=%08x hiword=%04x unique=%04x предел=%u гейт=%d pid=%p unix=%d "
+                         "завод=%u указатель_при_заводе=%p поток_завода=%08x поток_сейчас=%08x\n",
+                         probe_n, (int)obj, idx, gdi_shared,
+                         (gdi_shared && idx < GDI_MAX_HANDLE_COUNT)
+                             ? (unsigned)gdi_shared->Handles[idx].Type : 0xffffffffu,
+                         (unsigned)HIWORD( handle ),
+                         (gdi_shared && idx < GDI_MAX_HANDLE_COUNT)
+                             ? (unsigned)gdi_shared->Handles[idx].Unique : 0xffffu,
+                         (unsigned)GDI_MAX_HANDLE_COUNT, null_ok,
+                         NtCurrentTeb()->ClientId.UniqueProcess, (int)getpid(),
+                         gdi_init_done, gdi_shared_at_init, (unsigned)gdi_init_tid,
+                         (unsigned)HandleToULong( NtCurrentTeb()->ClientId.UniqueThread ) );
+                fflush( stderr );
+            }
+            /* Итерация 817: блок ОЖИДАНИЯ готовности СНЯТ. Он был построен в 815 под
+             * гипотезу «гонка двух потоков» и не сработал ни разу за четыре руки при 12
+             * промахах в каждой. Причина выяснена в 816 и делает ожидание невозможным по
+             * построению: `поток_завода == поток_сейчас` во всех промахах, то есть в
+             * `GetStockObject` заходит ТОТ ЖЕ поток, что ведёт `gdi_init`. Ждать — значит
+             * ждать самого себя. Мёртвый код убран, чтобы он не выглядел работающим
+             * лекарством; свидетели потоков в печати ОСТАВЛЕНЫ, они и есть доказательство. */
+            if (null_ok) return 0;
+        }
+        return entry_to_handle( entry );
+    }
 }
 
 static void init_stock_objects( unsigned int dpi )
@@ -1039,9 +1204,42 @@ void gdi_init(void)
     pthread_mutex_init( &gdi_lock, &attr );
     pthread_mutexattr_destroy( &attr );
 
+    gdi_init_tid = HandleToULong( NtCurrentTeb()->ClientId.UniqueThread );
     init_gdi_shared();
-    if (!gdi_shared) return;
+    /* MacRunner 2026-08-13, лейн ЛЕСТНИЦА, итерация 812 — ШЁЛ ЛИ ЗАВОД ОБЪЕКТОВ В ЭТОМ ПРОЦЕССЕ.
+     *
+     * Итерация 811 замерила: таблица ОТОБРАЖЕНА (`shared=0x305cd0000`), а слоты стандартных
+     * объектов пусты (`Type=0` у 39/45/47). Два объяснения не различаются по тем числам:
+     * `gdi_init` в этом процессе не выполнялся вовсе, либо выполнился и не заполнил. Печатаем
+     * вход, значение таблицы и состояние ПЕРВОГО слота ДО и ПОСЛЕ `init_stock_objects` —
+     * этого достаточно, чтобы развести случаи. Печать безусловная, одна на процесс. */
+    {
+        unsigned int t_before = (gdi_shared && FIRST_GDI_HANDLE < GDI_MAX_HANDLE_COUNT)
+                              ? (unsigned)gdi_shared->Handles[FIRST_GDI_HANDLE].Type : 0xffffffffu;
+        /* Итерация 813: pid ОБЯЗАТЕЛЕН — без него писателя и читателя не сопоставить по
+         * процессу, и вывод «завода не было» повисает в воздухе (замер 812). */
+        fprintf( stderr, "macrunner-gdiinit: вход shared=%p слот%u_тип_до=%08x pid=%p unix=%d\n",
+                 gdi_shared, (unsigned)FIRST_GDI_HANDLE, t_before,
+                 NtCurrentTeb()->ClientId.UniqueProcess, (int)getpid() );
+        fflush( stderr );
+    }
+    if (!gdi_shared)
+    {
+        fprintf( stderr, "macrunner-gdiinit: выход БЕЗ_ТАБЛИЦЫ — объекты не заводятся\n" );
+        fflush( stderr );
+        return;
+    }
 
     dpi = font_init();
     init_stock_objects( dpi );
+    gdi_shared_at_init = gdi_shared;
+    gdi_init_done++;
+    gdi_init_tid = 0;
+    fprintf( stderr, "macrunner-gdiinit: готово dpi=%u слот%u_тип_после=%08x слот39=%08x "
+             "pid=%p unix=%d shared=%p\n",
+             dpi, (unsigned)FIRST_GDI_HANDLE,
+             (unsigned)gdi_shared->Handles[FIRST_GDI_HANDLE].Type,
+             (unsigned)gdi_shared->Handles[39].Type,
+             NtCurrentTeb()->ClientId.UniqueProcess, (int)getpid(), gdi_shared );
+    fflush( stderr );
 }

@@ -248,19 +248,30 @@ static unsigned int send_request( const struct __server_request_info *req )
  */
 static void read_reply_data( void *buffer, size_t size )
 {
-    int ret;
+    int ret, fd, saved_errno, fd_flags, check_errno;
 
     for (;;)
     {
-        if ((ret = read( ntdll_get_thread_data()->reply_fd, buffer, size )) > 0)
+        fd = ntdll_get_thread_data()->reply_fd;
+        if ((ret = read( fd, buffer, size )) > 0)
         {
             if (!(size -= ret)) return;
             buffer = (char *)buffer + ret;
             continue;
         }
         if (!ret) break;
-        if (errno == EINTR) continue;
-        if (errno == EPIPE) break;
+        saved_errno = errno;
+        if (saved_errno == EINTR) continue;
+        if (saved_errno == EPIPE) break;
+        fd_flags = fcntl( fd, F_GETFD );
+        check_errno = fd_flags < 0 ? errno : 0;
+        fprintf( stderr, "mr-server-read-failure: pid=%d tid=%lx fd=%d ret=%d errno=%d "
+                 "fd_flags=%d fd_errno=%d teb=%p reply_field=%d request_fd=%d wait_read=%d wait_write=%d caller=%p\n",
+                 (int)getpid(), (unsigned long)NtCurrentTeb()->ClientId.UniqueThread, fd, ret, saved_errno,
+                 fd_flags, check_errno, NtCurrentTeb(), ntdll_get_thread_data()->reply_fd,
+                 ntdll_get_thread_data()->request_fd, ntdll_get_thread_data()->wait_fd[0],
+                 ntdll_get_thread_data()->wait_fd[1], __builtin_return_address(0) );
+        errno = saved_errno;
         server_protocol_perror("read");
     }
     /* the server closed the connection; time to die... */
@@ -282,6 +293,126 @@ static inline unsigned int wait_reply( struct __server_request_info *req )
 }
 
 
+/* ★★★★★ ЛЕЙН ПРИБОРЫ, 25.08 — ПРИБОР ОТВЕТА WINESERVER.
+ *
+ * Зачем. Карта времени (лейн КАРТА, вычитание НА ИГРЕ) опознала 2,5 % пути загрузки и
+ * оставила ~97 % необъяснённого. Причина названа: у крупных кусков НЕТ ГЕЙТОВ, поэтому
+ * вычитание их не отделяет. Ответ wineserver — крупнейший из них, и до сегодня в этом
+ * файле не было НИ ОДНОГО прибора (проверено поиском: маркеров macrunner ноль).
+ *
+ * Что меряем. `server_call_unlocked` — единственная точка, через которую проходит КАЖДЫЙ
+ * запрос к серверу (`wine_server_call` только оборачивает её маской сигналов). Отдельно —
+ * `server_select`: у него, по прежней находке, прерываемое ожидание даёт ДВА прохода.
+ *
+ * Устройство, по образцу счётчиков hb_memory.c (их дисциплина уже оплачена):
+ *   СЧЁТ        всегда включён. Один расслабленный атомарный инкремент против системного
+ *               вызова с переключением процесса — величина заведомо пренебрежимая, но она
+ *               ИЗМЕРЕНА парой «прибор вкл/выкл», а не объявлена (см. журнал лейна).
+ *   ВРЕМЯ       только при `MACRUNNER_HB_TRACE_SERVER=1`: два чтения часов на вызов стоят
+ *               ощутимо, и держать их всегда нельзя — ровно на этом обжёгся
+ *               MACRUNNER_HB_TRACE_DISPATCH_STATS (+5,47 % сам по себе).
+ *   ПЕЧАТЬ      периодическая И по выходу, с pid: под wine в один журнал пишут несколько
+ *               процессов, и без pid ряды сливаются (урок лейна ЛЕСТНИЦА, итерация 327).
+ *
+ * Гейт чтения часов кешируется в статической переменной: getenv на каждом вызове сервера
+ * сам стал бы прибором дороже измеряемого. */
+static unsigned long long mr_srv_calls, mr_srv_ns, mr_srv_sel_calls, mr_srv_sel_ns;
+static int mr_srv_time_on = -1;
+
+/* ★ ПОЧЕМУ УЧЁТ ПО ПОТОКАМ ОБЯЗАТЕЛЕН. Первый замер дал 34,1 с ожидания при прогоне 65 с,
+ * и это ЧИСЛО НЕЛЬЗЯ читать как «52 % прогона»: сумма идёт по всем потокам процесса, а два
+ * потока, ждущие ОДНОВРЕМЕННО, дают 60 с суммы при 30 с настоящих. Поэтому рядом с суммой
+ * держим МАКСИМУМ ПО ОДНОМУ ПОТОКУ: он уже сравним с часами прогона. */
+static __thread unsigned long long mr_srv_sel_ns_thread;
+static __thread unsigned long long mr_srv_sel_n_thread;
+static unsigned long long mr_srv_sel_ns_max;   /* максимум по одному потоку */
+static unsigned long long mr_srv_sel_n_max;
+static unsigned long long mr_srv_threads;      /* сколько потоков вообще ждали */
+#define MR_SRV_LONG_MAX 64
+static unsigned mr_srv_long_ms[MR_SRV_LONG_MAX];   /* длительности ожиданий >= 0,5 с */
+static unsigned mr_srv_long_n;
+
+static inline int mr_srv_timing(void)
+{
+    if (mr_srv_time_on < 0)
+    {
+        const char *v = getenv( "MACRUNNER_HB_TRACE_SERVER" );
+        mr_srv_time_on = (v && *v && *v != '0') ? 1 : 0;
+    }
+    return mr_srv_time_on;
+}
+
+static inline unsigned long long mr_srv_now(void)
+{
+    struct timespec ts;
+    if (!mr_srv_timing()) return 0;
+    clock_gettime( CLOCK_MONOTONIC, &ts );
+    return (unsigned long long)ts.tv_sec * 1000000000ull + (unsigned long long)ts.tv_nsec;
+}
+
+static void mr_srv_report(void)
+{
+    fprintf( stderr,
+             "macrunner-server-census: pid=%d calls=%llu ns=%llu select=%llu select_ns=%llu "
+             "sel_thr_max_ns=%llu sel_thr_max_n=%llu threads=%llu\n",
+             (int)getpid(), mr_srv_calls, mr_srv_ns, mr_srv_sel_calls, mr_srv_sel_ns,
+             mr_srv_sel_ns_max, mr_srv_sel_n_max, mr_srv_threads );
+    if (mr_srv_long_n)
+    {
+        unsigned i, k = mr_srv_long_n < MR_SRV_LONG_MAX ? mr_srv_long_n : MR_SRV_LONG_MAX;
+        fprintf( stderr, "macrunner-server-longwaits: pid=%d n=%u ms=", (int)getpid(), mr_srv_long_n );
+        for (i = 0; i < k; i++) fprintf( stderr, "%s%u", i ? "," : "", mr_srv_long_ms[i] );
+        fprintf( stderr, "\n" );
+    }
+    fflush( stderr );
+}
+
+static inline void mr_srv_note( unsigned long long t0, int is_select )
+{
+    unsigned long long n;
+    static int atexit_done;
+
+    if (is_select) n = __atomic_add_fetch( &mr_srv_sel_calls, 1, __ATOMIC_RELAXED );
+    else           n = __atomic_add_fetch( &mr_srv_calls, 1, __ATOMIC_RELAXED );
+
+    if (t0)
+    {
+        unsigned long long d = mr_srv_now() - t0;
+        __atomic_add_fetch( is_select ? &mr_srv_sel_ns : &mr_srv_ns, d, __ATOMIC_RELAXED );
+        if (is_select)
+        {
+            if (!mr_srv_sel_n_thread) __atomic_add_fetch( &mr_srv_threads, 1, __ATOMIC_RELAXED );
+            mr_srv_sel_n_thread++;
+            mr_srv_sel_ns_thread += d;
+            /* максимум обновляем без CAS: гонка здесь даёт заниженный, а не завышенный
+             * максимум, и это безопасная сторона ошибки для вывода «ждал один поток». */
+            /* ★ ДЛИННОЕ ОЖИДАНИЕ ПЕЧАТАЕМ ПОШТУЧНО. Сумма 34,9 с в ЧЕТЫРЁХ вызовах ничего не
+             * говорит о том, мешали ли они работе: припаркованный поток не стоит ничего, а
+             * ожидание на критическом пути стоит всё. Разница видна только на оси времени,
+             * поэтому каждое ожидание длиннее полусекунды печатается отдельно — их единицы,
+             * цена печати нулевая. Метку времени ставит сам журнал прогона. */
+            /* ★ ПЕЧАТАТЬ ОТСЮДА НЕЛЬЗЯ — проверено ценой зависшего прогона.
+             * Первая редакция звала fprintf прямо здесь, и прогон встал на 8,5 минуты:
+             * поток выходит из ожидания сервера и берёт блокировку stderr, которую держит
+             * другой поток, сам ушедший в это же ожидание. Классический клинч «печать в
+             * горячем пути». Длинные ожидания копим в массиве и печатаем ПО ВЫХОДУ. */
+            if (d >= 500000000ull)
+            {
+                unsigned n2 = __atomic_fetch_add( &mr_srv_long_n, 1, __ATOMIC_RELAXED );
+                if (n2 < MR_SRV_LONG_MAX) mr_srv_long_ms[n2] = (unsigned)(d / 1000000ull);
+            }
+            if (mr_srv_sel_ns_thread > __atomic_load_n( &mr_srv_sel_ns_max, __ATOMIC_RELAXED ))
+            {
+                __atomic_store_n( &mr_srv_sel_ns_max, mr_srv_sel_ns_thread, __ATOMIC_RELAXED );
+                __atomic_store_n( &mr_srv_sel_n_max, mr_srv_sel_n_thread, __ATOMIC_RELAXED );
+            }
+        }
+    }
+    if (!atexit_done) { atexit_done = 1; atexit( mr_srv_report ); }
+    if ((n & 0x3fffu) == 0) mr_srv_report();   /* раз в 16 384 — редко, но не «никогда» */
+}
+
+
 /***********************************************************************
  *           server_call_unlocked
  */
@@ -289,9 +420,12 @@ unsigned int server_call_unlocked( void *req_ptr )
 {
     struct __server_request_info * const req = req_ptr;
     unsigned int ret;
+    unsigned long long mr_t0 = mr_srv_now();   /* ЛЕЙН ПРИБОРЫ: ноль, когда гейт выключен */
 
-    if ((ret = send_request( req ))) return ret;
-    return wait_reply( req );
+    if ((ret = send_request( req ))) { mr_srv_note( mr_t0, 0 ); return ret; }
+    ret = wait_reply( req );
+    mr_srv_note( mr_t0, 0 );
+    return ret;
 }
 
 
@@ -586,7 +720,7 @@ static void invoke_system_apc( const union apc_call *call, union apc_result *res
         {
             LARGE_INTEGER offset;
             offset.QuadPart = call->map_view.offset;
-            result->map_view.status = NtMapViewOfSection( wine_server_ptr_handle(call->map_view.handle),
+            result->map_view.status = WINE_NT_MAP_VIEW( wine_server_ptr_handle(call->map_view.handle),
                                                           NtCurrentProcess(),
                                                           &addr, bits, 0, &offset, &size, 0,
                                                           call->map_view.alloc_type, call->map_view.prot );
@@ -722,6 +856,7 @@ unsigned int server_select( const union select_op *select_op, data_size_t size, 
     unsigned int ret;
     int cookie;
     obj_handle_t apc_handle = 0;
+    unsigned long long mr_t0 = mr_srv_now();   /* ЛЕЙН ПРИБОРЫ */
     BOOL suspend_context = !!context;
     union apc_result result;
     sigset_t old_set;
@@ -785,6 +920,7 @@ unsigned int server_select( const union select_op *select_op, data_size_t size, 
         context[0].flags &= ~SERVER_CTX_EXEC_SPACE;
         context[1].flags &= ~SERVER_CTX_EXEC_SPACE;
     }
+    mr_srv_note( mr_t0, 1 );   /* ЛЕЙН ПРИБОРЫ: отдельный счёт для server_select */
     return ret;
 }
 
@@ -1297,7 +1433,6 @@ int server_pipe( int fd[2] )
     return ret;
 }
 
-
 /***********************************************************************
  *           init_server_dir
  */
@@ -1308,7 +1443,16 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
 #ifdef __ANDROID__  /* there's no /tmp dir on Android */
     asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
 #else
-    asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
+    /* Must match wineserver's create_server_dir() in server/request.c:
+     * use $TMPDIR (if it's an absolute path), else /tmp. On macOS the
+     * default TMPDIR is /var/folders/.../T, not /tmp — without this
+     * wine and wineserver would compute different server_dir paths and
+     * wine would fail with "chdir to /tmp/.wine-<uid>/server-... : No
+     * such file or directory" right after wineserver detaches. */
+    const char *tmpdir = getenv( "TMPDIR" );
+    if (!tmpdir || !tmpdir[0] || tmpdir[0] != '/') tmpdir = "/tmp";
+    asprintf( &dir, "%s/.wine-%u/server-%llx-%llx", tmpdir, getuid(),
+              (unsigned long long)dev, (unsigned long long)ino );
 #endif
     return dir;
 }
@@ -1704,6 +1848,14 @@ size_t server_init_process(void)
             fatal_error( "WINEARCH set to win32 but '%s' is a 64-bit installation.\n", config_dir );
 #ifndef _WIN64
         NtCurrentTeb()->GdiBatchCount = PtrToUlong( (char *)NtCurrentTeb() - teb_offset );
+        {
+            static unsigned mr_n;
+            if (mr_n++ < 8)
+                fprintf( stderr, "macrunner-wowoff-писатель: место=server teb=%p было=%08lx "
+                         "пишем=%08lx\n", NtCurrentTeb(),
+                         (unsigned long)(ULONG)NtCurrentTeb()->WowTebOffset,
+                         (unsigned long)(ULONG)(-teb_offset) );
+        }
         NtCurrentTeb()->WowTebOffset  = -teb_offset;
         wow_peb = (PEB64 *)((char *)peb - page_size);
 #endif

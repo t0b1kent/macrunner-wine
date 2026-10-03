@@ -2332,7 +2332,7 @@ static BOOL handle_syscall_fault( ucontext_t *sigcontext, EXCEPTION_RECORD *rec,
         RDI_sig(sigcontext) = (ULONG_PTR)ntdll_get_thread_data()->jmp_buf;
         RSI_sig(sigcontext) = 1;
         RIP_sig(sigcontext) = (ULONG_PTR)longjmp;
-        ntdll_get_thread_data()->jmp_buf = NULL;
+        ntdll_set_exception_jmp_buf( NULL );
     }
     else
     {

@@ -169,6 +169,62 @@ static struct lconv cloc_lconv =
 #endif
 };
 
+static char bootstrap_c_locale_name[] = "C";
+static wchar_t bootstrap_c_wlocale_name[] = L"C";
+static int bootstrap_c_category_refcounts[LC_MAX - LC_MIN + 1] = { 1, 1, 1, 1, 1, 1 };
+static int bootstrap_c_category_wrefcounts[LC_MAX - LC_MIN + 1] = { 1, 1, 1, 1, 1, 1 };
+
+static threadlocinfo bootstrap_c_locinfo =
+{
+#if _MSVCR_VER >= 140
+    .pctype = MSVCRT__ctype + 1,
+    .mb_cur_max = 1,
+    .lc_codepage = 0,
+#endif
+    .refcount = 1,
+    .lc_collate_cp = 0,
+    .lc_category =
+    {
+        [LC_ALL]      = { bootstrap_c_locale_name, bootstrap_c_wlocale_name,
+                          &bootstrap_c_category_refcounts[LC_ALL],
+                          &bootstrap_c_category_wrefcounts[LC_ALL] },
+        [LC_COLLATE]  = { bootstrap_c_locale_name, bootstrap_c_wlocale_name,
+                          &bootstrap_c_category_refcounts[LC_COLLATE],
+                          &bootstrap_c_category_wrefcounts[LC_COLLATE] },
+        [LC_CTYPE]    = { bootstrap_c_locale_name, bootstrap_c_wlocale_name,
+                          &bootstrap_c_category_refcounts[LC_CTYPE],
+                          &bootstrap_c_category_wrefcounts[LC_CTYPE] },
+        [LC_MONETARY] = { bootstrap_c_locale_name, bootstrap_c_wlocale_name,
+                          &bootstrap_c_category_refcounts[LC_MONETARY],
+                          &bootstrap_c_category_wrefcounts[LC_MONETARY] },
+        [LC_NUMERIC]  = { bootstrap_c_locale_name, bootstrap_c_wlocale_name,
+                          &bootstrap_c_category_refcounts[LC_NUMERIC],
+                          &bootstrap_c_category_wrefcounts[LC_NUMERIC] },
+        [LC_TIME]     = { bootstrap_c_locale_name, bootstrap_c_wlocale_name,
+                          &bootstrap_c_category_refcounts[LC_TIME],
+                          &bootstrap_c_category_wrefcounts[LC_TIME] },
+    },
+    .lc_clike = 1,
+#if _MSVCR_VER < 140
+    .mb_cur_max = 1,
+#endif
+    .lconv = &cloc_lconv,
+#if _MSVCR_VER < 140
+    .pctype = MSVCRT__ctype + 1,
+#endif
+    .pclmap = cloc_clmap,
+    .pcumap = cloc_cumap,
+    .lc_time_curr = &cloc_time_data,
+};
+
+static threadmbcinfo bootstrap_c_mbcinfo =
+{
+    .refcount = 1,
+    .mbcodepage = 20127,
+    .ismbcodepage = 0,
+    .mblcid = 0,
+};
+
 /* Friendly country strings & language names abbreviations. */
 static const char * const _country_synonyms[] =
 {
@@ -608,6 +664,9 @@ static void grab_locinfo(pthreadlocinfo locinfo)
 
 static void update_thread_locale(thread_data_t *data)
 {
+    if(!MSVCRT_locale)
+        return;
+
     if((data->locale_flags & LOCALE_FREE) && ((data->locale_flags & LOCALE_THREAD) ||
                 (data->locinfo == MSVCRT_locale->locinfo && data->mbcinfo == MSVCRT_locale->mbcinfo)))
         return;
@@ -635,14 +694,14 @@ static void update_thread_locale(thread_data_t *data)
 pthreadlocinfo CDECL get_locinfo(void) {
     thread_data_t *data = msvcrt_get_thread_data();
     update_thread_locale(data);
-    return data->locinfo;
+    return data->locinfo ? data->locinfo : &bootstrap_c_locinfo;
 }
 
 /* INTERNAL: returns pthreadmbcinfo struct */
 pthreadmbcinfo CDECL get_mbcinfo(void) {
     thread_data_t *data = msvcrt_get_thread_data();
     update_thread_locale(data);
-    return data->mbcinfo;
+    return data->mbcinfo ? data->mbcinfo : &bootstrap_c_mbcinfo;
 }
 
 /* INTERNAL: constructs string returned by setlocale */
@@ -932,7 +991,7 @@ done:
 int CDECL __crtLCMapStringW(LCID lcid, DWORD mapflags, const wchar_t *src,
         int srclen, wchar_t *dst, int dstlen, unsigned int codepage, int xflag)
 {
-    FIXME("(lcid %lx, flags %lx, %s(%d), %p(%d), %x, %d), partial stub!\n",
+    TRACE("(lcid %lx, flags %lx, %s(%d), %p(%d), %x, %d)\n",
             lcid, mapflags, debugstr_w(src), srclen, dst, dstlen, codepage, xflag);
 
     return LCMapStringW(lcid, mapflags, src, srclen, dst, dstlen);
@@ -992,7 +1051,7 @@ int CDECL __crtGetLocaleInfoEx( const WCHAR *locale, LCTYPE type, wchar_t *buffe
 BOOL CDECL __crtGetStringTypeW(DWORD unk, DWORD type,
         wchar_t *buffer, int len, WORD *out)
 {
-    FIXME("(unk %lx, type %lx, wstr %p(%d), %p) partial stub\n",
+    TRACE("(unk %lx, type %lx, wstr %p(%d), %p)\n",
             unk, type, buffer, len, out);
 
     return GetStringTypeW(type, buffer, len, out);
@@ -1151,8 +1210,8 @@ _locale_t CDECL get_current_locale_noalloc(_locale_t locale)
     thread_data_t *data = msvcrt_get_thread_data();
 
     update_thread_locale(data);
-    locale->locinfo = data->locinfo;
-    locale->mbcinfo = data->mbcinfo;
+    locale->locinfo = data->locinfo ? data->locinfo : &bootstrap_c_locinfo;
+    locale->mbcinfo = data->mbcinfo ? data->mbcinfo : &bootstrap_c_mbcinfo;
 
     grab_locinfo(locale->locinfo);
     InterlockedIncrement(&locale->mbcinfo->refcount);
@@ -2130,6 +2189,7 @@ int CDECL _configthreadlocale(int type)
 
 BOOL msvcrt_init_locale(void)
 {
+    thread_data_t *data;
     int i;
 
     _lock_locales();
@@ -2137,6 +2197,11 @@ BOOL msvcrt_init_locale(void)
     _unlock_locales();
     if(!MSVCRT_locale)
         return FALSE;
+    if ((data = TlsGetValue(msvcrt_tls_index)))
+    {
+        if (!data->locinfo) data->locinfo = MSVCRT_locale->locinfo;
+        if (!data->mbcinfo) data->mbcinfo = MSVCRT_locale->mbcinfo;
+    }
 
     MSVCRT___lc_codepage = MSVCRT_locale->locinfo->lc_codepage;
     MSVCRT___lc_collate_cp = MSVCRT_locale->locinfo->lc_collate_cp;

@@ -1259,6 +1259,7 @@ static NTSTATUS create_logical_proc_info(void)
 {
     unsigned int pkgs_no, cores_no, lcpu_no, lcpu_per_core, cores_per_package, assoc;
     unsigned int cache_ctrs[10] = {0};
+    BOOL synth_l3 = FALSE;
     ULONG_PTR all_cpus_mask = 0;
     CACHE_DESCRIPTOR cache[10];
     LONGLONG cache_size, cache_line_size, cache_sharing[10];
@@ -1328,6 +1329,21 @@ static NTSTATUS create_logical_proc_info(void)
     size = sizeof(cache_size);
     if (!sysctlbyname("hw.l3cachesize", &cache_size, &size, NULL, 0))
         cache[4].Size = cache_size;
+#ifdef __aarch64__
+    else
+    {
+        /* MacRunner (Indiana Jones GOG v11, 29.09.2026): Apple silicon reports no L3 (hw.l3cachesize and the 4th
+         * hw.cacheconfig entry are absent; the system-level cache is not exposed). Windows programs divide by the
+         * number of L3 caches: TheGreatCircle.exe Sys_CPUDesc does "idiv" by it and dies with c0000094 at
+         * +0x553b0e. Report one L3 shared by all logical CPUs, sized like the performance cluster's L2. */
+        size = sizeof(cache_size);
+        if (!sysctlbyname("hw.perflevel0.l2cachesize", &cache_size, &size, NULL, 0) && cache_size)
+            cache[4].Size = cache_size;
+        else
+            cache[4].Size = cache[3].Size;
+        synth_l3 = TRUE;
+    }
+#endif
 
     size = sizeof(cache_sharing);
     if (sysctlbyname("hw.cacheconfig", cache_sharing, &size, NULL, 0) < 0)
@@ -1352,6 +1368,7 @@ static NTSTATUS create_logical_proc_info(void)
         if (cache_sharing[3] && (lcpu_no % cache_sharing[3])) cache_sharing[3] = 1;
         if (cache_sharing[2] && (lcpu_no % cache_sharing[2])) cache_sharing[2] = 1;
     }
+    if (synth_l3) cache_sharing[4] = lcpu_no;   /* MacRunner: the synthesized L3 is shared by all CPUs */
 
     for(p = 0; p < pkgs_no; ++p)
     {
@@ -1994,12 +2011,50 @@ static DWORD get_core_id_regs_arm64( struct smbios_wine_id_reg_value_arm64 *regs
     return regidx;
 }
 
+#elif defined(__APPLE__)
+
+static BOOL get_darwin_arm64_feature( const char *name )
+{
+    int supported = 0;
+    size_t size = sizeof(supported);
+
+    return !sysctlbyname( name, &supported, &size, NULL, 0 ) &&
+           size == sizeof(supported) && supported == 1;
+}
+
+static DWORD get_core_id_regs_arm64( struct smbios_wine_id_reg_value_arm64 *regs,
+                                     WORD logical_thread_id )
+{
+    DWORD count = 0;
+
+    ULONGLONG isar0 = 0;
+
+    /* macOS does not expose the ID registers directly. Report only fields
+     * confirmed by its system-wide capability queries. */
+    if (get_darwin_arm64_feature( "hw.optional.arm.FEAT_LSE" ))
+        isar0 |= 2ull << 20;
+    if (get_darwin_arm64_feature( "hw.optional.arm.FEAT_FlagM" ))
+    {
+        ULONGLONG level = get_darwin_arm64_feature( "hw.optional.arm.FEAT_FlagM2" ) ? 2 : 1;
+        isar0 |= level << 52;
+    }
+    if (isar0)
+        regs[count++] = (struct smbios_wine_id_reg_value_arm64){ 0x4030, isar0 };
+    if (get_darwin_arm64_feature( "hw.optional.arm.FEAT_LRCPC" ))
+    {
+        ULONGLONG level = get_darwin_arm64_feature( "hw.optional.arm.FEAT_LRCPC2" ) ? 2 : 1;
+        regs[count++] = (struct smbios_wine_id_reg_value_arm64){ 0x4031, level << 20 };
+    }
+    return count;
+}
+
 #else
 
 static DWORD get_core_id_regs_arm64( struct smbios_wine_id_reg_value_arm64 *regs,
                                      WORD logical_thread_id )
 {
-    FIXME("stub\n");
+    TRACE("ID register population is not available on this platform, regs %p, thread %u.\n",
+          regs, logical_thread_id);
     return 0;
 }
 
@@ -3974,6 +4029,14 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
                                             void *query, ULONG query_len,
                                             void *info, ULONG size, ULONG *ret_size )
 {
+    /* MacRunner 2026-08-15, лейн ЛЕСТНИЦА, итерация 955 — ЗОНД НА ВХОДЕ В САМУ ФУНКЦИЮ.
+     * Зонд внутри `case` показал ОДНО срабатывание при пяти известных вызовах. Вопрос, на
+     * который он ответить не может: вызовы не доходят до функции вовсе или доходят и уходят
+     * в другой `case`. Печатаем КЛАСС и счётчик на входе — тогда видно и то, и другое. */
+    { static int said_ex; said_ex++; if (said_ex <= 64) {
+        fprintf( stderr, "macrunner-sysinfoex-probe: вызов #%d class=0x%x ret_size=%p\n",
+                 said_ex, (unsigned)class, ret_size ); fflush( stderr ); } }
+
     ULONG len = 0;
     unsigned int ret = STATUS_NOT_IMPLEMENTED;
 
@@ -4057,8 +4120,16 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
     case SystemSupportedProcessorArchitectures:
     {
         SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION *machines = info;
+        /* MacRunner 2026-08-15, лейн ЛЕСТНИЦА, итерация 953 — БЕЗУСЛОВНЫЙ ЗОНД.
+         * Набор ступени 9 говорит: запрос вернул успех и НЕ выставил длину (подпроверки
+         * `current` и `zero`, 14098 отказов). Реализация ниже длину выставляет, значит либо
+         * вызов сюда не доходит вовсе, либо теряется на раннем возврате. Печать безусловная и
+         * ограничена восемью разами: событие редкое, гейт тут только помешал бы. */
+        { static int said; said++; if (said <= 64) {
+            fprintf( stderr, "macrunner-sysarch-probe: вызов #%d query=%p query_len=%u size=%u ret_size=%p\n",
+                     said, query, query_len, size, ret_size ); fflush( stderr ); } }
         HANDLE process;
-        ULONG i;
+        ULONG i, j;
         USHORT machine = 0;
 
         if (!query || query_len < sizeof(HANDLE)) return STATUS_INVALID_PARAMETER;
@@ -4074,7 +4145,25 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
             if (ret) return ret;
         }
 
-        len = (supported_machines_count + 1) * sizeof(*machines);
+        /* MacRunner 2026-08-16, лейн ЛЕСТНИЦА, итерация 1059 — ДЛИНУ СЧИТАЕТ ТО ЖЕ ПРАВИЛО,
+         * ЧТО И ЗАПОЛНЕНИЕ. Раньше длина бралась из `supported_machines_count`, а цикл ниже
+         * часть машин пропускает: в ответе оставались нулевые записи (`wow64.c:223`), а на
+         * пути «буфер мал» объявлялась длина больше настоящей (`wow64.c:240 wrong len 16`).
+         * Считаем записи ЗАРАНЕЕ тем же условием, что и заполняет, — один источник истины. */
+        len = sizeof(*machines);   /* родная машина */
+        for (i = 1; i < supported_machines_count; i++)
+        {
+#if defined(__APPLE__) && defined(__aarch64__)
+            if (!is_machine_64bit( supported_machines[i] ) &&
+                !(supported_machines[i] == IMAGE_FILE_MACHINE_I386 &&
+                  (main_image_info.Machine == IMAGE_FILE_MACHINE_I386 ||
+                   getenv( "MACRUNNER_HB_WOW64_GUEST32" ))))
+                continue;
+#endif
+            len += sizeof(*machines);
+        }
+        if (wow64_using_32bit_prefix) len = sizeof(*machines);   /* ниже отдаётся одна запись */
+        len += sizeof(*machines);   /* завершающая нулевая */
         if (size < len)
         {
             ret = STATUS_BUFFER_TOO_SMALL;
@@ -4103,13 +4192,26 @@ NTSTATUS WINAPI NtQuerySystemInformationEx( SYSTEM_INFORMATION_CLASS class,
         machines[0].WoW64Container = 0;
         machines[0].ReservedZero0 = 0;
         /* wow64 machines */
-        for (i = 1; i < supported_machines_count; i++)
+        for (i = 1, j = 1; i < supported_machines_count; i++)
         {
-            machines[i].Machine = supported_machines[i];
-            machines[i].UserMode = 1;
-            machines[i].Process = supported_machines[i] == machine;
-            machines[i].WoW64Container = 1;
+#if defined(__APPLE__) && defined(__aarch64__)
+            if (!is_machine_64bit( supported_machines[i] ) &&
+                !(supported_machines[i] == IMAGE_FILE_MACHINE_I386 &&
+                  (main_image_info.Machine == IMAGE_FILE_MACHINE_I386 ||
+                   getenv( "MACRUNNER_HB_WOW64_GUEST32" ))))
+                continue;
+#endif
+            machines[j].Machine = supported_machines[i];
+            machines[j].UserMode = 1;
+            machines[j].Process = supported_machines[i] == machine;
+            machines[j].WoW64Container = 1;
+            j++;
         }
+
+        /* Проверка согласия предрасчёта с заполнением: разойдутся — виден будет источник. */
+        if (len != (j + 1) * sizeof(*machines))
+            fprintf( stderr, "macrunner-sysarch-len: предрасчёт=%u заполнено=%u\n",
+                     (unsigned)len, (unsigned)((j + 1) * sizeof(*machines)) );
 
         ret = STATUS_SUCCESS;
         break;

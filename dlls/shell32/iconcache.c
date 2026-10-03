@@ -20,6 +20,7 @@
 
 #include <stdarg.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/types.h>
 
 #define COBJMACROS
@@ -40,6 +41,27 @@
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
 /********************** THE ICON CACHE ********************************/
+
+static void SIC_EnsureShell32Identity(void)
+{
+    HMODULE module = shell32_hInstance;
+
+    if (!module)
+    {
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (const WCHAR *)SIC_EnsureShell32Identity, &module);
+        if (!module) module = GetModuleHandleW(L"shell32.dll");
+        if (!module) module = GetModuleHandleW(L"shell32");
+        if (module) shell32_hInstance = module;
+    }
+
+    if (module && !swShell32Name[0])
+    {
+        GetModuleFileNameW(module, swShell32Name, MAX_PATH);
+        swShell32Name[MAX_PATH - 1] = 0;
+    }
+}
 
 #define INVALID_INDEX -1
 
@@ -431,6 +453,8 @@ static BOOL WINAPI SIC_Initialize( INIT_ONCE *once, void *param, void **context 
     BOOL failed = FALSE;
     unsigned int i;
 
+    SIC_EnsureShell32Identity();
+
     if (!IsProcessDPIAware())
     {
         sizes[SHIL_LARGE].cx = sizes[SHIL_LARGE].cy = get_shell_icon_size();
@@ -655,6 +679,7 @@ BOOL PidlToSicIndex (
 	TRACE("sf=%p pidl=%p %s\n", sh, pidl, bBigIcon?"Big":"Small");
 
         InitOnceExecuteOnce( &sic_init_once, SIC_Initialize, NULL, NULL );
+        *pIndex = INVALID_INDEX;
 
 	if (SUCCEEDED (IShellFolder_GetUIObjectOf(sh, 0, 1, &pidl, &IID_IExtractIconW, 0, (void **)&ei)))
 	{
@@ -1132,11 +1157,14 @@ HRESULT WINAPI SHGetStockIconInfo(SHSTOCKICONID id, UINT flags, SHSTOCKICONINFO 
  */
 HRESULT WINAPI SHGetImageList(int iImageList, REFIID riid, void **ppv)
 {
+    HRESULT hr;
+
     TRACE("(%d, %s, %p)\n", iImageList, debugstr_guid(riid), ppv);
 
     if (iImageList < 0 || iImageList > SHIL_LAST)
         return E_FAIL;
 
     InitOnceExecuteOnce( &sic_init_once, SIC_Initialize, NULL, NULL );
-    return HIMAGELIST_QueryInterface(shell_imagelists[iImageList], riid, ppv);
+    hr = HIMAGELIST_QueryInterface(shell_imagelists[iImageList], riid, ppv);
+    return hr;
 }

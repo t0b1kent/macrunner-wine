@@ -23,6 +23,7 @@
 
 #include "config.h"
 #include <time.h>
+#include <stdio.h>   /* MacRunner 2648: зонд macrunner-vk-init печатает в stderr */
 
 #include "vulkan_private.h"
 #include "wine/vulkan_driver.h"
@@ -991,6 +992,40 @@ NTSTATUS vk_is_available_device_function(void *arg)
 
 #endif /* _WIN64 */
 
+/* MacRunner 2026-08-22, лейн ЛЕСТНИЦА, итерация 2648 — СТЕНА DIABLO ПОСЛЕ ОКНА.
+ * Тот же класс и та же болезнь, что я лечила в `opengl32/unix_wgl.c` на итерации 2610,
+ * только во второй библиотеке. `ULongToPtr` расширяет 32 бита нулями и отдаёт адрес в
+ * нижних 4 ГБ; на macOS там `__PAGEZERO` и не отображено ничего, а окно 32-битного гостя
+ * у нас лежит по базе (0x300000000 в замеренном прогоне).
+ * ИЗМЕРЕНО (прогон ab2640, Diablo): три отказа `c0000005` по адресу `0x7776b068`,
+ * `sig_symbol=wow64_init_vulkan`, слово по PC `b9000268` = `STR W8,[X19]`, `x19=0x7776b068`.
+ * Пишет сюда `init_vulkan` строкой 269: `*params->extensions = vk_funcs->client_extensions`.
+ * Хозяйская форма `0x37776b068` в журнале не встречается НИ РАЗУ, тогда как соседний
+ * адрес той же страницы `0x37776B118` переведён верно 15 раз — то есть рядом перевод есть,
+ * а здесь его нет. Отказы идут с 70,3 с и до выхода игры на 76 с.
+ * Переводчик берём через `dlsym`: `winevulkan.so` не линкуется с нашим `ntdll.so` напрямую
+ * (ровно как в opengl32). NULL-безопасен: при отсутствии перевода поведение прежнее. */
+static inline void *macrunner_guest32_host_ptr( ULONG addr )
+{
+    static void *(*resolve)( ULONG_PTR );
+    static int tried;
+
+    if (!tried)
+    {
+        extern void *dlsym( void *, const char * );
+        tried = 1;
+        resolve = (void *(*)( ULONG_PTR ))dlsym( (void *)-2 /* RTLD_DEFAULT */,
+                                                 "macrunner_hb_wow64_guest32_host_ptr" );
+    }
+    if (resolve)
+    {
+        void *host = resolve( addr );
+
+        if (host) return host;
+    }
+    return ULongToPtr( addr );
+}
+
 NTSTATUS wow64_init_vulkan(void *arg)
 {
     struct
@@ -1002,7 +1037,13 @@ NTSTATUS wow64_init_vulkan(void *arg)
     struct init_params params;
     params.call_vulkan_debug_report_callback = params32->call_vulkan_debug_report_callback;
     params.call_vulkan_debug_utils_callback = params32->call_vulkan_debug_utils_callback;
-    params.extensions = UlongToPtr(params32->extensions);
+    /* БУФЕР, в который ПИШЕТ хост (init_vulkan:269), а не описатель — переводить обязательно. */
+    params.extensions = macrunner_guest32_host_ptr(params32->extensions);
+    /* БЕЗУСЛОВНЫЙ ЗОНД: доказывает, что в прогоне работает ПЕРЕСОБРАННЫЙ winevulkan.so,
+     * и показывает обе формы адреса. Печатает всегда — маркер за гейтом это лотерея. */
+    fprintf( stderr, "macrunner-vk-init: guest_extensions=%08x host_extensions=%p\n",
+             (unsigned)params32->extensions, params.extensions );
+    fflush( stderr );
     return init_vulkan(&params);
 }
 

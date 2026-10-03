@@ -279,6 +279,38 @@ NTSTATUS unixcall_wine_dbg_write( void *args )
 {
     struct wine_dbg_write_params *params = args;
 
+    /* ★★★★★ ИТЕРАЦИЯ 80, лейн МЕЛКИЕ — СВЯЗКА wine-pid <-> ospid, ОДИН РАЗ НА ПОТОК.
+     *
+     * Карта загрузчика (`+loaddll`) помечена pid-ом WINE (`%04x`), а все наши приборы
+     * печатают `getpid()`. Соединить их было нечем, и в журнале taskmgr это стоило
+     * достоверности: 16 процессов, ОДИННАДЦАТЬ разных `.exe` на базе 0x140000000,
+     * 14 загрузок `rpcrt4.dll` на 9 базах (замер итерации 79). Из-за этого и
+     * `koren-otkaza.py`, и я привязывали адрес не к тому модулю.
+     *
+     * Две неудачные точки, обе проверены замером, а не рассуждением:
+     *   1) `macrunner-dbgchan-init` — напечатал `winepid=0000` 16 раз из 16:
+     *      `ClientId` там ещё не заполнен;
+     *   2) построитель префикса в этом же файле — не сработал ни разу: строки
+     *      `loaddll` формирует PE-сторона, до unix-построителя они не доходят.
+     * Здесь же проходит КАЖДАЯ строка трассы PE-стороны, и TEB заведомо годен —
+     * это обычный вызов, не обработчик сигнала. */
+    {
+        static __thread int pidmap_said;
+
+        if (!pidmap_said)
+        {
+            unsigned wpid = (unsigned)GetCurrentProcessId();
+
+            if (wpid)
+            {
+                char buf[96];
+                int n = snprintf( buf, sizeof(buf), "macrunner-pidmap: winepid=%04x ospid=%d\n",
+                                  wpid, (int)getpid() );
+                pidmap_said = 1;
+                if (n > 0) write( 2, buf, n );
+            }
+        }
+    }
     return write( 2, params->str, params->len );
 }
 
@@ -294,7 +326,16 @@ NTSTATUS wow64_wine_dbg_write( void *args )
         unsigned int len;
     } const *params32 = args;
 
-    return write( 2, ULongToPtr(params32->str), params32->len );
+    /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 256 — НЕНУЛЕВАЯ БАЗА 32-БИТНОГО ГОСТЯ.
+     * `ULongToPtr` здесь давал адрес в нижних 4 ГБ, где у нас ничего не отображено: macOS не
+     * даёт `__PAGEZERO` меньше 4 ГБ, поэтому гостевое пространство живёт по базе. Итог —
+     * `write()` отказывал КАЖДЫЙ раз (замер: 41 697 вызовов, все result=0xffffffff), и вся
+     * отладочная печать wine из 32-битных модулей пропадала. Тот же класс, что уже ловили в
+     * `wow64win` (95 переводов) и `wow64/process.c`. Запасной путь оставлен на случай сборки
+     * без гостевой памяти по базе. */
+    void *host = macrunner_hb_wow64_guest32_host_ptr( params32->str );
+
+    return write( 2, host ? host : ULongToPtr(params32->str), params32->len );
 }
 #endif
 
@@ -368,6 +409,66 @@ void dbg_init(void)
     debug_options = options;
     options[nb_debug_options] = default_option;
     init_done = TRUE;
+    /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 255 — СВЕРКА С ГОСТЕВЫМ ВИДОМ.
+     * Каналы wine из i386-модулей не печатаются вовсе. PE-сторона берёт таблицу по
+     * `PEB32 + page_size` и считает её длину циклом `while (name[0])`; зонд в xtajit показал,
+     * что гость видит по этому адресу запись С ПУСТЫМ ИМЕНЕМ первой, то есть насчитывает ноль
+     * каналов. Печатаем адрес и первые записи ТУТ, чтобы сверить с тем, что видит гость. */
+    /* MacRunner 2026-08-27: pid обязателен. Под Diablo живут несколько процессов, их
+     * адресные пространства независимы, и один и тот же числовой адрес таблицы в разных
+     * процессах — разные страницы. Без pid сверка хозяйского зонда с гостевым
+     * (macrunner-xtajit-dbgchan) сравнивает несравнимое. */
+    /* ★★★★★ ИТЕРАЦИЯ 79-80, лейн МЕЛКИЕ — ОБЩИЙ КЛЮЧ МЕЖДУ КАРТОЙ И ОТКАЗОМ.
+     *
+     * Карта загрузчика (`+loaddll`) помечается pid-ом WINE (шестнадцатеричный `0028`,
+     * см. строку 352: `GetCurrentProcessId()`), а все наши приборы печатают `getpid()`
+     * (десятичный `52536`). Это разные пространства имён, и соединить их было нечем.
+     * Цена измерена в итерации 79: в одном журнале taskmgr — 16 процессов, ОДИННАДЦАТЬ
+     * разных `.exe` на базе 0x140000000 и 14 загрузок `rpcrt4.dll` на 9 базах; любая
+     * привязка адреса к модулю в таком журнале недостоверна, и `koren-otkaza.py` выдал
+     * `wineboot.exe RVA=0x46d27394` при размере образа 0x34000.
+     *
+     * Печать стоит здесь, а не в обработчике сигнала: это путь инициализации, замков
+     * не берёт, и её достаточно ОДНОЙ на процесс — дальше пары сопоставляются разбором. */
+    fprintf( stderr, "macrunner-dbgchan-init: pid=%d winepid=%04x таблица=%p peb=%p is_win64=%d nb=%d "
+             "записи: [%02x '%.15s'] [%02x '%.15s'] [%02x '%.15s'] [%02x '%.15s']\n",
+             (int)getpid(), (unsigned)GetCurrentProcessId(), options, peb, is_win64, nb_debug_options,
+             options[0].flags, options[0].name, options[1].flags, options[1].name,
+             options[2].flags, options[2].name, options[3].flags, options[3].name );
+}
+
+
+/***********************************************************************
+ *  macrunner_dbg_mirror_options
+ *
+ * MacRunner 2026-08-27 — ТАБЛИЦА КАНАЛОВ ДЛЯ i386-СТОРОНЫ.
+ *
+ * Замер (прогон og-raw, сверка по ОДНОМУ процессу и ОДНОМУ адресу, с pid в обоих
+ * зондах): хозяин пишет по 0x300202000 записи [ff 'd3d'] [03 ''], а гость через
+ * 21 мс читает по тому же числовому адресу сырьё
+ *   03 00 00 ... | 03 00 00 ...
+ * — имени 'd3d' там нет вовсе. То есть числовое совпадение адресов обманчиво:
+ * гостевой путь guest32_host_ptr ведёт не в ту страницу, куда писал dbg_init.
+ *
+ * Следствие: TRACE ни из одного i386-модуля (wined3d, ddraw, gdi32, opengl32) не
+ * печатается — видны только fixme и err, включённые по умолчанию. Весь разбор
+ * i386-стороны идёт вслепую.
+ *
+ * Копируем готовую таблицу ещё и по гостевому пути. Зовётся из env.c, когда PEB32
+ * уже установлен и зеркало готово, — в самом dbg_init делать это рано.
+ */
+void macrunner_dbg_mirror_options( ULONG peb32 )
+{
+    void *dst;
+
+    if (!init_done || !peb32) return;
+    if (!(dst = macrunner_hb_wow64_guest32_host_ptr( (ULONG_PTR)peb32 + page_size ))) return;
+    if (dst == debug_options) return;   /* уже одна и та же память — копировать нечего */
+
+    memcpy( dst, debug_options, (nb_debug_options + 1) * sizeof(*debug_options) );
+    fprintf( stderr, "macrunner-dbgchan-зеркало: pid=%d peb32=%08x откуда=%p куда=%p nb=%d\n",
+             (int)getpid(), (unsigned)peb32, debug_options, dst, nb_debug_options );
+    fflush( stderr );
 }
 
 

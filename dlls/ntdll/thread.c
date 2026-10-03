@@ -20,6 +20,8 @@
 
 #include <assert.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <limits.h>
 #include <sys/types.h>
 
@@ -36,7 +38,32 @@ WINE_DECLARE_DEBUG_CHANNEL(relay);
 WINE_DECLARE_DEBUG_CHANNEL(pid);
 WINE_DECLARE_DEBUG_CHANNEL(timestamp);
 
-struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+#if defined(__arm64ec__)
+# define NTDLL_USER_SHARED_DATA_ADDRESS ((ULONG_PTR)0x000007FFE0000000ULL)
+#else
+# define NTDLL_USER_SHARED_DATA_ADDRESS WINE_USER_SHARED_DATA_ADDRESS
+#endif
+
+struct _KUSER_SHARED_DATA *user_shared_data = (void *)NTDLL_USER_SHARED_DATA_ADDRESS;
+
+extern void macrunner_hb_exit_origin_probe_rtl_exit( ULONG status, const void *caller,
+                                                      ULONG last );
+
+static BOOL macrunner_trace_process_exit_enabled(void)
+{
+    static const WCHAR nameW[] =
+        {'M','A','C','R','U','N','N','E','R','_',
+         'T','R','A','C','E','_','P','R','O','C','E','S','S','_','E','X','I','T',0};
+    WCHAR value[8];
+    UNICODE_STRING name, val;
+
+    RtlInitUnicodeString( &name, nameW );
+    val.Buffer = value;
+    val.Length = 0;
+    val.MaximumLength = sizeof(value);
+    return RtlQueryEnvironmentVariable_U( NULL, &name, &val ) == STATUS_SUCCESS &&
+           value[0] && value[0] != '0';
+}
 
 struct debug_info
 {
@@ -66,6 +93,14 @@ static void init_options(void)
 
     debug_options = (struct __wine_debug_channel *)((char *)NtCurrentTeb()->Peb + offset);
     while (debug_options[nb_debug_options].name[0]) nb_debug_options++;
+    /* MacRunner 2026-08-11, лейн ЛЕСТНИЦА, итерация 257 — ЧТО НАСЧИТАЛА PE-СТОРОНА.
+     * Печать из 32-битных модулей заработала в 256 (класс `err` включён по умолчанию), поэтому
+     * впервые можно спросить саму сторону-потребителя: по какому адресу она взяла таблицу,
+     * сколько каналов насчитала и какой первый. Рекурсии нет: `debug_options` уже присвоен, и
+     * повторный заход в `__wine_dbg_get_channel_flags` в `init_options` не свалится. */
+    MESSAGE( "macrunner-i386-dbgopts: peb=%p offset=%u options=%p nb=%d pervyj='%.15s' flags=%02x\n",
+         NtCurrentTeb()->Peb, offset, debug_options, nb_debug_options,
+         nb_debug_options ? debug_options[0].name : "(net)", debug_options[0].flags );
 }
 
 /* add a string to the output buffer */
@@ -236,9 +271,20 @@ void set_native_thread_name( DWORD tid, const char *name )
  */
 void WINAPI RtlExitUserThread( ULONG status )
 {
+    const void *caller = __builtin_extract_return_addr( __builtin_return_address( 0 ) );
     ULONG last;
 
     NtQueryInformationThread( GetCurrentThread(), ThreadAmILastThread, &last, sizeof(last), NULL );
+    macrunner_hb_exit_origin_probe_rtl_exit( status, caller, last );
+    if (macrunner_trace_process_exit_enabled())
+    {
+        RTL_USER_PROCESS_PARAMETERS *params = NtCurrentTeb()->Peb->ProcessParameters;
+
+        MESSAGE( "macrunner-rtl-thread-exit: pid=%lu tid=%lu status=0x%lx last=%lu image=%s cmd=%s\n",
+                 GetCurrentProcessId(), GetCurrentThreadId(), status, last,
+                 params ? debugstr_us( &params->ImagePathName ) : "(null)",
+                 params ? debugstr_us( &params->CommandLine ) : "(null)" );
+    }
     if (last) RtlExitUserProcess( status );
     LdrShutdownThread();
     for (;;) NtTerminateThread( GetCurrentThread(), status );
@@ -465,6 +511,19 @@ static RTL_CRITICAL_SECTION fls_section = { &fls_critsect_debug, -1, 0, 0, 0, 0 
 
 #define MAX_FLS_DATA_COUNT 0xff0
 
+static BOOL macrunner_trace_fls_enabled(void)
+{
+    return FALSE;
+}
+
+static void macrunner_trace_fls_chunks( const char *phase, ULONG a, ULONG b )
+{
+    if (!macrunner_trace_fls_enabled()) return;
+    (void)phase;
+    (void)a;
+    (void)b;
+}
+
 static void lock_fls_data(void)
 {
     RtlEnterCriticalSection( &fls_section );
@@ -519,6 +578,8 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH RtlFlsAlloc( PFLS_CALLBACK_FUNCTION callback, 
     unsigned int chunk_index, index, i;
     FLS_INFO_CHUNK *chunk;
 
+    macrunner_trace_fls_chunks( "alloc-entry", 0, 0 );
+
     if (!NtCurrentTeb()->FlsSlots && !(NtCurrentTeb()->FlsSlots = fls_alloc_data()))
         return STATUS_NO_MEMORY;
 
@@ -569,6 +630,8 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH RtlFlsAlloc( PFLS_CALLBACK_FUNCTION callback, 
 
     if ((*ret_index = fls_index_from_chunk_index( chunk_index, index )) > fls_data.fls_high_index)
         fls_data.fls_high_index = *ret_index;
+
+    macrunner_trace_fls_chunks( "alloc-exit", *ret_index, (ULONG)(ULONG_PTR)chunk );
 
     unlock_fls_data();
 
@@ -635,6 +698,8 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH RtlFlsSetValue( ULONG index, void *data )
     unsigned int chunk_index, idx;
     TEB_FLS_DATA *fls;
 
+    macrunner_trace_fls_chunks( "set-entry", index, (ULONG)(ULONG_PTR)data );
+
     if (!index || index >= MAX_FLS_DATA_COUNT)
         return STATUS_INVALID_PARAMETER;
 
@@ -650,6 +715,8 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH RtlFlsSetValue( ULONG index, void *data )
         return STATUS_NO_MEMORY;
 
     fls->fls_data_chunks[chunk_index][idx + 1] = data;
+
+    macrunner_trace_fls_chunks( "set-exit", index, (ULONG)(ULONG_PTR)data );
 
     return STATUS_SUCCESS;
 }
@@ -680,6 +747,8 @@ void WINAPI DECLSPEC_HOTPATCH RtlProcessFlsData( void *teb_fls_data, ULONG flags
 {
     TEB_FLS_DATA *fls = teb_fls_data;
     unsigned int i, index;
+
+    macrunner_trace_fls_chunks( "process-entry", flags, (ULONG)(ULONG_PTR)teb_fls_data );
 
     TRACE_(thread)( "teb_fls_data %p, flags %#lx.\n", teb_fls_data, flags );
 

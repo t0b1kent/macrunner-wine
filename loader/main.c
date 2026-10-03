@@ -31,6 +31,10 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <limits.h>
+#ifdef __APPLE__
+# include <mach/mach.h>
+# include <mach/mach_vm.h>
+#endif
 #ifdef HAVE_SYS_SYSCTL_H
 # include <sys/sysctl.h>
 #endif
@@ -49,12 +53,12 @@
 
 #include "main.h"
 
-#if defined(__APPLE__) && defined(__x86_64__) && !defined(HAVE_WINE_PRELOADER)
+#if defined(__APPLE__) && (defined(__x86_64__) || defined(__aarch64__)) && !defined(HAVE_WINE_PRELOADER)
 
-/* Not using the preloader on x86_64:
- * Reserve the same areas as the preloader does, but using zero-fill sections
- * (the only way to prevent system frameworks from using them, including allocations
- * before main() runs).
+/* MacRunner: extended to __aarch64__. The x86_64 zerofill+image_base technique
+ * (binary loaded at 0x200000000, WINE_RESERVE zerofill at 0x1000-0x200000000,
+ * WINE_TOP_DOWN at 0x7ff000000000) works on Apple Silicon too — provided the
+ * loader is linked with matching -image_base / -segaddr ldflags (see Makefile).
  */
 __asm__(".zerofill WINE_RESERVE,WINE_RESERVE");
 static char __wine_reserve[0x1fffff000] __attribute__((section("WINE_RESERVE, WINE_RESERVE")));
@@ -81,6 +85,42 @@ static void init_reserved_areas(void)
         mmap(wine_main_preload_info[i].addr, wine_main_preload_info[i].size, PROT_NONE,
              MAP_FIXED | MAP_NORESERVE | MAP_PRIVATE | MAP_ANON, -1, 0);
     }
+}
+
+#elif defined(__APPLE__) && defined(__aarch64__)
+
+/* A provisioned ARM64 loader may replace its otherwise inaccessible PAGEZERO.
+ * Reserve only PAGEZERO, before dlopen or any guest initialisation, and expose
+ * successful ownership through Wine's existing preload interface.  Never mark
+ * an unsuccessful reservation as usable memory.  Keep the Windows null 64K.
+ */
+static const struct wine_preload_info signed32_preload_info[] =
+{
+    { (void *)0x00010000, 0xffff0000 },
+    { 0, 0 }
+};
+
+const __attribute__((visibility("default"))) struct wine_preload_info *wine_main_preload_info = NULL;
+
+static void init_reserved_areas(void)
+{
+    void *addr = signed32_preload_info[0].addr;
+    size_t size = signed32_preload_info[0].size;
+    void *mapped = mmap( addr, size, PROT_NONE,
+                         MAP_FIXED | MAP_NORESERVE | MAP_PRIVATE | MAP_ANON, -1, 0 );
+    if (mapped == MAP_FAILED)
+    {
+        perror( "macrunner-signed32: reserve PAGEZERO" );
+        exit(1);
+    }
+    if (mapped != addr)
+    {
+        fprintf( stderr, "macrunner-signed32: unexpected reservation address %p\n", mapped );
+        exit(1);
+    }
+    wine_main_preload_info = signed32_preload_info;
+    fprintf( stderr, "macrunner-signed32: reserved=%p size=%#zx preload=ready pid=%d\n",
+             mapped, size, (int)getpid() );
 }
 
 #else
@@ -156,6 +196,72 @@ static const char *get_self_exe(void)
     return NULL;
 }
 
+#ifdef __APPLE__
+/***********************************************************************
+ *  macrunner_zakrepit_ntdll
+ *
+ * Закрепление базы ntdll.so — последний незакреплённый кусок раскладки.
+ *
+ * ЗАМЕР назвал причину: ниже ntdll.so лежит область с меткой ядра user_tag=1
+ * (VM_MEMORY_MALLOC), её размер гуляет от прогона к прогону (0x188000 /
+ * 0x1ac000 / 0x1f0000), и dyld, кладя dlopen-образ в первую свободную дыру,
+ * поднимает ntdll.so на разную высоту: 5 разных баз из 6 прогонов даже с
+ * выключенным ASLR. `-image_base` не помогает — современный компоновщик его
+ * игнорирует («prefered load addresses are disabled with chained fixups»),
+ * а DYLD_INSERT_LIBRARIES проверка библиотек в подписанный процесс не пускает
+ * (Killed: 9). Поэтому занимаем дыры сами, прямо перед dlopen.
+ *
+ * Приём: занять ВСЕ свободные дыры ниже выбранного адреса — тогда первая
+ * свободная дыра ровно он, и dyld кладёт образ туда. Занимаем ТОЛЬКО
+ * свободное: границы спрашиваем у ядра через mach_vm_region и mmap MAP_FIXED
+ * ставим лишь в промежутки между занятыми областями, поверх чужого — никогда.
+ *
+ * Гейт MACRUNNER_NTDLL_BASE=<адрес>; без него не делает и не печатает ничего.
+ */
+static void macrunner_zakrepit_ntdll( void )
+{
+    const char *env = getenv( "MACRUNNER_NTDLL_BASE" );
+    unsigned long long cel;
+    mach_vm_address_t adres = 0x100000000ULL;
+    unsigned zanyato = 0, promahov = 0;
+    unsigned long long zapolneno = 0;
+
+    if (!env || !*env) return;
+    cel = strtoull( env, NULL, 0 );
+    if (cel <= 0x100000000ULL) return;
+
+    for (;;)
+    {
+        mach_vm_address_t a = adres;
+        mach_vm_size_t razmer = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t obj = MACH_PORT_NULL;
+        mach_vm_address_t konec;
+
+        if (mach_vm_region( mach_task_self(), &a, &razmer, VM_REGION_BASIC_INFO_64,
+                            (vm_region_info_t)&info, &cnt, &obj ) != KERN_SUCCESS)
+            a = (mach_vm_address_t)cel;              /* выше нет ничего — дыра до цели */
+
+        konec = a < (mach_vm_address_t)cel ? a : (mach_vm_address_t)cel;
+        if (konec > adres)
+        {
+            size_t dlina = (size_t)(konec - adres);
+            void *dal = mmap( (void *)(uintptr_t)adres, dlina, PROT_NONE,
+                              MAP_PRIVATE | MAP_ANON | MAP_NORESERVE | MAP_FIXED, -1, 0 );
+            if (dal == (void *)(uintptr_t)adres) { zanyato++; zapolneno += dlina; }
+            else promahov++;
+        }
+        if (a >= (mach_vm_address_t)cel) break;
+        adres = a + razmer;
+        if (adres >= cel) break;
+    }
+    fprintf( stderr, "macrunner-ntdll-закрепление: цель=%#llx дыр_занято=%u байт=%#llx промахов=%u (pid=%d)\n",
+             cel, zanyato, zapolneno, promahov, (int)getpid() );
+    fflush( stderr );
+}
+#endif
+
 static void *try_dlopen( const char *argv0 )
 {
     char *dir, *path, *p;
@@ -169,6 +275,9 @@ static void *try_dlopen( const char *argv0 )
     else
         path = build_path( dir, "ntdll.so" );
 
+#ifdef __APPLE__
+    macrunner_zakrepit_ntdll();
+#endif
     handle = dlopen( path, RTLD_NOW );
     free( p );
     free( dir );

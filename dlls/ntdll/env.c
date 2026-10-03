@@ -573,6 +573,20 @@ static RTL_USER_PROCESS_PARAMETERS *alloc_process_params( size_t align,
         return NULL;
 
     params = ptr;
+    {   /* ★ 31.08 — ПОДТВЕРДИТЬ ЗАМЕРОМ, а не догадкой. Отказ приходит по адресу внутри
+         * частных 64 КБ, где лежит `\pipe\svcctl`. Похоже на блок параметров, но
+         * «похоже» сегодня опровергалось ПЯТЬ раз. Печатаем базу, размер и образ, для
+         * которого готовятся параметры: совпадёт с областью отказа — связь доказана,
+         * не совпадёт — версия снята и больше не тратим на неё время. */
+        static unsigned int pp_rep;
+        if (pp_rep++ < 16)
+        {
+            MESSAGE( "macrunner-hb-параметры-процесса: n=%u база=%p размер=%p конец=%p образ=%s\n",
+                     pp_rep, ptr, (void *)(ULONG_PTR)(size + ROUND_SIZE( env_size, align )),
+                     (char *)ptr + size + ROUND_SIZE( env_size, align ),
+                     image && image->Buffer ? debugstr_w(image->Buffer) : "(нет)" );
+        }
+    }
     params->AllocationSize  = size;
     params->Size            = size;
     params->Flags           = PROCESS_PARAMS_FLAG_NORMALIZED;

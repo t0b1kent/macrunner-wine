@@ -1201,6 +1201,7 @@ static void build(struct strarray input_files, const char *output)
     char *output_file;
     const char *output_name, *spec_file, *lang;
     const char *libgcc = NULL;
+    int rt_first = 0;
     int generate_app_loader = 1;
     const char *crt_lib = NULL;
 
@@ -1400,12 +1401,24 @@ static void build(struct strarray input_files, const char *output)
         }
     }
 
+    /* MacRunner: dlya ARM64/ARM64EC podklyuchit compiler-rt PERED import-bibliotekami.
+     * Inache ssylka na __chkstk_arm64ec zakryvaetsya IMPORTOM iz kernel32/ntdll (libntdll.a
+     * prosmatrivaetsya ranshe), cel okazyvaetsya v diapazone X64 karty koda ntdll,
+     * __os_arm64x_check_icall podstavlyaet PUSTOY vyhodnoy perehodnik -> perehod na bazu
+     * obraza -> ispolnyaetsya zagolovok DOS -> c000001d.
+     * Otklyuchit dlya kontrolnoy sborki: MACRUNNER_WINEGCC_RT_FIRST=0 */
+    rt_first = (libgcc && is_pe &&
+                (target.cpu == CPU_ARM64 || target.cpu == CPU_ARM64EC) &&
+                !(getenv("MACRUNNER_WINEGCC_RT_FIRST") &&
+                  !strcmp( getenv("MACRUNNER_WINEGCC_RT_FIRST"), "0" )));
+
     STRARRAY_FOR_EACH( file, &files )
     {
 	const char* name = file + 2;
 	switch(file[1])
 	{
 	    case 'l':
+		if (rt_first) { strarray_add(&link_args, libgcc); rt_first = 0; }
 		strarray_add(&link_args, strmake("-l%s", name));
 		break;
 	    case 's':
@@ -1413,6 +1426,7 @@ static void build(struct strarray input_files, const char *output)
 		strarray_add(&link_args, name);
 		break;
 	    case 'a':
+		if (rt_first) { strarray_add(&link_args, libgcc); rt_first = 0; }
                 if (!use_msvcrt && !lib_suffix && strchr(name, '/'))
                 {
                     const char *p = get_basename( name );
@@ -2036,8 +2050,29 @@ int main(int argc, char **argv)
     if (is_pe) use_msvcrt = true;
     if (output && strendswith( output, ".fake" )) fake_module = true;
 
+    /* MacRunner 2026-08-27 — ВЫРАВНИВАНИЕ СЕКЦИЙ И ДЛЯ i386/x86_64.
+     *
+     * Умолчание было 0x1000: Windows-страница 4 КБ. На Apple Silicon хозяйская
+     * страница 16 КБ, и внутри одной такой страницы оказываются секции с РАЗНЫМИ
+     * правами — например у winemac.drv .buildid (RVA 0x4000, без прав), .data
+     * (0x5000, WRITE) и .rsrc (0x6000). Права объединяются, и запись в .data,
+     * которая по PE-заголовку разрешена, падает: mach_vm_region показал на этой
+     * странице prot=0x1 при max=0x7.
+     *
+     * Ровно этот дефект уже чинили один раз пересборкой 605 модулей вручную с
+     * `-Wl,--section-alignment,16384` — и он вернулся, потому что умолчание тут
+     * осталось прежним: 210 модулей от 19.08 не попали в ту пересборку, плюс 14
+     * собранных сегодня поштучно. Чиним в умолчании, а не в списке файлов.
+     *
+     * Для ARM64/ARM64EC оставляем прежние 64 КБ. */
     if (!section_align)
+    {
+#if defined(__APPLE__) && defined(__aarch64__)
+        section_align = (target.cpu == CPU_ARM64 || target.cpu == CPU_ARM64EC) ? "0x10000" : "0x4000";
+#else
         section_align = (target.cpu == CPU_ARM64 || target.cpu == CPU_ARM64EC) ? "0x10000" : "0x1000";
+#endif
+    }
 
     if (!file_align) file_align = section_align;
 

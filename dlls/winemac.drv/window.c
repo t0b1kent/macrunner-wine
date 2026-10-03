@@ -27,6 +27,9 @@
 
 #include "config.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #define GetCurrentThread Mac_GetCurrentThread
 #define LoadResource Mac_LoadResource
@@ -39,12 +42,121 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(macdrv);
 
+static BOOL trace_secondary_window_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) enabled = getenv("MACRUNNER_TRACE_SECONDARY_WINDOW") != NULL;
+    return enabled;
+}
 
 static pthread_mutex_t win_data_mutex;
 static CFMutableDictionaryRef win_datas;
 
 static unsigned int activate_on_focus_time;
 
+static BOOL macrunner_trace_winshow_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *env = getenv("MACRUNNER_HB_TRACE_WINSHOW");
+        enabled = env && env[0] && env[0] != '0';
+    }
+    return enabled;
+}
+
+/* MacRunner ui-input trace: proof of the focus/event chain.
+ * Same env gates as the macrunner-ui-input stages in event.c/mouse.c. */
+static BOOL macrunner_ui_input_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+        enabled = getenv("MACRUNNER_TRACE_WINEMAC_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_INPUT") != NULL ||
+                  getenv("MACRUNNER_TRACE_UI_EVENT_PATH") != NULL;
+    return enabled;
+}
+
+/* MacRunner 2026-07-28 (HK input lane): opt-in fallback for the GA_ROOT==0 sites.
+ * DEFAULT OFF so it stays one variable per run — the [NSApp run] fix is the
+ * variable under test first, and this must not ride along silently. */
+static BOOL macrunner_garoot_fallback_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *env = getenv("MACRUNNER_WINEMAC_GAROOT_FALLBACK");
+        enabled = env && env[0] && env[0] != '0';
+    }
+    return enabled;
+}
+
+/* MacRunner 2026-07-28: classify WHY NtUserGetAncestor(hwnd, GA_ROOT) returned 0.
+ *
+ * GA_ROOT is served by win32u's list_window_parents() (win32u/window.c:759), and a
+ * NULL return from it is the ONLY way GA_ROOT yields 0 — a normal top-level window
+ * returns ITSELF (win32u/window.c:884), so "root==0" is never merely "no parent".
+ * list_window_parents bails in exactly three ways:
+ *   (a) get_win_ptr(hwnd) == NULL  -> the handle is invalid in THIS process's view
+ *   (b) hwnd IS the desktop window -> by design (the !pos goto empty at :774)
+ *   (c) WND_OTHER_PROCESS, and the server's get_window_parents replied count==0
+ * The three are indistinguishable from the driver side today, so both black-frame
+ * and dead-input work has been guessing. is_window separates (a); is_desktop
+ * separates (b); anything left with is_window=1,is_desktop=0 is (c) — and a
+ * ga_parent that resolves while ga_root does not is itself the smoking gun for (c),
+ * because the two answers then disagree about the same handle. */
+static void macrunner_trace_garoot_null(const char *site, HWND hwnd)
+{
+    HWND desktop, parent;
+
+    if (!macrunner_ui_input_trace_enabled()) return;
+
+    desktop = NtUserGetDesktopWindow();
+    parent  = NtUserGetAncestor(hwnd, GA_PARENT);
+
+    fprintf(stderr,
+            "macrunner-ui-input: stage=garoot_null site=%s hwnd=%p is_window=%d "
+            "is_desktop=%d ga_parent=%p desktop=%p case=%s tid=%04x\n",
+            site, hwnd, (int)NtUserIsWindow(hwnd), (int)(hwnd == desktop),
+            parent, desktop,
+            !NtUserIsWindow(hwnd) ? "a_invalid_handle" :
+            (hwnd == desktop)     ? "b_is_desktop" : "c_server_no_parents",
+            (unsigned int)GetCurrentThreadId());
+    fflush(stderr);
+}
+
+static void macrunner_trace_winshow(const char *stage, HWND hwnd, struct macdrv_win_data *data,
+                                    DWORD style, BOOL activate)
+{
+    if (!macrunner_trace_winshow_enabled()) return;
+
+    /* MacRunner 2026-07-29 (HK master lane iter 7): ex_style is printed because it is the ONE
+     * field that discriminates the measured failure.  Hollow Knight's window completes the whole
+     * show path — on_screen=1, activate=1, objc-after-order-front, objc-after-window-got-focus —
+     * and the application still never becomes active (`applicationDidBecomeActive`=0 for the
+     * entire run) and never receives a single NSEvent, with `[NSApp run]` verified healthy and
+     * idle in mach_msg (3039/3039 samples).  WS_EX_NOACTIVATE (0x08000000) would explain exactly
+     * that and nothing else does yet: get_window_features_for_style() (:184/:216) turns it into
+     * wf.prevents_app_activation, which becomes NSWindowStyleMaskNonactivatingPanel
+     * (cocoa_window.m:131) and suppresses the foreground transform
+     * (cocoa_window.m:1815 `transformProcessToForeground:!self.preventsAppActivation`).
+     * A non-activating panel renders normally — which is why the menu is visible — but never
+     * takes key focus.  Read from hwnd rather than threading a new parameter through every call
+     * site, so this stays a one-line change; hwnd is NULL on the objc-side stages, hence the
+     * guard, and 0 there means "not applicable", not "no NOACTIVATE". */
+    fprintf(stderr, "macrunner-winshow: stage=%s hwnd=%p data=%p cocoa=%p "
+            "on_screen=%d style=0x%x ex_style=0x%x noactivate=%d activate=%d tid=%lu\n",
+            stage ? stage : "?", hwnd, data, data ? data->cocoa_window : NULL,
+            data ? data->on_screen : -1, style,
+            hwnd ? (unsigned int)NtUserGetWindowLongW(hwnd, GWL_EXSTYLE) : 0u,
+            hwnd ? ((NtUserGetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE) ? 1 : 0) : -1,
+            activate, (unsigned long)GetCurrentThreadId());
+    fflush(stderr);
+}
 
 /* CrossOver Hack #16933 */
 static BOOL is_main_quicken_window(HWND hwnd)
@@ -511,10 +623,40 @@ static void create_cocoa_window(struct macdrv_win_data *data)
     if (frame.size.width < 1 || frame.size.height < 1)
         frame.size.width = frame.size.height = 1;
 
+    if (trace_secondary_window_enabled() && ((style & WS_POPUP) || (ex_style & WS_EX_DLGMODALFRAME)))
+        fprintf( stderr, "macrunner-secondary: stage=mac_create_cocoa_before hwnd=%p style=0x%lx "
+                 "ex_style=0x%lx owner=%p parent=%p frame=%.1f,%.1f %.1fx%.1f visible_rect=%s\n",
+                 data->hwnd, style, ex_style, NtUserGetWindowRelative(data->hwnd, GW_OWNER),
+                 NtUserGetAncestor(data->hwnd, GA_PARENT), frame.origin.x, frame.origin.y,
+                 frame.size.width, frame.size.height, wine_dbgstr_rect(&data->rects.visible) );
+
     TRACE("creating %p window %s whole %s client %s\n", data->hwnd, wine_dbgstr_rect(&data->rects.window),
           wine_dbgstr_rect(&data->rects.visible), wine_dbgstr_rect(&data->rects.client));
 
     data->cocoa_window = macdrv_create_cocoa_window(&wf, frame, data->hwnd, thread_data->queue);
+
+    /* MacRunner 2026-07-28 (HK input) — UNGATED, first 4 windows only.
+     * This is the ONLY site that builds a WineWindow.  On live HK a real visible
+     * WineWindow existed while every macdrv_init static read NULL, which is a
+     * contradiction: init_user_driver() (the only thing that makes macdrv the
+     * user driver, hence the only way this code is reached) runs solely at the
+     * end of macdrv_init.  Pair this line with stage=macdrv_init_entry to settle
+     * which of the two measurements is wrong. */
+    {
+        static int logged;
+        if (logged < 4)
+        {
+            logged++;
+            fprintf(stderr, "macrunner-ui-input: stage=create_cocoa_window pid=%d hwnd=%p cocoa=%p "
+                    "queue=%p style=0x%x\n", getpid(), data->hwnd, data->cocoa_window,
+                    thread_data->queue, (unsigned int)style);
+            fflush(stderr);
+        }
+    }
+
+    if (trace_secondary_window_enabled() && ((style & WS_POPUP) || (ex_style & WS_EX_DLGMODALFRAME)))
+        fprintf( stderr, "macrunner-secondary: stage=mac_create_cocoa_after hwnd=%p cocoa=%p\n",
+                 data->hwnd, data->cocoa_window );
     if (!data->cocoa_window) goto done;
 
     set_cocoa_window_properties(data);
@@ -561,17 +703,54 @@ static struct macdrv_win_data *macdrv_create_win_data(HWND hwnd, const struct wi
 {
     struct macdrv_win_data *data;
     HWND parent;
+    DWORD style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+    DWORD ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
 
-    if (NtUserGetWindowThread(hwnd, NULL) != GetCurrentThreadId()) return NULL;
+    /* MacRunner 2026-06-20: unconditional (env-only) realize trace to pin why the
+     * game window's win_data is not created (the WS_POPUP-gated trace below misses
+     * an overlapped/child main window). */
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-winrealize: create_enter hwnd=%p style=0x%lx ex=0x%lx "
+                 "cur_tid=%lu win_tid=%lu\n", hwnd, style, ex_style,
+                 (unsigned long)GetCurrentThreadId(), (unsigned long)NtUserGetWindowThread(hwnd, NULL) );
+
+    if (trace_secondary_window_enabled() && ((style & WS_POPUP) || (ex_style & WS_EX_DLGMODALFRAME)))
+        fprintf( stderr, "macrunner-secondary: stage=mac_create_win_data_enter hwnd=%p style=0x%lx "
+                 "ex_style=0x%lx current_tid=%lu window_tid=%lu rect=%s\n",
+                 hwnd, style, ex_style, GetCurrentThreadId(), NtUserGetWindowThread(hwnd, NULL),
+                 wine_dbgstr_rect(&rects->window) );
+
+    if (NtUserGetWindowThread(hwnd, NULL) != GetCurrentThreadId())
+    {
+        if (trace_secondary_window_enabled() && ((style & WS_POPUP) || (ex_style & WS_EX_DLGMODALFRAME)))
+            fprintf( stderr, "macrunner-secondary: stage=mac_create_win_data_wrong_thread hwnd=%p\n", hwnd );
+        return NULL;
+    }
 
     if (!(parent = NtUserGetAncestor(hwnd, GA_PARENT)))  /* desktop */
     {
         macdrv_init_thread_data();
+        if (trace_secondary_window_enabled())
+            fprintf( stderr, "macrunner-winrealize: create_NULL_desktop hwnd=%p (GA_PARENT==NULL)\n", hwnd );
         return NULL;
     }
 
-    if (!(data = alloc_win_data(hwnd))) return NULL;
+    if (!(data = alloc_win_data(hwnd)))
+    {
+        if (trace_secondary_window_enabled())
+            fprintf( stderr, "macrunner-winrealize: create_NULL_alloc hwnd=%p\n", hwnd );
+        return NULL;
+    }
     data->rects = *rects;
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-winrealize: create_OK hwnd=%p parent=%p is_desktop_parent=%d\n",
+                 hwnd, parent, parent == NtUserGetDesktopWindow() );
+
+    if (trace_secondary_window_enabled() && ((style & WS_POPUP) || (ex_style & WS_EX_DLGMODALFRAME)))
+        fprintf( stderr, "macrunner-secondary: stage=mac_create_win_data_parent hwnd=%p parent=%p "
+                 "desktop=%p owner=%p will_create_cocoa=%d\n",
+                 hwnd, parent, NtUserGetDesktopWindow(), NtUserGetWindowRelative(hwnd, GW_OWNER),
+                 parent == NtUserGetDesktopWindow() );
 
     if (parent == NtUserGetDesktopWindow())
     {
@@ -584,6 +763,117 @@ static struct macdrv_win_data *macdrv_create_win_data(HWND hwnd, const struct wi
     TRACE("win %p/%p window %s whole %s client %s\n",
            hwnd, data->cocoa_window, wine_dbgstr_rect(&data->rects.window),
            wine_dbgstr_rect(&data->rects.visible), wine_dbgstr_rect(&data->rects.client));
+    return data;
+}
+
+
+/* MacRunner winshow: forward declaration -- show_window is defined below
+ * macdrv_ensure_win_data but the on-demand path needs it to complete realization. */
+static void show_window(struct macdrv_win_data *data);
+
+/***********************************************************************
+ *              macdrv_ensure_win_data
+ *
+ * Create macdrv window data for a real HWND when D3D creates a swapchain
+ * before USER has driven WindowPosChanging through the display driver.
+ */
+struct macdrv_win_data *macdrv_ensure_win_data(HWND hwnd)
+{
+    struct macdrv_win_data *data;
+    struct window_rects rects;
+    HWND parent, desktop;
+    DWORD style, ex_style;
+    UINT dpi;
+
+    if ((data = get_win_data(hwnd))) return data;
+
+    parent = NtUserGetAncestor(hwnd, GA_PARENT);
+    desktop = NtUserGetDesktopWindow();
+    style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+    ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
+
+    if (!parent)
+    {
+        fprintf(stderr, "macrunner-winrealize: d3d_on_demand hwnd=%p failed=no_parent "
+                "style=0x%lx ex=0x%lx cur_tid=%lu win_tid=%lu\n",
+                hwnd, style, ex_style, (unsigned long)GetCurrentThreadId(),
+                (unsigned long)NtUserGetWindowThread(hwnd, NULL));
+        return NULL;
+    }
+
+    dpi = NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI);
+    if (!NtUserGetWindowRect(hwnd, &rects.window, dpi))
+    {
+        fprintf(stderr, "macrunner-winrealize: d3d_on_demand hwnd=%p failed=get_window_rect "
+                "parent=%p style=0x%lx ex=0x%lx\n", hwnd, parent, style, ex_style);
+        return NULL;
+    }
+
+    if (parent != desktop)
+        NtUserMapWindowPoints(0, parent, (POINT *)&rects.window, 2, dpi);
+
+    if (!NtUserGetClientRect(hwnd, &rects.client, dpi))
+        rects.client = rects.window;
+    else
+        NtUserMapWindowPoints(hwnd, parent, (POINT *)&rects.client, 2, dpi);
+
+    rects.visible = rects.window;
+    data = macdrv_create_win_data(hwnd, &rects);
+    fprintf(stderr, "macrunner-winrealize: d3d_on_demand hwnd=%p result=%p cocoa=%p "
+            "parent=%p desktop_parent=%d style=0x%lx ex=0x%lx rects=%s\n",
+            hwnd, data, data ? data->cocoa_window : NULL, parent, parent == desktop,
+            style, ex_style, debugstr_window_rects(&rects));
+    fflush(stderr);
+
+    /* MacRunner winshow: complete on-demand realization to parity with the
+     * normal macdrv_WindowPosChanged path. macdrv_create_win_data() only
+     * creates the Cocoa NSWindow; it explicitly leaves on_screen = FALSE and
+     * never orders the NSWindow front (see create_cocoa_window). Without this
+     * the game window is invisible and inactive, so no WINDOW_GOT_FOCUS event
+     * is ever posted by the Cocoa event loop and win32u therefore never sends
+     * WM_ACTIVATE / WM_SETFOCUS to the guest. Engines that gate the render
+     * loop on window activation then park forever in NtWaitForSingleObject
+     * before issuing the first GetBuffer/Present. Re-acquire the (recursive)
+     * win_data_mutex and run show_window exactly as WindowPosChanged does, so
+     * the NSWindow is ordered front, on_screen becomes TRUE, and the focus
+     * event can fire. */
+    if (data && data->cocoa_window && (style & WS_VISIBLE) && !data->on_screen)
+    {
+        BOOL activate = (style & WS_POPUP) != 0;
+
+        macrunner_trace_winshow("f2-defer-show", hwnd, data, style, FALSE);
+        macrunner_trace_winshow("f2-before-async-show", hwnd, data, style, activate);
+        macdrv_async_show_cocoa_window(data->cocoa_window, activate);
+        macrunner_trace_winshow("f2-after-async-show", hwnd, data, style, activate);
+        data->on_screen = TRUE;
+        macrunner_trace_winshow("f2-after-on-screen", hwnd, data, style, activate);
+        macrunner_trace_winshow("f2-before-post-activate", hwnd, data, style, activate);
+        NtUserPostMessage(hwnd, WM_ACTIVATE, WA_ACTIVE, 0);
+        NtUserPostMessage(hwnd, WM_SETFOCUS, 0, 0);
+        macrunner_trace_winshow("f2-after-post-activate", hwnd, data, style, activate);
+        if (activate)
+            activate_on_focus_time = 0;
+    }
+
+    /* MacRunner 2026-07-29 (HK E2E lane) — A/B lever, DEFAULT OFF:
+     * MACRUNNER_MACDRV_FORCE_KEY_WINDOW=1.
+     *
+     * In HK's process the driver now comes up from the unix side LONG after USER
+     * created the window (macdrv_process_selfinit at ~+140 s), so none of the normal
+     * focus traffic — WM_ACTIVATE/WM_SETFOCUS -> macdrv_SetFocus -> set_focus ->
+     * macdrv_give_cocoa_window_focus — ever ran against a real driver for this HWND.
+     * If stage=app_sendEvent_key_enter reports keyWindow=(nil), this is the lever that
+     * tests it; it is OFF by default because an offline proof that a mechanism is
+     * missing is not a proof that forcing it is safe (MACRUNNER_WIN32U_PLACEHOLDER_REPAIR
+     * looked just as correct before it regressed the guest). */
+    if (data && data->cocoa_window && getenv("MACRUNNER_MACDRV_FORCE_KEY_WINDOW"))
+    {
+        macdrv_give_cocoa_window_focus(data->cocoa_window, TRUE);
+        fprintf(stderr, "macrunner-winrealize: forced_key_window hwnd=%p cocoa=%p on_screen=%d\n",
+                hwnd, data->cocoa_window, (int)data->on_screen);
+        fflush(stderr);
+    }
+
     return data;
 }
 
@@ -635,8 +925,31 @@ static BOOL is_all_the_way_front(HWND hwnd)
 static void set_focus(HWND hwnd, BOOL raise)
 {
     struct macdrv_win_data *data;
+    HWND root = NtUserGetAncestor(hwnd, GA_ROOT);
 
-    if (!(hwnd = NtUserGetAncestor(hwnd, GA_ROOT))) return;
+    if (!root)
+    {
+        /* MacRunner 2026-07-28 (HK input lane): this early return is the
+         * KEYBOARD-side twin of the black-frame defect. GA_ROOT==0 here means
+         * macdrv_give_cocoa_window_focus() is never called, so the Cocoa window
+         * never becomes key and AppKit routes no key events to it — mouse is
+         * unaffected (send_mouse_input in mouse.c uses the top-level hwnd only to
+         * fill an update_window_zorder request and sends the input regardless),
+         * which is why this cannot be the whole story for "both dead".
+         * Same shape as the proven macdrv_client_surface_update fallback below:
+         * for a top-level window root==hwnd anyway. Gated OFF by default. */
+        macrunner_trace_garoot_null("set_focus", hwnd);
+
+        if (!macrunner_garoot_fallback_enabled()) return;
+
+        root = hwnd;
+        if (macrunner_ui_input_trace_enabled())
+        {
+            fprintf(stderr, "macrunner-ui-input: stage=set_focus_garoot_fallback hwnd=%p\n", hwnd);
+            fflush(stderr);
+        }
+    }
+    hwnd = root;
 
     if (raise && hwnd == NtUserGetForegroundWindow() && hwnd != NtUserGetDesktopWindow() && !is_all_the_way_front(hwnd))
         NtUserSetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
@@ -645,12 +958,92 @@ static void set_focus(HWND hwnd, BOOL raise)
 
     if (data->cocoa_window && data->on_screen)
     {
-        BOOL activate = activate_on_focus_time && (NtGetTickCount() - activate_on_focus_time < 2000);
+        DWORD style_for_gate = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
+        BOOL activate = (style_for_gate & WS_POPUP) ||
+                        (activate_on_focus_time && (NtGetTickCount() - activate_on_focus_time < 2000));
+
+        /* MacRunner winshow: on-demand top-level WS_POPUP render windows can be
+         * realized long after the 2s launch activation window.  Keep the old
+         * time gate for normal windows, but force activation for borderless
+         * game render windows so Cocoa focus can produce guest WM_ACTIVATE. */
         /* Set Mac focus */
         macdrv_give_cocoa_window_focus(data->cocoa_window, activate);
         activate_on_focus_time = 0;
+
+        if (macrunner_ui_input_trace_enabled())
+        {
+            fprintf(stderr,
+                    "macrunner-ui-input: stage=set_focus_give_cocoa_focus hwnd=%p activate=%d\n",
+                    hwnd, activate);
+            fflush(stderr);
+        }
+
+        /* MacRunner 2026-08-29 — ПРОБА: синтезировать получение фокуса.
+         *
+         * Замер показал: окно выведено (visible=1, on_screen=1, политика Regular,
+         * bundle есть), Cocoa-фокус запрошен — но macOS в активации ОТКАЗЫВАЕТ
+         * (`активация_спустя_500мс активно=0 ключевое=0x0`). Это её защита от
+         * кражи фокуса: процесс, запущенный фоновым скриптом, не отбирает фокус у
+         * активного приложения. Событие WINDOW_GOT_FOCUS не приходит, гость не
+         * получает WM_ACTIVATEAPP и не начинает рисовать.
+         *
+         * Гейт НЕ включён по умолчанию и НЕ является заменой настоящей активации:
+         * он отвечает на один вопрос — ждёт ли игра активации вообще. Если под
+         * ним появятся WM_ACTIVATE и отрисовка, значит стена именно здесь, и
+         * настоящее лечение (фокус по клику пользователя, либо запуск из .app с
+         * правом активации) осмысленно. Если ничего не изменится — стена в другом
+         * месте, и мы это узнаем за один прогон, а не за день догадок. */
+        if (getenv("MACRUNNER_FORCE_WINDOW_FOCUS") && activate)
+        {
+            macdrv_event evt;
+
+            memset(&evt, 0, sizeof(evt));
+            evt.type   = WINDOW_GOT_FOCUS;
+            evt.window = (macdrv_window)data->cocoa_window;
+
+            if (macrunner_ui_input_trace_enabled())
+            {
+                fprintf(stderr,
+                        "macrunner-ui-input: stage=фокус_синтез hwnd=%p окно=%p\n",
+                        hwnd, data->cocoa_window);
+                fflush(stderr);
+            }
+            release_win_data(data);
+            macdrv_window_got_focus(hwnd, &evt);
+            return;
+        }
     }
 
+    release_win_data(data);
+}
+
+void macdrv_winshow_activate(HWND hwnd)
+{
+    struct macdrv_win_data *data;
+    DWORD style;
+
+    if (!(data = get_win_data(hwnd))) return;
+
+    style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+    macrunner_trace_winshow("event-enter", hwnd, data, style, FALSE);
+
+    if (data->cocoa_window && (style & WS_VISIBLE))
+    {
+        if (!data->on_screen)
+        {
+            macrunner_trace_winshow("event-before-show-window", hwnd, data, style, FALSE);
+            show_window(data);
+            macrunner_trace_winshow("event-after-show-window", hwnd, data, style, FALSE);
+        }
+        else
+        {
+            macrunner_trace_winshow("event-before-focus-on-screen", hwnd, data, style, TRUE);
+            macdrv_give_cocoa_window_focus(data->cocoa_window, TRUE);
+            macrunner_trace_winshow("event-after-focus-on-screen", hwnd, data, style, TRUE);
+        }
+    }
+
+    macrunner_trace_winshow("event-exit", hwnd, data, style, FALSE);
     release_win_data(data);
 }
 
@@ -664,6 +1057,7 @@ static void show_window(struct macdrv_win_data *data)
     macdrv_window prev_window = NULL;
     macdrv_window next_window = NULL;
     BOOL activate = FALSE;
+    DWORD style_for_gate;
     GUITHREADINFO info;
 
     /* find window that this one must be after */
@@ -684,14 +1078,28 @@ static void show_window(struct macdrv_win_data *data)
           data->hwnd, data->cocoa_window, prev, prev_window, next, next_window);
 
     if (!prev_window)
-        activate = activate_on_focus_time && (NtGetTickCount() - activate_on_focus_time < 2000);
+    {
+        style_for_gate = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
+        /* MacRunner winshow: top-level WS_POPUP render windows are often
+         * shown on-demand after activate_on_focus_time has aged out.  Without
+         * activation, orderFront does not yield WINDOW_GOT_FOCUS and Unity
+         * keeps Application.isFocused false before the first frame. */
+        activate = (style_for_gate & WS_POPUP) ||
+                   (activate_on_focus_time && (NtGetTickCount() - activate_on_focus_time < 2000));
+    }
+    else style_for_gate = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
+    macrunner_trace_winshow("show-before-order", data->hwnd, data, style_for_gate, activate);
     macdrv_order_cocoa_window(data->cocoa_window, prev_window, next_window, activate);
+    macrunner_trace_winshow("show-after-order", data->hwnd, data, style_for_gate, activate);
     data->on_screen = TRUE;
+    macrunner_trace_winshow("show-after-on-screen", data->hwnd, data, style_for_gate, activate);
 
     info.cbSize = sizeof(info);
+    macrunner_trace_winshow("show-before-focus-check", data->hwnd, data, style_for_gate, activate);
     if (NtUserGetGUIThreadInfo(NtUserGetWindowThread(data->hwnd, NULL), &info) && info.hwndFocus &&
         (data->hwnd == info.hwndFocus || NtUserIsChild(data->hwnd, info.hwndFocus)))
         set_focus(info.hwndFocus, FALSE);
+    macrunner_trace_winshow("show-after-focus-check", data->hwnd, data, style_for_gate, activate);
     if (activate)
         activate_on_focus_time = 0;
 }
@@ -1180,6 +1588,26 @@ static void macdrv_client_surface_update(struct client_surface *client)
 
     TRACE("%s\n", debugstr_client_surface(client));
 
+    /* MacRunner 2026-07-27 (HK run8/run9 compositor gap): when a DXGI swapchain is
+     * created while the win32 window is still being realized, GA_ROOT returns NULL
+     * (observed live: "macrunner-get-win-data: hwnd=0x2002e ... root=0x0"). The
+     * get_win_data(toplevel) below then fails and this update silently no-ops, so
+     * the client surface's Cocoa view is NEVER parented into the window while
+     * macdrv_client_surface_present still unhides it (probe: superview=nil,
+     * hidden=NO, window=nil). Every Present renders into the detached view and the
+     * visible window stays black forever. Fall back to the hwnd's own win_data —
+     * for a top-level window toplevel==hwnd anyway. */
+    if (!toplevel)
+    {
+        fprintf(stderr, "macrunner-winrealize: client_surface_update toplevel_fallback "
+                "hwnd=%p reason=GA_ROOT_null\n", hwnd);
+        /* Classify the SAME defect the keyboard path hits, so one run explains both
+         * symptoms instead of two rounds of inference. Trace-gated, no behaviour
+         * change: the fallback below already ships and stays unconditional here. */
+        macrunner_trace_garoot_null("client_surface_update", hwnd);
+        toplevel = hwnd;
+    }
+
     NtUserGetClientRect(hwnd, &rect, NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI));
     NtUserMapWindowPoints(hwnd, toplevel, (POINT *)&rect, 2, NtUserGetWinMonitorDpi(toplevel, MDT_RAW_DPI));
 
@@ -1634,6 +2062,34 @@ BOOL macdrv_WindowPosChanging(HWND hwnd, UINT swp_flags, BOOL shaped, const stru
 
     TRACE("hwnd %p, swp_flags %04x, shaped %u, rects %s\n", hwnd, swp_flags, shaped, debugstr_window_rects(rects));
 
+    /* MacRunner 2026-07-28 (HK input lane) — UNGATED, first 8 calls per process.
+     *
+     * Measured with tools/winkeyprobe.c (a WS_VISIBLE overlapped top-level
+     * window, 40s): the app process reaches macdrv_init_entry AND
+     * macdrv_init_user_driver_set, its window is well formed
+     * (ga_parent==desktop, ga_root==self, iswindow=1), win32u reports it
+     * visible/foreground/focused/active — and NOT ONE macrunner-winrealize line
+     * carries its hwnd, while explorer's four windows in the same run produce
+     * 26 of them.  Either this entry point is genuinely never dispatched in the
+     * app process (the user-driver install is lost after init_user_driver), or
+     * it is dispatched and the env-gated trace above is silent there.  Those two
+     * have completely different fixes, and only an UNGATED line separates them,
+     * so this one must survive a run launched with no trace variables at all. */
+    {
+        static int logged;
+        if (logged < 8)
+        {
+            logged++;
+            fprintf(stderr, "macrunner-ui-input: stage=WindowPosChanging_entry pid=%d hwnd=%p "
+                    "swp_flags=%04x had_data=%d tid=%lu\n", getpid(), hwnd, swp_flags, !!data,
+                    (unsigned long)GetCurrentThreadId());
+            fflush(stderr);
+        }
+    }
+
+    if (trace_secondary_window_enabled())
+        fprintf( stderr, "macrunner-winrealize: WindowPosChanging hwnd=%p swp_flags=%04x had_data=%d\n",
+                 hwnd, swp_flags, !!data );
     if (!data && !(data = macdrv_create_win_data(hwnd, rects))) return FALSE; /* use default surface */
     data->shaped = shaped;
 
@@ -1676,10 +2132,13 @@ BOOL macdrv_GetWindowStyleMasks(HWND hwnd, UINT style, UINT ex_style, UINT *styl
 void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT swp_flags,
                              const struct window_rects *new_rects, struct window_surface *surface)
 {
-    BOOL fullscreen = swp_flags & WINE_SWP_FULLSCREEN;
+    /* MacRunner 2026-09-02: WINE_SWP_FULLSCREEN = 0x80000000, а data->fullscreen — поле в 1 бит: без !! в него всегда
+     * записывался 0 (бит 31 отсекался) и флаг «окно фуллскрин» никогда не был истинным. */
+    BOOL fullscreen = !!(swp_flags & WINE_SWP_FULLSCREEN);
     struct macdrv_thread_data *thread_data;
     struct macdrv_win_data *data;
     unsigned int new_style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+    unsigned int ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
     struct window_rects old_rects;
 
     if (!(data = get_win_data(hwnd))) return;
@@ -1691,6 +2150,12 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
 
     TRACE("win %p/%p new_rects %s style %08x flags %08x surface %p\n", hwnd, data->cocoa_window,
           debugstr_window_rects(new_rects), new_style, swp_flags, surface);
+    if (trace_secondary_window_enabled() && ((new_style & WS_POPUP) || (ex_style & WS_EX_DLGMODALFRAME)))
+        fprintf( stderr, "macrunner-secondary: stage=mac_window_pos_changed hwnd=%p cocoa=%p "
+                 "on_screen=%d style=0x%x ex_style=0x%x flags=0x%x owner=%p parent=%p rect=%s\n",
+                 hwnd, data->cocoa_window, data->on_screen, new_style, ex_style, swp_flags,
+                 NtUserGetWindowRelative(hwnd, GW_OWNER), NtUserGetAncestor(hwnd, GA_PARENT),
+                 debugstr_window_rects(new_rects) );
 
     if (!data->cocoa_window) goto done;
 
@@ -1842,6 +2307,15 @@ void macdrv_window_got_focus(HWND hwnd, const macdrv_event *event)
 
     if (!hwnd) return;
 
+    if (macrunner_ui_input_trace_enabled())
+    {
+        fprintf(stderr,
+                "macrunner-ui-input: stage=window_got_focus_event hwnd=%p window=%p can_fg=%d style=0x%x minimized=%d\n",
+                hwnd, event->window, can_window_become_foreground(hwnd), style,
+                (style & WS_MINIMIZE) != 0);
+        fflush(stderr);
+    }
+
     TRACE("win %p/%p serial %lu enabled %d visible %d style %08x focus %p active %p fg %p\n",
           hwnd, event->window, event->window_got_focus.serial, NtUserIsWindowEnabled(hwnd),
           NtUserIsWindowVisible(hwnd), style, get_focus(), get_active_window(), NtUserGetForegroundWindow());
@@ -1863,15 +2337,40 @@ void macdrv_window_got_focus(HWND hwnd, const macdrv_event *event)
  *
  * Handler for WINDOW_LOST_FOCUS events.
  */
+
+/* ★ MacRunner 2026-09-02 — фокус: окно переднего плана фуллскрин? (data->fullscreen ведёт WindowPosChanged).
+ * Условие удержания переднего плана, не зависящее от времени и от пути смены режима (при emulate_modeset
+ * драйверный ChangeDisplaySettings не вызывается вовсе — sysparams.c:4423). */
+BOOL macrunner_hwnd_is_fullscreen(HWND hwnd)
+{
+    struct macdrv_win_data *data;
+    BOOL ret;
+    if (!hwnd || !(data = get_win_data(hwnd))) return FALSE;
+    ret = data->fullscreen;
+    release_win_data(data);
+    return ret;
+}
+
 void macdrv_window_lost_focus(HWND hwnd, const macdrv_event *event)
 {
     if (!hwnd) return;
 
     TRACE("win %p/%p fg %p\n", hwnd, event->window, NtUserGetForegroundWindow());
 
+    /* ★ MacRunner 2026-09-02 — ПРИБОР (фокус): кто отдаёт передний план рабочему столу при SetDisplayMode. */
+    MESSAGE("macrunner-focus: WINDOW_LOST_FOCUS hwnd=%p fg=%p desktop=%p punt=%d\n", hwnd, NtUserGetForegroundWindow(),
+            NtUserGetDesktopWindow(), hwnd == NtUserGetForegroundWindow());
+
     if (hwnd == NtUserGetForegroundWindow())
     {
+        unsigned int ms = macrunner_ms_since_display_mode_change();
         send_message(hwnd, WM_CANCELMODE, 0, 0);
+        if (macrunner_hwnd_is_fullscreen(hwnd) || ms < 3000 || macrunner_display_mode_changed) /* БЕЗУСЛОВНО: доказано парно 02.09 (akt4) */
+        {
+            MESSAGE("macrunner-focus: WINDOW_LOST_FOCUS — фокус УДЕРЖАН (фуллскрин=%d, смена режима %u мс назад), hwnd=%p\n",
+                    macrunner_hwnd_is_fullscreen(hwnd), ms, hwnd);
+            return;
+        }
         if (hwnd == NtUserGetForegroundWindow())
             NtUserSetForegroundWindowInternal(NtUserGetDesktopWindow());
     }
@@ -1899,8 +2398,19 @@ void macdrv_app_deactivated(void)
 {
     NtUserClipCursor(NULL);
 
+    /* ★ MacRunner 2026-09-02 — ПРИБОР (фокус). */
+    MESSAGE("macrunner-focus: APP_DEACTIVATED active=%p fg=%p desktop=%p punt=%d\n", get_active_window(),
+            NtUserGetForegroundWindow(), NtUserGetDesktopWindow(), get_active_window() == NtUserGetForegroundWindow());
+
     if (get_active_window() == NtUserGetForegroundWindow())
     {
+        unsigned int ms = macrunner_ms_since_display_mode_change();
+        if (macrunner_hwnd_is_fullscreen(NtUserGetForegroundWindow()) || ms < 3000 || macrunner_display_mode_changed) /* БЕЗУСЛОВНО: доказано парно 02.09 (akt4) */
+        {
+            MESSAGE("macrunner-focus: APP_DEACTIVATED — фокус УДЕРЖАН (фуллскрин=%d, смена режима %u мс назад), fg=%p\n",
+                    macrunner_hwnd_is_fullscreen(NtUserGetForegroundWindow()), ms, NtUserGetForegroundWindow());
+            return;
+        }
         TRACE("setting fg to desktop\n");
         NtUserSetForegroundWindowInternal(NtUserGetDesktopWindow());
     }
