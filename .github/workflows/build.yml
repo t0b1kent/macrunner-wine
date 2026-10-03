@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   wine:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 330
     env:
       BUILD_JOBS: '4'
@@ -23,7 +23,26 @@ jobs:
           uname -m
           sysctl -n machdep.cpu.brand_string
           if [ "$(uname -m)" != arm64 ]; then
-            echo '::error::MacRunner Wine requires native ARM64; this macos-15 assignment is not ARM64.'
+            echo '::error::MacRunner Wine requires native ARM64; this macos-26 assignment is not ARM64.'
+            exit 1
+          fi
+      - name: Select an SDK that declares the x18 ABI calls used by ntdll.so
+        shell: bash
+        run: |
+          # 1.0.7 was linked against SDK 26.5; its ntdll.so weak-imports
+          # os_custom_x18_abi_enabled / os_set_custom_x18_abi_enabled from libSystem.
+          # Older SDKs do not declare them and the ntdll.so link fails after ~30 minutes.
+          for xcode in $(ls -d /Applications/Xcode*.app | sort -r); do
+            sdk="$xcode/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+            if grep -qs _os_custom_x18_abi_enabled "$sdk"/usr/lib/system/*.tbd; then
+              sudo xcode-select -s "$xcode"
+              break
+            fi
+          done
+          xcrun --show-sdk-version
+          if ! grep -qs _os_custom_x18_abi_enabled "$(xcrun --show-sdk-path)"/usr/lib/system/*.tbd; then
+            echo '::error::No installed SDK declares os_custom_x18_abi_enabled; ntdll.so cannot link.'
+            ls -d /Applications/Xcode*.app
             exit 1
           fi
       - name: Checkout exact source revision
