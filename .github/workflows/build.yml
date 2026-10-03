@@ -15,11 +15,11 @@ jobs:
     timeout-minutes: 330
     env:
       BUILD_JOBS: '4'
-      CCACHE_DIR: ${{ runner.temp }}/wine-ccache
     steps:
       - name: Verify native ARM64 runner
         shell: bash
         run: |
+          echo "CCACHE_DIR=$RUNNER_TEMP/wine-ccache" >> "$GITHUB_ENV"
           uname -m
           sysctl -n machdep.cpu.brand_string
           if [ "$(uname -m)" != arm64 ]; then
