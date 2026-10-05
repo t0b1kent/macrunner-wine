@@ -32,6 +32,7 @@
 #include "bnum.h"
 #include "winnls.h"
 #include "wine/asm.h"
+#include "wine/arm64_memmove.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
@@ -3050,9 +3051,16 @@ __ASM_GLOBAL_FUNC( sse2_memmove,
 #else
 # define MERGE(w1, sh1, w2, sh2) ((w1 >> sh1) | (w2 << sh2))
 #endif
+#if defined(__arm64ec__)
+/* Keep copying out of unrelated CRT functions when the compiler sees the
+ * compact assembly kernel; the release change is confined to this function. */
+__attribute__((noinline))
+#endif
 void * __cdecl memmove(void *dst, const void *src, size_t n)
 {
-#if defined(__x86_64__) && !defined(__arm64ec__)
+#if defined(__arm64ec__)
+    return wine_arm64_memmove(dst, src, n);
+#elif defined(__x86_64__) && !defined(__arm64ec__)
     return sse2_memmove(dst, src, n);
 #else
     unsigned char *d = dst;

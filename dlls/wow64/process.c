@@ -1200,6 +1200,38 @@ NTSTATUS WINAPI wow64_NtSuspendProcess( UINT *args )
 
 
 /**********************************************************************
+ *           Wow64SuspendLocalThread (WOW64.@)
+ */
+NTSTATUS WINAPI Wow64SuspendLocalThread( HANDLE handle, ULONG *count )
+{
+    THREAD_BASIC_INFORMATION info;
+    HANDLE query_handle;
+    NTSTATUS status;
+
+    if (pBTCpuSuspendLocalThread)
+    {
+        status = NtQueryInformationThread( handle, ThreadBasicInformation, &info, sizeof(info), NULL );
+        if (status == STATUS_ACCESS_DENIED)
+        {
+            /* A valid suspend-only handle need not grant query access. Keep
+             * the original handle for the translator's access validation. */
+            if (!(status = NtDuplicateObject( GetCurrentProcess(), handle, GetCurrentProcess(),
+                                             &query_handle, THREAD_QUERY_LIMITED_INFORMATION, 0, 0 )))
+            {
+                status = NtQueryInformationThread( query_handle, ThreadBasicInformation, &info, sizeof(info), NULL );
+                NtClose( query_handle );
+            }
+        }
+        if (status) return status;
+        if (info.ClientId.UniqueProcess == ULongToHandle(GetCurrentProcessId()))
+            return pBTCpuSuspendLocalThread( handle, count );
+    }
+
+    return NtSuspendThread( handle, count );
+}
+
+
+/**********************************************************************
  *           wow64_NtSuspendThread
  */
 NTSTATUS WINAPI wow64_NtSuspendThread( UINT *args )
@@ -1207,7 +1239,7 @@ NTSTATUS WINAPI wow64_NtSuspendThread( UINT *args )
     HANDLE handle = get_handle( &args );
     ULONG *count = get_ptr( &args );
 
-    return NtSuspendThread( handle, count );
+    return Wow64SuspendLocalThread( handle, count );
 }
 
 
@@ -1226,13 +1258,11 @@ NTSTATUS WINAPI wow64_NtTerminateProcess( UINT *args )
         if (current_machine == IMAGE_FILE_MACHINE_I386)
         {
             I386_CONTEXT ctx = { CONTEXT_I386_FULL };
-            ULONG *stack = NULL;
             ULONG sample[8] = { 0 };
 
-            if (!RtlWow64GetThreadContext( GetCurrentThread(), &ctx ))
-                stack = guest32_host_ptr( ctx.Esp );
-            if (stack) memcpy( sample, stack, sizeof(sample) );
-            MESSAGE( "macrunner-wow64-exit: i386-context eip=%08lx esp=%08lx ebp=%08lx eax=%08lx stack=%08lx,%08lx,%08lx,%08lx,%08lx,%08lx,%08lx,%08lx\n",
+            RtlWow64GetThreadContext( GetCurrentThread(), &ctx );
+            /* 0091: no guest stack reads for process-exit diagnostics. */
+            MESSAGE( "macrunner-wow64-exit: i386-context eip=%08lx esp=%08lx ebp=%08lx eax=%08lx memory=NOT_ENABLED stack=%08lx,%08lx,%08lx,%08lx,%08lx,%08lx,%08lx,%08lx\n",
                      ctx.Eip, ctx.Esp, ctx.Ebp, ctx.Eax, sample[0], sample[1],
                      sample[2], sample[3], sample[4], sample[5], sample[6], sample[7] );
         }

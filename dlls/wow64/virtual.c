@@ -281,10 +281,10 @@ NTSTATUS WINAPI wow64_NtAllocateVirtualMemory( UINT *args )
          * `if (!addr && (type & MEM_COMMIT)) type |= MEM_RESERVE;`. Значит нулевой перевод
          * гостевого адреса превращает фиксацию внутри резерва в новый резерв, и дальше Wine
          * ловит перекрытие утверждением. Проверяем это числом, а не рассуждением. */
-        MESSAGE( "macrunner-wow64-xlat: val=%08lx -> addr=%p type=%08lx (0 = перевод не дал указателя)\n",
-                 addr32 ? *addr32 : 0, addr, type );
-        MESSAGE( "macrunner-wow64: NtAllocateVirtualMemory pre process=%p addr32=%p val=%08lx zero=%08Ix size32=%p size=%Ix type=%08lx protect=%08lx current=%u\n",
-                 process, addr32, addr32 ? *addr32 : 0, zero_bits,
+        MESSAGE( "memory=NOT_ENABLED macrunner-wow64-xlat: val=%08lx -> addr=%p type=%08lx (0 = перевод не дал указателя)\n",
+                 addr32 ? 0 : 0, addr, type );
+        MESSAGE( "memory=NOT_ENABLED macrunner-wow64: NtAllocateVirtualMemory pre process=%p addr32=%p val=%08lx zero=%08Ix size32=%p size=%Ix type=%08lx protect=%08lx current=%u\n",
+                 process, addr32, addr32 ? 0 : 0, zero_bits,
                  size32, size, type, protect, is_current );
     }
 
@@ -403,13 +403,8 @@ NTSTATUS WINAPI wow64_NtCreateSectionEx( UINT *args )
      * разделяемой памяти (проверка единственного экземпляра); имя секции её либо даёт предмет,
      * либо закрывает. Журнал открытий файлов имени не показал (450) — это его предел. */
     {
-        const UNICODE_STRING *nm = attr.attr.ObjectName;
-        WCHAR w[9]; int q;
-        for (q = 0; q < 8; q++)
-            w[q] = (nm && nm->Buffer && q < (int)(nm->Length / sizeof(WCHAR))) ? nm->Buffer[q] : 0;
-        MESSAGE( "macrunner-mksect: статус=%08x длина_имени=%u файл=%p protect=%08x первые=%04x%04x%04x%04x%04x%04x%04x%04x\n",
-                 (unsigned)status, nm ? (unsigned)nm->Length : 0u, file, (unsigned)protect,
-                 w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7] );
+        MESSAGE( "macrunner-mksect: status=%08x file=%p protect=%08x memory=NOT_ENABLED\n",
+                 (unsigned)status, file, (unsigned)protect );
     }
     put_handle( handle_ptr, handle );
     return status;
@@ -495,8 +490,8 @@ NTSTATUS WINAPI wow64_NtFreeVirtualMemory( UINT *args )
         {
             static unsigned int n_soft;
             if (n_soft++ < 8)
-                MESSAGE( "macrunner-softdecommit: гость=%08x размер=%llu — тень СОХРАНЕНА (decommit пропущен)\n",
-                         (unsigned)*addr32, (unsigned long long)size );
+                MESSAGE( "memory=NOT_ENABLED macrunner-softdecommit: гость=%08x размер=%llu — тень СОХРАНЕНА (decommit пропущен)\n",
+                         (unsigned)0, (unsigned long long)size );
             return STATUS_SUCCESS;
         }
     }
@@ -532,8 +527,8 @@ NTSTATUS WINAPI wow64_NtFreeVirtualMemory( UINT *args )
         }
         if (defer && is_current && type == MEM_RELEASE)
         {
-            MESSAGE( "macrunner-deferfree: ПРОПУЩЕНО гость=%08x размер=%llu\n",
-                     (unsigned)*addr32, (unsigned long long)size );
+            MESSAGE( "memory=NOT_ENABLED macrunner-deferfree: ПРОПУЩЕНО гость=%08x размер=%llu\n",
+                     (unsigned)0, (unsigned long long)size );
             *size32 = 0;
             return STATUS_SUCCESS;
         }
@@ -544,8 +539,8 @@ NTSTATUS WINAPI wow64_NtFreeVirtualMemory( UINT *args )
     /* Итерация 423: сверяем АДРЕС освобождения с буфером кадра. Замер 422 показал 5 гостевых
      * освобождений между передачей памяти в CreateDCFromMemory и отказом чтения из неё, но
      * какой именно адрес освободили — не измерено, а без этого вывод был бы догадкой. */
-    MESSAGE( "macrunner-guestfree: гость=%08x хозяин=%p размер=%llu type=%08x статус=%08x\n",
-             (unsigned)*addr32, addr, (unsigned long long)size, (unsigned)type, (unsigned)status );
+    MESSAGE( "memory=NOT_ENABLED macrunner-guestfree: гость=%08x хозяин=%p размер=%llu type=%08x статус=%08x\n",
+             (unsigned)0, addr, (unsigned long long)size, (unsigned)type, (unsigned)status );
     /* MacRunner 2026-08-13, лейн ЛЕСТНИЦА, итерация 855 — КТО ОСВОБОДИЛ БУФЕР КАДРА.
      *
      * Замеры 853-854: буфер 1 507 328 байт по гостевому адресу освобождается ДО того, как
@@ -561,8 +556,8 @@ NTSTATUS WINAPI wow64_NtFreeVirtualMemory( UINT *args )
         TEB32 *teb32 = NtCurrentTeb32();
         ULONG esp = teb32 ? teb32->Tib.StackBase : 0;
 
-        MESSAGE( "macrunner-guestfree-кто: гость=%08x размер=%llu esp_база=%08x предел=%08x\n",
-                 (unsigned)*addr32, (unsigned long long)size, (unsigned)esp,
+        MESSAGE( "memory=NOT_ENABLED macrunner-guestfree-кто: гость=%08x размер=%llu esp_база=%08x предел=%08x\n",
+                 (unsigned)0, (unsigned long long)size, (unsigned)esp,
                  (unsigned)(teb32 ? teb32->Tib.StackLimit : 0) );
     }
 
@@ -799,18 +794,16 @@ NTSTATUS WINAPI wow64_NtMapViewOfSection( UINT *args )
     SIZE_T size;
     NTSTATUS status;
     void *prev = NtCurrentTeb()->Tib.ArbitraryUserPointer;
-    ULONG addr_before;
-    ULONG size_before;
-    LONGLONG offset_value = offset ? offset->QuadPart : 0;
+    ULONG addr_before = 0, size_before = 0;
+    LONGLONG offset_value = 0; /* 0091: diagnostic-only guest reads NOT_ENABLED. */
 
     if (!addr32 || !size32) return STATUS_ACCESS_VIOLATION;
-    addr_before = *addr32;
-    size_before = *size32;
+    /* Core marshalling below owns validation; diagnostics do not read these pointers. */
 
-    MESSAGE( "macrunner-wow64: NtMapViewOfSection raw_args=%p raw=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
-             raw_args, raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4],
-             raw_args[5], raw_args[6], raw_args[7], raw_args[8], raw_args[9] );
-    MESSAGE( "macrunner-wow64: NtMapViewOfSection enter handle=%p process=%p addr32=%p addr=%08lx zero=%Ix commit=%Ix offset_ptr=%p offset=%016llx size32=%p size=%08lx inherit=%u alloc=%08lx protect=%08lx\n",
+    MESSAGE( "memory=NOT_ENABLED macrunner-wow64: NtMapViewOfSection raw_args=%p raw=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+             raw_args, 0, 0, 0, 0, 0,
+             0, 0, 0, 0, 0 );
+    MESSAGE( "memory=NOT_ENABLED macrunner-wow64: NtMapViewOfSection enter handle=%p process=%p addr32=%p addr=%08lx zero=%Ix commit=%Ix offset_ptr=%p offset=%016llx size32=%p size=%08lx inherit=%u alloc=%08lx protect=%08lx\n",
              handle, process, addr32, addr_before, zero_bits, commit, offset,
              (unsigned long long)offset_value, size32, size_before, inherit, alloc, protect );
 
@@ -828,8 +821,8 @@ NTSTATUS WINAPI wow64_NtMapViewOfSection( UINT *args )
     }
     if (is_pe32_support_image_map_warning( handle, process, status )) status = STATUS_SUCCESS;
     NtCurrentTeb()->Tib.ArbitraryUserPointer = prev;
-    MESSAGE( "macrunner-wow64: NtMapViewOfSection leave status=%08lx out_addr=%08lx out_size=%08lx\n",
-             status, addr32 ? *addr32 : 0, size32 ? *size32 : 0 );
+    MESSAGE( "memory=NOT_ENABLED macrunner-wow64: NtMapViewOfSection leave status=%08lx out_addr=%08lx out_size=%08lx\n",
+             status, addr32 ? 0 : 0, size32 ? 0 : 0 );
     return status;
 }
 

@@ -652,45 +652,41 @@ NTSTATUS WINAPI wow64_NtQueryAttributesFile( UINT *args )
     attr32 = get_ptr( &args );
     attr32_ok = wow64_buffer_readable( attr32, sizeof(*attr32) );
     if (trace)
-        MESSAGE( "macrunner-wow64: NtQueryAttributesFile stage=after-attr raw_args=%p next_args=%p attr32=%p attr32_ok=%u "
+        MESSAGE( "memory=NOT_ENABLED macrunner-wow64: NtQueryAttributesFile stage=after-attr raw_args=%p next_args=%p attr32=%p attr32_ok=%u "
                  "len=%08x root=%08x obj=%08x flags=%08x sd=%08x sqos=%08x\n",
                  raw_args, args, attr32, attr32_ok,
-                 attr32_ok ? (unsigned int)attr32->Length : 0,
-                 attr32_ok ? (unsigned int)attr32->RootDirectory : 0,
-                 attr32_ok ? (unsigned int)attr32->ObjectName : 0,
-                 attr32_ok ? (unsigned int)attr32->Attributes : 0,
-                 attr32_ok ? (unsigned int)attr32->SecurityDescriptor : 0,
-                 attr32_ok ? (unsigned int)attr32->SecurityQualityOfService : 0 );
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0 );
 
     info = get_ptr( &args );
     if (trace)
         MESSAGE( "macrunner-wow64: NtQueryAttributesFile stage=after-info next_args=%p info=%p info_ok=%u\n",
                  args, info, wow64_buffer_readable( info, sizeof(*info) ) );
 
-    if (attr32_ok && attr32->ObjectName)
-    {
-        name32 = guest32_host_ptr( attr32->ObjectName );
-        name32_ok = wow64_buffer_readable( name32, sizeof(*name32) );
-    }
+    /* 0091: diagnostic-only name dereferences NOT_ENABLED. */
     if (trace)
-        MESSAGE( "macrunner-wow64: NtQueryAttributesFile stage=after-name name32=%p name32_ok=%u nlen=%04x nmax=%04x nbuf=%08x\n",
-                 name32, name32_ok, name32_ok ? name32->Length : 0,
-                 name32_ok ? name32->MaximumLength : 0,
-                 name32_ok ? (unsigned int)name32->Buffer : 0 );
+        MESSAGE( "memory=NOT_ENABLED macrunner-wow64: NtQueryAttributesFile stage=after-name name32=%p name32_ok=%u nlen=%04x nmax=%04x nbuf=%08x\n",
+                 name32, name32_ok, name32_ok ? 0 : 0,
+                 name32_ok ? 0 : 0,
+                 name32_ok ? (unsigned int)0 : 0 );
 
     attr64 = objattr_32to64_redirect( &attr, attr32 );
 
     if (trace)
-        MESSAGE( "macrunner-wow64: NtQueryAttributesFile attr32=%p len=%08x root=%08x obj=%08x flags=%08x sd=%08x sqos=%08x "
+        MESSAGE( "memory=NOT_ENABLED macrunner-wow64: NtQueryAttributesFile attr32=%p len=%08x root=%08x obj=%08x flags=%08x sd=%08x sqos=%08x "
                  "name32=%p nlen=%04x nmax=%04x nbuf=%08x attr64=%p name64=%p buf64=%p info=%p\n",
-                 attr32, attr32_ok ? (unsigned int)attr32->Length : 0,
-                 attr32_ok ? (unsigned int)attr32->RootDirectory : 0,
-                 attr32_ok ? (unsigned int)attr32->ObjectName : 0,
-                 attr32_ok ? (unsigned int)attr32->Attributes : 0,
-                 attr32_ok ? (unsigned int)attr32->SecurityDescriptor : 0,
-                 attr32_ok ? (unsigned int)attr32->SecurityQualityOfService : 0,
-                 name32, name32_ok ? name32->Length : 0, name32_ok ? name32->MaximumLength : 0,
-                 name32_ok ? (unsigned int)name32->Buffer : 0, attr64, attr64 ? attr64->ObjectName : NULL,
+                 attr32, attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 attr32_ok ? (unsigned int)0 : 0,
+                 name32, name32_ok ? 0 : 0, name32_ok ? 0 : 0,
+                 name32_ok ? (unsigned int)0 : 0, attr64, attr64 ? attr64->ObjectName : NULL,
                  attr64 && attr64->ObjectName ? attr64->ObjectName->Buffer : NULL, info );
 
     /* Итерация 292, лейн ЛЕСТНИЦА: ступень 1 Diablo стоит на диалоге «Please insert the Diablo
@@ -890,9 +886,9 @@ NTSTATUS WINAPI wow64_NtReadFile( UINT *args )
          * смещение и длина. Печатаем первые 40 и каждое тысячное. */
         if (mr_rd_seq <= 40 || mr_rd_seq % 1000 == 0)
         {
-            MESSAGE( "macrunner-readfile: n=%u дескр=%p смещ=%s%llx len=%lu прочитано=%lu "
+            MESSAGE( "memory=NOT_ENABLED macrunner-readfile: n=%u дескр=%p смещ=%s%llx len=%lu прочитано=%lu "
                      "статус=%08lx\n", mr_rd_seq, handle,
-                     offset ? "" : "нет:", offset ? (unsigned long long)offset->QuadPart : 0ull,
+                     offset ? "" : "нет:", offset ? (unsigned long long)0 : 0ull,
                      (unsigned long)len, (unsigned long)io.Information,
                      (unsigned long)status );
         }

@@ -404,19 +404,8 @@ NTSTATUS WINAPI wow64_NtCreateSection( UINT *args )
      * Обёртка живёт в sync.c, а не в virtual.c — на этом потеряна итерация 451. В wow64.dll нет
      * строковых помощников, поэтому печатаем длину и первые символы шестнадцатерично. */
     {
-        const UNICODE_STRING *nm = attr.attr.ObjectName;
-        /* Итерация 454: имя ЦЕЛИКОМ (190 байт = 95 символов). Печатаем посимвольно, потому что
-         * строковых помощников в wow64.dll нет: непечатаемое заменяем точкой. */
-        if (nm && nm->Buffer && nm->Length)
-        {
-            char buf[128]; unsigned q, n = nm->Length / sizeof(WCHAR);
-            if (n > 126) n = 126;
-            for (q = 0; q < n; q++)
-                buf[q] = (nm->Buffer[q] >= 32 && nm->Buffer[q] < 127) ? (char)nm->Buffer[q] : '.';
-            buf[n] = 0;
-            MESSAGE( "macrunner-mksect: статус=%08x файл=%p имя[%u]=%s\n",
-                     (unsigned)status, file, (unsigned)nm->Length, buf );
-        }
+        MESSAGE( "macrunner-mksect: status=%08x file=%p memory=NOT_ENABLED\n",
+                 (unsigned)status, file );
     }
     put_handle( handle_ptr, handle );
     return status;
@@ -522,8 +511,8 @@ NTSTATUS WINAPI wow64_NtDelayExecution( UINT *args )
         static unsigned n;
         unsigned k = ++n;
         if (k <= 8 || !(k % 500))
-            MESSAGE( "macrunner-sleep-wow64: n=%u alertable=%d указатель=%p срок=%I64d\n",
-                 k, (int)alertable, timeout, timeout ? timeout->QuadPart : 0 );
+            MESSAGE( "memory=NOT_ENABLED macrunner-sleep-wow64: n=%u alertable=%d указатель=%p срок=%I64d\n",
+                 k, (int)alertable, timeout, timeout ? 0 : 0 );
     }
     return NtDelayExecution( alertable, timeout );
 }

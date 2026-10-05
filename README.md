@@ -18,6 +18,14 @@ History:
 - `macrunner-1.0.7`: published 1.0.7 source patch plus selected release inputs,
   portable recipes and cloud build. See [PROVENANCE](docs/PROVENANCE.md) and
   [the precise archived source map](docs/release-source-map.json).
+- `macrunner-1.0.8`: corresponding Wine source updates for the published
+  MacRunner 1.0.8 release. See [the signed release file hashes](docs/release-1.0.8-sha256.tsv).
+
+Compared with 1.0.7, this release fixes lost window messages in 32-bit applications.
+It improves startup and suspension of 32-bit threads.
+Startup uses the local computer name without asking the network.
+32-bit applications can load their audio components correctly.
+It also corrects window viewport coordinates and memory copying in ARM64EC libraries.
 
 ## Build on native macOS ARM64
 

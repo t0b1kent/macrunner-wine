@@ -72,6 +72,7 @@
 #include "wine/server.h"
 #include "wine/debug.h"
 #include "unix_private.h"
+#include "pe32-av-probe-output.h"
 #include "msync.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
@@ -321,7 +322,7 @@ static void __attribute__((noinline)) macrunner_hb_wait_event_stack_trace( const
         rs_cs = macrunner_hb_wait_event_read_u8( (ULONG_PTR)render_sync + 0xc0 );
     }
 
-    fprintf( stderr,
+    macrunner_hb_probe_output(
              "macrunner-hb-waitevent-stack: op=%s phase=%s pid=%d tid=0x%lx status=0x%08x "
              "handle0=%p handle1=%p count=%lu arg0=0x%lx alertable=%u timeout=%s "
              "ret0=%p ret0_rva=0x%lx ra1=%p ra2=%p ra3=%p ra4=%p ra5=%p "
@@ -344,7 +345,6 @@ static void __attribute__((noinline)) macrunner_hb_wait_event_stack_trace( const
              phase60, phase61, phase62, phase63, phase64, phase65, phase66, phase67, phase68,
              (void *)(ULONG_PTR)phase70, phase_flag,
              (void *)(ULONG_PTR)render_sync, (void *)(ULONG_PTR)rs_event, rs_stop, rs_cs );
-    fflush( stderr );
 }
 
 static void macrunner_hb_wait_event_trace( const char *op, const char *phase, NTSTATUS status,
@@ -357,13 +357,12 @@ static void macrunner_hb_wait_event_trace( const char *op, const char *phase, NT
     macrunner_hb_wait_event_stack_trace( op, phase, status, handle0, handle1, count,
                                          arg0, alertable, timeout, ret0 );
     if (!macrunner_hb_wait_event_trace_take_slot()) return;
-    fprintf( stderr,
+    macrunner_hb_probe_output(
              "macrunner-hb-waitevent: op=%s phase=%s pid=%d tid=0x%lx status=0x%08x "
              "handle0=%p handle1=%p count=%lu arg0=0x%lx alertable=%u timeout=%s ret0=%p\n",
              op, phase, getpid(), (unsigned long)GetCurrentThreadId(), (unsigned int)status,
              handle0, handle1, (unsigned long)count, (unsigned long)arg0, alertable,
              debugstr_timeout( timeout ), ret0 );
-    fflush( stderr );
 }
 
 static const char *debugstr_timeout( const LARGE_INTEGER *timeout )

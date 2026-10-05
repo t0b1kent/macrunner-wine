@@ -82,6 +82,7 @@ extern ULONG_PTR set_icon_param( HICON handle, const struct free_icon_params *pa
 /* dce.c */
 extern struct window_surface dummy_surface;
 extern void create_window_surface( HWND hwnd, BOOL create_layered, const RECT *surface_rect, UINT monitor_dpi,
+                                   const struct window_rects *rects,
                                    struct window_surface **window_surface );
 extern struct window_surface *get_driver_window_surface( struct window_surface *surface, UINT monitor_dpi );
 extern void erase_now( HWND hwnd, UINT rdw_flags );

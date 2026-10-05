@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <pthread.h>
 #include <signal.h>
 #include <sys/types.h>
@@ -64,6 +65,7 @@
 
 #ifdef __APPLE__
 #include <mach/mach.h>
+#include <mach/mach_time.h>
 #endif
 #ifdef __FreeBSD__
 #include <sys/thr.h>
@@ -76,6 +78,7 @@
 #include "wine/server.h"
 #include "wine/debug.h"
 #include "unix_private.h"
+#include "pe32-av-probe-output.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(thread);
 
@@ -1208,23 +1211,57 @@ static BOOL macrunner_hb_event_lifecycle_probe_enabled(void)
     return enabled;
 }
 
+static ULONG64 macrunner_hb_event_lifecycle_host_time(void)
+{
+#ifdef __APPLE__
+    return mach_absolute_time(); /* Same clock as CoreAudio AudioTimeStamp. */
+#else
+    struct timespec now;
+    if (clock_gettime( CLOCK_MONOTONIC, &now )) return 0;
+    return (ULONG64)now.tv_sec * 1000000000 + now.tv_nsec;
+#endif
+}
+
 static void macrunner_hb_event_lifecycle_thread_probe( const char *op, NTSTATUS status,
                                                        HANDLE handle, DWORD target_tid,
                                                        const void *start, const void *param,
-                                                       ULONG flags, LONG value, const void *caller )
+                                                       ULONG flags, LONG value, const void *caller,
+                                                       ULONG64 began )
 {
     static LONG count;
+    static LONG budget;
+    LONG sequence;
+    ULONG64 now;
 
     if (!macrunner_hb_event_lifecycle_probe_enabled()) return;
-    if (InterlockedIncrement( &count ) > 512) return;
+    if (!budget)
+    {
+        const char *env = getenv( "MACRUNNER_HB_EVENT_LIFECYCLE_BUDGET" );
+        LONG selected = env ? strtol( env, NULL, 10 ) : 512;
+        if (selected < 1) selected = 1;
+        if (selected > 131072) selected = 131072;
+        InterlockedCompareExchange( &budget, selected, 0 );
+    }
+    sequence = InterlockedIncrement( &count );
+    now = macrunner_hb_event_lifecycle_host_time();
+    if (sequence > budget)
+    {
+        if (sequence == budget + 1)
+            macrunner_hb_probe_output( "macrunner-hb-event-lifecycle-thread: state=DROPPED budget=%ld "
+                     "seq=%ld host_time=%llu pid=%d\n", (long)budget, (long)sequence,
+                     (unsigned long long)now, getpid() );
+        return;
+    }
 
-    fprintf( stderr,
-             "macrunner-hb-event-lifecycle-thread: op=%s pid=%d tid=%04lx status=%08lx "
+    macrunner_hb_probe_output(
+             "macrunner-hb-event-lifecycle-thread: state=PRESENT seq=%ld host_time=%llu "
+             "begin_host_time=%llu duration_host_ticks=%llu op=%s pid=%d tid=%04lx status=%08lx "
              "handle=%p target_tid=%04lx start=%p param=%p flags=%08lx value=%ld caller=%p\n",
+             (long)sequence, (unsigned long long)now, (unsigned long long)began,
+             (unsigned long long)(began && now >= began ? now - began : 0),
              op, getpid(), (unsigned long)GetCurrentThreadId(), (unsigned long)status,
              handle, (unsigned long)target_tid, start, param, (unsigned long)flags,
              (long)value, caller );
-    fflush( stderr );
 }
 
 /***********************************************************************
@@ -1269,7 +1306,7 @@ static void start_thread( TEB *teb )
     macrunner_hb_event_lifecycle_thread_probe( "thread-server-init", STATUS_SUCCESS, NULL,
                                                GetCurrentThreadId(), thread_data->start,
                                                thread_data->param, 0, suspend,
-                                               __builtin_return_address(0) );
+                                                __builtin_return_address(0), 0 );
     signal_start_thread( thread_data->start, thread_data->param, suspend, teb );
 }
 
@@ -1611,7 +1648,7 @@ NTSTATUS WINAPI GPT_IMPORT(NtCreateThreadEx)( HANDLE *handle, ACCESS_MASK access
                                                    status ? NULL : *handle,
                                                    status ? 0 : result.create_thread.tid,
                                                    start, param, flags, -1,
-                                                   __builtin_return_address(0) );
+                                                    __builtin_return_address(0), 0 );
         return status;
     }
 
@@ -1699,7 +1736,7 @@ done:
     if (attr_list) status = update_attr_list( attr_list, *handle, &teb->ClientId, teb );
     macrunner_hb_event_lifecycle_thread_probe( "create-thread", status,
                                                status ? NULL : *handle, tid, start, param,
-                                               flags, -1, __builtin_return_address(0) );
+                                                flags, -1, __builtin_return_address(0), 0 );
     return status;
 }
 
@@ -1943,12 +1980,10 @@ NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL 
             UINT64 guest_rip = macrunner_hb_guest_pc_for_tid( GetCurrentThreadId(), &guest_rsp, &guest_state, gpr6 );
             ULONG_PTR ret_addr = 0;
 
-            if (guest_rsp && !(guest_rsp & 7) &&
-                virtual_check_buffer_for_read( (const void *)(ULONG_PTR)guest_rsp, sizeof(ret_addr) ))
-                memcpy( &ret_addr, (const void *)(ULONG_PTR)guest_rsp, sizeof(ret_addr) );
+            /* 0091: fault/exit diagnostics never read memory addressed by a guest register. */
 
             fprintf( stderr, "macrunner-process-exit: stage=guest-context tid=%lx "
-                     "state=%d guest_rip=0x%llx guest_rsp=0x%llx retaddr=0x%llx "
+                     "memory=NOT_ENABLED state=%d guest_rip=0x%llx guest_rsp=0x%llx retaddr=0x%llx "
                      "rax=0x%llx rcx=0x%llx r8=0x%llx r15=0x%llx rbx=0x%llx rdx=0x%llx\n",
                      (unsigned long)GetCurrentThreadId(), guest_state,
                      (unsigned long long)guest_rip, (unsigned long long)guest_rsp,
@@ -2036,6 +2071,8 @@ NTSTATUS WINAPI NtSuspendThread( HANDLE handle, ULONG *count )
 {
     unsigned int ret;
     ULONG previous_count = ~0u;
+    ULONG64 began = macrunner_hb_event_lifecycle_probe_enabled() ?
+                    macrunner_hb_event_lifecycle_host_time() : 0;
 
     SERVER_START_REQ( suspend_thread )
     {
@@ -2049,7 +2086,7 @@ NTSTATUS WINAPI NtSuspendThread( HANDLE handle, ULONG *count )
     SERVER_END_REQ;
     macrunner_hb_event_lifecycle_thread_probe( "suspend-thread", ret, handle, 0, NULL, NULL,
                                                0, ret ? -1 : previous_count,
-                                               __builtin_return_address(0) );
+                                               __builtin_return_address(0), began );
     return ret;
 }
 
@@ -2061,6 +2098,8 @@ NTSTATUS WINAPI NtResumeThread( HANDLE handle, ULONG *count )
 {
     unsigned int ret;
     ULONG previous_count = ~0u;
+    ULONG64 began = macrunner_hb_event_lifecycle_probe_enabled() ?
+                    macrunner_hb_event_lifecycle_host_time() : 0;
 
     SERVER_START_REQ( resume_thread )
     {
@@ -2074,7 +2113,7 @@ NTSTATUS WINAPI NtResumeThread( HANDLE handle, ULONG *count )
     SERVER_END_REQ;
     macrunner_hb_event_lifecycle_thread_probe( "resume-thread", ret, handle, 0, NULL, NULL,
                                                0, ret ? -1 : previous_count,
-                                               __builtin_return_address(0) );
+                                               __builtin_return_address(0), began );
     return ret;
 }
 

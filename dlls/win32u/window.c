@@ -2212,7 +2212,7 @@ static struct window_surface *get_window_surface( HWND hwnd, UINT swp_flags, BOO
     else if (create_layered || is_layered) needs_surface = TRUE;
 
     if (needs_surface)
-        create_window_surface( hwnd, create_layered, surface_rect, raw_dpi, &new_surface );
+        create_window_surface( hwnd, create_layered, surface_rect, raw_dpi, rects, &new_surface );
     else if (new_surface && new_surface != &dummy_surface)
     {
         window_surface_release( new_surface );

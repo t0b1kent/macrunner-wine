@@ -1003,17 +1003,17 @@ static NTSTATUS WINAPI wow64_NtUserCallWinProc( void *arg, ULONG size )
                 {
                     const CREATESTRUCT32 *cs32 = (const CREATESTRUCT32 *)((char *)params32 + offset32);
 
-                    MESSAGE( "macrunner-wow64win-nccreate: n=%d msg=%04x РЕЗУЛЬТАТ=%08x ret_len=%u "
+                    MESSAGE( "memory=NOT_ENABLED macrunner-wow64win-nccreate: n=%d msg=%04x РЕЗУЛЬТАТ=%08x ret_len=%u "
                              "params=%08x inst=%08x name=%08x class=%08x %dx%d\n",
-                             (int)k, (unsigned)params32->msg, (unsigned)result, (unsigned)ret_len,
-                             (unsigned)cs32->lpCreateParams, (unsigned)cs32->hInstance,
-                             (unsigned)cs32->lpszName, (unsigned)cs32->lpszClass,
-                             (int)cs32->cx, (int)cs32->cy );
+                             (int)k, (unsigned)0, (unsigned)result, (unsigned)ret_len,
+                             (unsigned)0, (unsigned)0,
+                             (unsigned)0, (unsigned)0,
+                             (int)0, (int)0 );
                 }
                 else
-                    MESSAGE( "macrunner-wow64win-nccreate: n=%d msg=%04x РЕЗУЛЬТАТ=%08x ret_len=%u "
+                    MESSAGE( "memory=NOT_ENABLED macrunner-wow64win-nccreate: n=%d msg=%04x РЕЗУЛЬТАТ=%08x ret_len=%u "
                              "БЕЗ-СТРУКТУРЫ lparam_size=%u\n",
-                             (int)k, (unsigned)params32->msg, (unsigned)result,
+                             (int)k, (unsigned)0, (unsigned)result,
                              (unsigned)ret_len, (unsigned)lparam_size );
             }
         }
@@ -3926,6 +3926,10 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     default:
         return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
     }
+
+    /* Pointer-only messages above use the native layout after translating
+     * lparam. They must still dispatch the message and return its result. */
+    return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
 }
 
 NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )

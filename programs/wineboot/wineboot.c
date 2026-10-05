@@ -828,22 +828,23 @@ static void create_dynamic_registry_keys(void)
 /* create the ComputerName registry keys */
 static void create_computer_name_keys(void)
 {
-    struct addrinfo hints = {0}, *res;
-    char *dot, buffer[256], *name = buffer;
+    char *dot, *p, buffer[256], *name = buffer;
     HKEY key, subkey;
 
     if (gethostname( buffer, sizeof(buffer) )) return;
-    hints.ai_flags = AI_CANONNAME;
-    if (getaddrinfo( buffer, NULL, &hints, &res ) != 0)
-        res = NULL;
-    else if (res->ai_canonname && strcasecmp( res->ai_canonname, "localhost" ) != 0)
-        name = res->ai_canonname;
+    /* The computer name is local configuration, not a DNS lookup. Resolving it
+     * here can block every Wine session while the host resolver times out. */
+    buffer[sizeof(buffer) - 1] = 0;
+    /* AI_CANONNAME returned ASCII lowercase for the local hostnames validated
+     * by MacRunner. Preserve that registry spelling without consulting DNS;
+     * leave non-ASCII bytes unchanged instead of applying the process locale. */
+    for (p = buffer; *p; p++)
+        if (*p >= 'A' && *p <= 'Z') *p += 'a' - 'A';
     dot = strchr( name, '.' );
     if (dot) *dot++ = 0;
     else dot = name + strlen(name);
     SetComputerNameExA( ComputerNamePhysicalDnsDomain, dot );
     SetComputerNameExA( ComputerNamePhysicalDnsHostname, name );
-    if (res) freeaddrinfo( res );
 
     if (RegOpenKeyW( HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Control\\ComputerName", &key ))
         return;

@@ -743,9 +743,9 @@ NTSTATUS WINAPI wow64_NtGdiDdDDICreateDCFromMemory( UINT *args )
         NTSTATUS qst = NtQueryVirtualMemory( GetCurrentProcess(), desc.pMemory,
                                              MemoryBasicInformation, &mbi, sizeof(mbi), &got );
         ULONG_PTR tls_base = (ULONG_PTR)NtCurrentTeb()->TlsSlots[MACRUNNER_WOW64_TLS_GUEST32_BASE];
-        MESSAGE( "macrunner-dcmem-vm: гость=%08x хозяин=%p tls_база=%p qst=%08x "
+        MESSAGE( "memory=NOT_ENABLED macrunner-dcmem-vm: гость=%08x хозяин=%p tls_база=%p qst=%08x "
                  "state=%08x protect=%08x размер=%llu | %ux%u fmt=%#x pitch=%u\n",
-                 (unsigned)desc32->pMemory, desc.pMemory, (void *)tls_base, (unsigned)qst,
+                 (unsigned)0, desc.pMemory, (void *)tls_base, (unsigned)qst,
                  (unsigned)mbi.State, (unsigned)mbi.Protect, (unsigned long long)mbi.RegionSize,
                  (unsigned)desc.Width, (unsigned)desc.Height, (unsigned)desc.Format,
                  (unsigned)desc.Pitch );
@@ -2057,8 +2057,8 @@ NTSTATUS WINAPI wow64_NtGdiGetDCDword( UINT *args )
         BOOL _ok = NtGdiGetDCDword( hdc, method, result );
 
         if (_k <= 12 || !(_k % 200))
-            MESSAGE( "macrunner-getdcdword: n=%ld hdc=%p method=%u ok=%d value=%08lx\n",
-                     (long)_k, hdc, method, _ok, result ? *result : 0xdeadbeef );
+            MESSAGE( "memory=NOT_ENABLED macrunner-getdcdword: n=%ld hdc=%p method=%u ok=%d value=%08lx\n",
+                     (long)_k, hdc, method, _ok, result ? 0 : 0xdeadbeef );
         return _ok;
     }
 }
@@ -2642,12 +2642,12 @@ NTSTATUS WINAPI wow64_NtGdiOpenDCW( UINT *args )
     UNICODE_STRING *output64 = unicode_str_32to64( &output, output32 );
     HDC ret;
 
-    MESSAGE( "macrunner-opendc: вход dev32=%08x devmode32=%08x out32=%08x type=%08x "
+    MESSAGE( "memory=NOT_ENABLED macrunner-opendc: вход dev32=%08x devmode32=%08x out32=%08x type=%08x "
              "disp=%08x hspool=%08x drv32=%08x pdev32=%08x dev64=%p buf=%p len=%u out64=%p\n",
-             (unsigned)raw[0], (unsigned)raw[1], (unsigned)raw[2], (unsigned)raw[3],
-             (unsigned)raw[4], (unsigned)raw[5], (unsigned)raw[6], (unsigned)raw[7],
-             device64, device64 ? device64->Buffer : NULL,
-             device64 ? (unsigned)device64->Length : 0u, output64 );
+             (unsigned)0, (unsigned)0, (unsigned)0, (unsigned)0,
+             (unsigned)0, (unsigned)0, (unsigned)0, (unsigned)0,
+             device64, device64 ? 0 : NULL,
+             device64 ? (unsigned)0 : 0u, output64 );
 
     ret = NtGdiOpenDCW( device64, devmode, output64, type, is_display, hspool,
                         driver_info, pdev );

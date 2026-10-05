@@ -463,53 +463,8 @@ static void macrunner_esp_probe( ULONG num, const char *gde )
     {
         static ULONG last_esp;
         static LONG seen11ef;
-        const ULONG *sp, *fp;
-
-        if (esp == last_esp && seen11ef > 4) return;   /* печатаем только СМЕНУ уровня */
-        last_esp = esp;
-        seen11ef++;
-        sp = guest32_host_ptr( esp );
-        /* ★ 2817: содержимое ОСНОВАНИЯ КАДРА ДО вызова. 2816 доказала, что на фатальном витке
-         * ebp совпадает со сторожевым адресом и пара ложится в [ebp]/[ebp+4]. Осталось
-         * различить два случая, дающих одну и ту же картину:
-         *   в [ebp] уже лежит живая пара 016bf9b8/778f0eba -> уровень уехал ВВЕРХ на ЧУЖОЙ
-         *                                                     живой кадр, и мы его затираем;
-         *   в [ebp] мусор или ноль                         -> кадр только что создан здесь,
-         *                                                     затирать нечего, беда в другом.
-         * Печать идёт ДО вызова (сторона "вход"), поэтому она видит состояние до записи. */
-        fp = guest32_host_ptr( ebp );
-        MESSAGE( "macrunner-esp2816: %s num=11ef esp=%08lx ebp=%08lx ret=%08lx арг0=%08lx "
-                 "арг1=%08lx [ebp]=%08lx [ebp+4]=%08lx поток=%04lx\n",
-                 gde, (unsigned long)esp, (unsigned long)ebp,
-                 (unsigned long)sp[0], (unsigned long)sp[1], (unsigned long)sp[2],
-                 (unsigned long)fp[0], (unsigned long)fp[1],
-                 (unsigned long)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread );
-        /* ★ 2818: ЦЕПОЧКА КАДРОВ вверх. 2817 показала, что фатальный кадр 016bf998 связан с
-         * родителем 016bf9b8, а нормальный виток 016bf954 — с 016bf9c0, и в общей цепи
-         * 016bf998 не состоит. Проходим до пяти звеньев от обоих уровней: если цепи сходятся
-         * в общего предка — видно МЕСТО расхождения; если нет — фатальный виток пришёл из
-         * другого стека вызовов. Проверки на каждом шаге: следующий ebp обязан РАСТИ и лежать
-         * в том же гигабайте, иначе цепь оборвана и мы это печатаем, а не бредём по мусору. */
-        {
-            ULONG cur = ebp;
-            int lvl;
-
-            for (lvl = 1; lvl <= 5; lvl++)
-            {
-                const ULONG *f = guest32_host_ptr( cur );
-                ULONG next = f[0], ra = f[1];
-
-                MESSAGE( "macrunner-цепь2818: %s уровень=%d ebp=%08lx ->род=%08lx возврат=%08lx\n",
-                         gde, lvl, (unsigned long)cur, (unsigned long)next, (unsigned long)ra );
-                if (next <= cur || next - cur > 0x10000 || (next & 3))
-                {
-                    MESSAGE( "macrunner-цепь2818: %s уровень=%d ЦЕПЬ ОБОРВАНА на %08lx\n",
-                             gde, lvl, (unsigned long)next );
-                    break;
-                }
-                cur = next;
-            }
-        }
+        MESSAGE( "macrunner-esp2816: %s num=11ef esp=%08lx ebp=%08lx memory=NOT_ENABLED\n",
+                 gde, (unsigned long)esp, (unsigned long)ebp );
         return;
     }
     MESSAGE( "macrunner-esp2813: %s num=%04lx esp=%08lx ebp=%08lx кадр=%08lx разн_esp=%ld "
@@ -677,8 +632,15 @@ static void macrunner_frame_watch( ULONG num, ULONG depth, const char *gde )
             if (mbi.State != MEM_COMMIT) return;
         }
         w = guest32_host_ptr( MACRUNNER_FRAME_WATCH_ADDR );
-        prev[0] = w[0];
-        prev[1] = w[1];
+        {
+            SIZE_T copied = 0;
+            NTSTATUS status = NtReadVirtualMemory( NtCurrentProcess(), w, prev, sizeof(prev), &copied );
+            if (status || copied != sizeof(prev))
+            {
+                MESSAGE( "macrunner-frame-watch: state=READ_FAILED status=%08lx bytes=%Iu\n", status, copied );
+                return;
+            }
+        }
         armed = 1;
         MESSAGE( "macrunner-кадр-сторож2767: ЗАВЕДЁН адрес=%08lx начальные=%08lx %08lx "
                  "проб=%ld\n", (unsigned long)MACRUNNER_FRAME_WATCH_ADDR,
@@ -687,8 +649,15 @@ static void macrunner_frame_watch( ULONG num, ULONG depth, const char *gde )
     }
 
     w = guest32_host_ptr( MACRUNNER_FRAME_WATCH_ADDR );
-    cur[0] = w[0];
-    cur[1] = w[1];
+    {
+        SIZE_T copied = 0;
+        NTSTATUS status = NtReadVirtualMemory( NtCurrentProcess(), w, cur, sizeof(cur), &copied );
+        if (status || copied != sizeof(cur))
+        {
+            MESSAGE( "macrunner-frame-watch: state=READ_FAILED status=%08lx bytes=%Iu\n", status, copied );
+            return;
+        }
+    }
     if (cur[0] == prev[0] && cur[1] == prev[1])
     {
         prev_num = num;
@@ -756,6 +725,7 @@ NTSTATUS (WINAPI *pBTCpuResetToConsistentState)( EXCEPTION_POINTERS * ) = NULL;
 void     (WINAPI *pBTCpuUpdateProcessorInformation)( SYSTEM_CPU_INFORMATION * ) = NULL;
 void     (WINAPI *pBTCpuProcessTerm)( HANDLE, BOOL, NTSTATUS ) = NULL;
 void     (WINAPI *pBTCpuThreadTerm)( HANDLE, LONG ) = NULL;
+NTSTATUS (WINAPI *pBTCpuSuspendLocalThread)( HANDLE, ULONG * ) = NULL;
 
 BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
 {
@@ -1656,6 +1626,7 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
     GET_PTR( BTCpuUpdateProcessorInformation );
     GET_PTR( BTCpuProcessTerm );
     GET_PTR( BTCpuThreadTerm );
+    GET_PTR( BTCpuSuspendLocalThread );
     GET_PTR( __wine_get_unix_opcode );
     MESSAGE( "macrunner-wow64: cpu exports bop=%p init=%p thread=%p simulate=%p\n",
              pBTCpuGetBopCode, pBTCpuProcessInit, pBTCpuThreadInit, pBTCpuSimulate );
@@ -1918,7 +1889,8 @@ __ASM_GLOBAL_FUNC( wow64_syscall_handler,
  * TxnScopeContext (0x1800), LockCount+WowTebOffset (0x1808), ResourceRetValue (0x1810). */
 static const char *mr_wowoff_okrest( TEB *teb )
 {
-    static char buf[128];
+    /* UTF-8 diagnostic text is 181 bytes + NUL (eight words and nz in 0..8). */
+    static char buf[256];
     /* ★ ИТЕРАЦИЯ 86 — ШИРЕ, ЧЕМ ТРИ СЛОВА.
      *
      * Замер 73 показал: едут ровно 4 байта, три соседних слова нули. Замер 77 я
@@ -1929,11 +1901,12 @@ static const char *mr_wowoff_okrest( TEB *teb )
     const ULONG64 *w = (const ULONG64 *)((const char *)teb + 0x17e0);
     unsigned mr_i, mr_nz = 0;
     for (mr_i = 0; mr_i < 8; mr_i++) if (w[mr_i]) mr_nz++;
-    sprintf( buf, "окрест[17e0..1820]=%016llx %016llx %016llx %016llx %016llx %016llx "
+    snprintf( buf, sizeof(buf), "окрест[17e0..1820]=%016llx %016llx %016llx %016llx %016llx %016llx "
              "%016llx %016llx ненулевых=%u",
              (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2],
              (unsigned long long)w[3], (unsigned long long)w[4], (unsigned long long)w[5],
              (unsigned long long)w[6], (unsigned long long)w[7], mr_nz );
+    buf[sizeof(buf) - 1] = 0;
     return buf;
 }
 
@@ -2790,7 +2763,7 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
         unsigned r;
 
         ra[0] = __builtin_return_address(0);
-        ra[1] = __builtin_extract_return_addr(__builtin_return_address(1));
+        ra[1] = NULL; /* 0091: diagnostic stack walking must not dereference a caller frame. */
         for (r = 0; r < 2; r++)
         {
             LDR_DATA_TABLE_ENTRY *mod = NULL;
@@ -2867,24 +2840,8 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
             /* ★ ПОПРАВКА 2678: было `sprintf` — прогон умирал `Killed: 9` на 0,23 с, ещё на
              * wineboot. Модуль собран с `-nodefaultlibs`, и тянуть сюда libc нельзя.
              * Складываем строку вручную, шестнадцатеричными полубайтами. */
-            static const char hexd[] = "0123456789abcdef";
-            const ULONG *w = (const ULONG *)args;
-            ULONG cnt = len / sizeof(ULONG), q;
-            char buf[12 * 9 + 1];
-            int off = 0;
-
-            if (cnt > 12) cnt = 12;
-            for (q = 0; q < cnt; q++)
-            {
-                ULONG v = w ? w[q] : 0;
-                int b8;
-
-                for (b8 = 28; b8 >= 0; b8 -= 4) buf[off++] = hexd[(v >> b8) & 0xf];
-                buf[off++] = ' ';
-            }
-            buf[off > 0 ? off - 1 : 0] = 0;
-            MESSAGE( "macrunner-wow64-что2678: n=%ld id=4 len=%lu слов=%lu | %s\n",
-                     (long)bk, len, (unsigned long)cnt, buf );
+            MESSAGE( "macrunner-wow64-что2678: n=%ld id=4 len=%lu args=%p memory=NOT_ENABLED\n",
+                     (long)bk, len, args );
         }
     }
 
@@ -3050,13 +3007,13 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
                 int popal = (guest_args <= 0x016bf998 && 0x016bf998 < guest_args + len);
 
                 if (k <= 12 || (popal && cb_hit++ < 24))
-                    MESSAGE( "macrunner-обрвызов2812: n=%ld id=%lu len=%lu esp_до=%08lx "
+                    MESSAGE( "memory=NOT_ENABLED macrunner-обрвызов2812: n=%ld id=%lu len=%lu esp_до=%08lx "
                              "блок=%08lx данные=%08lx попал_в_016bf998=%d w0=%08lx w1=%08lx\n",
                              (long)k, (unsigned long)id, (unsigned long)len,
                              (unsigned long)orig_ctx.Esp, (unsigned long)guest_stack,
                              (unsigned long)guest_args, popal,
-                             (unsigned long)(len >= 4 ? w[0] : 0),
-                             (unsigned long)(len >= 8 ? w[1] : 0) );
+                             (unsigned long)(len >= 4 ? 0 : 0),
+                             (unsigned long)(len >= 8 ? 0 : 0) );
             }
             ctx.Esp = PtrToUlong( stack );
             ctx.Eip = pLdrSystemDllInitBlock->pKiUserCallbackDispatcher;
@@ -3106,30 +3063,12 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
                      * это слова 11 и 12, мимо ровно на три слова.
                      * Снимаю их на ВХОДЕ и на ВЫХОДЕ. Испорчены уже на входе -> писал не
                      * обратный вызов, и вся нить обратных вызовов не при чём. */
-                    const ULONG *fr_in = (orig_ctx.Ebp >= 0x1000) ? guest32_host_ptr( orig_ctx.Ebp ) : NULL;
-                    /* ★ ЛЕСТНИЦА 2716 — РАЗЛИЧИТЕЛЬ ДВУХ ВЕРСИЙ 2715.
-                     * 2715 доказала: пары (eip=778f15d9, ebp=016bf998) в живом исполнении не
-                     * было — вызовов ровно 8 и все с ebp=016bf954. Остались две версии:
-                     * (1) контекст несогласован, (2) `eip` не живой pc, а ОБРАТНЫЙ АДРЕС,
-                     * снятый со стека. Различает одно слово: если [сохр_esp] тоже равно
-                     * сохр_eip — значит `eip` взят со стека, верна (2). */
-                    const ULONG *sp_in = (orig_ctx.Esp >= 0x1000) ? guest32_host_ptr( orig_ctx.Esp ) : NULL;
-                    MESSAGE( "macrunner-wow64-cb32: вход2673 n=%ld id=%lu кадр=%p стек_хозяин=%p "
-                             "стек_гость=%08lx сохр_eip=%08lx сохр_esp=%08lx новый_eip=%08lx "
-                             "посл_вызов=%08lx посл_счёт=%lu в_полёте2674=%lu сохр_eax=%08lx сохр_ebp=%08lx "
-                             "кадр_вход2713=%08lx %08lx слова_esp2716=%08lx %08lx %08lx %08lx\n",
-                             (long)k, id, &frame, stack, (unsigned long)PtrToUlong( stack ),
-                             (unsigned long)orig_ctx.Eip, (unsigned long)orig_ctx.Esp,
-                             (unsigned long)ctx.Eip,
-                             (unsigned long)svc_entry_num, (unsigned long)svc_entry_seq,
-                             (unsigned long)macrunner_svc_live(),
-                             (unsigned long)orig_ctx.Eax, (unsigned long)orig_ctx.Ebp,
-                             fr_in ? (unsigned long)fr_in[0] : 0,
-                             fr_in ? (unsigned long)fr_in[1] : 0,
-                             sp_in ? (unsigned long)sp_in[0] : 0,
-                             sp_in ? (unsigned long)sp_in[1] : 0,
-                             sp_in ? (unsigned long)sp_in[2] : 0,
-                             sp_in ? (unsigned long)sp_in[3] : 0 );
+                    /* 0091: EBP may be a scalar HWND, not a readable frame pointer. */
+                    MESSAGE( "macrunner-wow64-cb32: n=%ld id=%lu saved_eip=%08lx "
+                             "saved_esp=%08lx saved_ebp=%08lx saved_eax=%08lx memory=NOT_ENABLED\n",
+                             (long)k, id, (unsigned long)orig_ctx.Eip,
+                             (unsigned long)orig_ctx.Esp, (unsigned long)orig_ctx.Ebp,
+                             (unsigned long)orig_ctx.Eax );
                 }
             }
 
@@ -3265,71 +3204,11 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
                      * теперь включается САМИМ событием. */
                     if (k <= 6 || cbret_mismatch)
                     {
-                        const ULONG *stk = guest32_host_ptr( orig_ctx.Esp );
-                        const BYTE *code = guest32_host_ptr( orig_ctx.Eip );
-                        /* 2613: байты ПЕРЕД точкой возврата. Если гость стоит сразу за
-                         * `call rel32` (e8 xx xx xx xx), значит он вернулся из вызова —
-                         * это отличает «контекст снят по месту» от «контекст устарел».
-                         * Плюс поток: без него «устарел» неотличимо от «другой поток». */
-                        /* ★★★★★★ MacRunner 2026-08-29 — ЭТОТ ПРИБОР РОНЯЛ ОБЕ ИГРЫ.
-                         *
-                         * `guest32_host_ptr` — СКЛЕЙКА окна: она всегда возвращает указатель
-                         * и НИЧЕГО не проверяет (память guest32_host_ptr-никогда-не-даёт-ноль).
-                         * Когда гость стоит на трамплине `0x370000` — а это НАЧАЛО области —
-                         * `Eip - 8` попадает на `0x36fff8`, за нижнюю границу, где прав нет:
-                         *   vhf-probe: addr=0x30036fff8 pc=wow64.dll+0x33b40 site=bus
-                         *   vhf-probe-vm: vm_base=0x300280000 размер=f0000 prot=0
-                         * Дальше поток обратного вызова умирал, и ОБЕ мишени замирали навсегда:
-                         * Heroes III 1075 вызовов гостя и UT99 ~1305 — ОДИНАКОВО при 60 с и 180 с,
-                         * по 3 кадра. Один отказ за прогон стоил всей игры.
-                         *
-                         * Читаем ТОЛЬКО то, что заведомо отображено: байты в ОДНОЙ странице с
-                         * `Eip`. Сам Eip исполняется, значит его страница есть; выход за её
-                         * начало — единственный опасный случай, и он же наш.
-                         * Прибор обязан молчать, а не ронять прогон. */
-                        const BYTE *pre = ((orig_ctx.Eip & 0xfff) >= 8) ?
-                                          (const BYTE *)guest32_host_ptr( orig_ctx.Eip - 8 ) : NULL;
-
-                        /* ★ 2713: 8 слов не доставали до кадра. ebp = esp+0x2c -> слова 11 и 12.
-                         * Печатаю 16 слов и отдельно два слова ПО ebp, тем же снимком, что на входе. */
-                        const ULONG *fr_out = (orig_ctx.Ebp >= 0x1000) ? guest32_host_ptr( orig_ctx.Ebp ) : NULL;
-                        MESSAGE( "macrunner-cbret-кадр: n=%ld id=%lu возврат_eip=%08lx возврат_esp=%08lx "
-                                 "стек=%08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx "
-                                 "%08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx "
-                                 "кадр_выход2713=%08lx %08lx\n",
-                                 (long)k, id, (unsigned long)orig_ctx.Eip, (unsigned long)orig_ctx.Esp,
-                                 stk ? (unsigned long)stk[0] : 0, stk ? (unsigned long)stk[1] : 0,
-                                 stk ? (unsigned long)stk[2] : 0, stk ? (unsigned long)stk[3] : 0,
-                                 stk ? (unsigned long)stk[4] : 0, stk ? (unsigned long)stk[5] : 0,
-                                 stk ? (unsigned long)stk[6] : 0, stk ? (unsigned long)stk[7] : 0,
-                                 stk ? (unsigned long)stk[8] : 0, stk ? (unsigned long)stk[9] : 0,
-                                 stk ? (unsigned long)stk[10] : 0, stk ? (unsigned long)stk[11] : 0,
-                                 stk ? (unsigned long)stk[12] : 0, stk ? (unsigned long)stk[13] : 0,
-                                 stk ? (unsigned long)stk[14] : 0, stk ? (unsigned long)stk[15] : 0,
-                                 fr_out ? (unsigned long)fr_out[0] : 0,
-                                 fr_out ? (unsigned long)fr_out[1] : 0 );
-                        MESSAGE( "macrunner-cbret-код: n=%ld id=%lu eip=%08lx байты="
-                                 "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x "
-                                 "ret_len=%lu ebp=%08lx eax_до=%08lx eax_гостя=%08lx esp_гостя=%08lx "
-                                 "ecx=%08lx edx=%08lx esi=%08lx edi=%08lx "
-                                 "до_eip=%02x %02x %02x %02x %02x %02x %02x %02x "
-                                 "поток=%04lx teb32=%p вложен=%p\n",
+                        MESSAGE( "macrunner-cbret: n=%ld id=%lu eip=%08lx esp=%08lx "
+                                 "ebp=%08lx eax=%08lx memory=NOT_ENABLED\n",
                                  (long)k, id, (unsigned long)orig_ctx.Eip,
-                                 code ? code[0] : 0, code ? code[1] : 0, code ? code[2] : 0,
-                                 code ? code[3] : 0, code ? code[4] : 0, code ? code[5] : 0,
-                                 code ? code[6] : 0, code ? code[7] : 0, code ? code[8] : 0,
-                                 code ? code[9] : 0, code ? code[10] : 0, code ? code[11] : 0,
-                                 (unsigned long)(ret_len ? *ret_len : 0),
-                                 (unsigned long)orig_ctx.Ebp,
-                                 (unsigned long)orig_ctx.Eax, (unsigned long)cbret_cur_eax,
-                                 (unsigned long)cbret_cur_esp,
-                                 (unsigned long)orig_ctx.Ecx, (unsigned long)orig_ctx.Edx,
-                                 (unsigned long)orig_ctx.Esi, (unsigned long)orig_ctx.Edi,
-                                 pre ? pre[0] : 0, pre ? pre[1] : 0, pre ? pre[2] : 0,
-                                 pre ? pre[3] : 0, pre ? pre[4] : 0, pre ? pre[5] : 0,
-                                 pre ? pre[6] : 0, pre ? pre[7] : 0,
-                                 (unsigned long)(ULONG_PTR)NtCurrentTeb()->ClientId.UniqueThread,
-                                 teb32, frame.prev_frame );
+                                 (unsigned long)orig_ctx.Esp, (unsigned long)orig_ctx.Ebp,
+                                 (unsigned long)orig_ctx.Eax );
                         {
                             ULONG d = 0, sv = macrunner_svc_current( &d );
 
@@ -3518,8 +3397,8 @@ static BOOL macrunner_wow64_i386_mask_native_guest_seh( void **old_exception_lis
         return FALSE;
 
     frame32 = (const struct seh_frame32 *)frame;
-    MESSAGE( "macrunner-wow64: mask native guest32 seh frame=%p handler=%08lx prev=%08lx\n",
-             (void *)frame, frame32->handler, frame32->prev );
+    MESSAGE( "memory=NOT_ENABLED macrunner-wow64: mask native guest32 seh frame=%p handler=%08lx prev=%08lx\n",
+             (void *)frame, 0, 0 );
     if (old_exception_list) *old_exception_list = teb->Tib.ExceptionList;
     teb->Tib.ExceptionList = (void *)~(ULONG_PTR)0;
     return TRUE;
