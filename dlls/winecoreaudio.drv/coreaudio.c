@@ -94,6 +94,8 @@ struct coreaudio_stream
     BOOL playing, please_quit;
     REFERENCE_TIME period;
     UINT32 period_frames;
+    BOOL period_probe_enabled;
+    unsigned int period_probe_frames, period_probe_printed;
     UINT32 bufsize_frames, resamp_bufsize_frames;
     UINT32 lcl_offs_frames, held_frames, wri_offs_frames, tmp_buffer_frames;
     UINT32 cap_bufsize_frames, cap_offs_frames, cap_held_frames;
@@ -401,6 +403,8 @@ static OSStatus ca_render_cb(void *user, AudioUnitRenderActionFlags *flags,
     os_unfair_lock_lock(&stream->lock);
 
     if(stream->playing){
+        /* No debug calls or first-use initialization on the real-time thread. */
+        if (stream->period_probe_enabled) stream->period_probe_frames = nframes;
         lcl_offs_bytes = stream->lcl_offs_frames * stream->fmt->nBlockAlign;
         to_copy_frames = min(nframes, stream->held_frames);
         to_copy_bytes = to_copy_frames * stream->fmt->nBlockAlign;
@@ -721,6 +725,98 @@ static AudioDeviceID dev_id_from_device(const char *device)
     return id;
 }
 
+/* Device buffer size is shared by other CoreAudio clients. Opt in explicitly. */
+static BOOL macrunner_hardware_period_enabled(void)
+{
+    const char *value = getenv("MACRUNNER_COREAUDIO_HARDWARE_PERIOD");
+    return value && !strcmp(value, "1");
+}
+
+static HRESULT get_device_period_frame_range(AudioDeviceID dev_id, EDataFlow flow,
+                                             unsigned int *min_period_frames,
+                                             unsigned int *max_period_frames)
+{
+    AudioObjectPropertyAddress addr;
+    AudioValueRange range;
+    UInt32 size = sizeof(range);
+    OSStatus sc;
+
+    addr.mSelector = kAudioDevicePropertyBufferFrameSizeRange;
+    addr.mScope = get_scope(flow);
+    addr.mElement = kAudioObjectPropertyElementMain;
+    sc = AudioObjectGetPropertyData(dev_id, &addr, 0, NULL, &size, &range);
+    if (sc != noErr)
+    {
+        WARN("Failed to get device buffer frame size range: %x\n", (int)sc);
+        return osstatus_to_hresult(sc);
+    }
+    if (size != sizeof(range) || !(range.mMinimum >= 1 && range.mMaximum <= UINT_MAX &&
+                                  range.mMinimum <= range.mMaximum))
+        return E_INVALIDARG;
+    *min_period_frames = range.mMinimum;
+    *max_period_frames = range.mMaximum;
+    return S_OK;
+}
+
+static HRESULT get_device_period_frame_size(AudioDeviceID dev_id, EDataFlow flow,
+                                            unsigned int *period_frames)
+{
+    AudioObjectPropertyAddress addr;
+    UInt32 size = sizeof(*period_frames);
+    OSStatus sc;
+
+    addr.mSelector = kAudioDevicePropertyBufferFrameSize;
+    addr.mScope = get_scope(flow);
+    addr.mElement = kAudioObjectPropertyElementMain;
+    sc = AudioObjectGetPropertyData(dev_id, &addr, 0, NULL, &size, period_frames);
+    if (sc != noErr)
+    {
+        WARN("Failed to get device buffer frame size: %x\n", (int)sc);
+        return osstatus_to_hresult(sc);
+    }
+    return size == sizeof(*period_frames) && *period_frames ? S_OK : E_INVALIDARG;
+}
+
+static HRESULT set_device_period_frame_size(AudioDeviceID dev_id, EDataFlow flow,
+                                            unsigned int period_frames)
+{
+    AudioObjectPropertyAddress addr;
+    OSStatus sc;
+
+    addr.mSelector = kAudioDevicePropertyBufferFrameSize;
+    addr.mScope = get_scope(flow);
+    addr.mElement = kAudioObjectPropertyElementMain;
+    sc = AudioObjectSetPropertyData(dev_id, &addr, 0, NULL, sizeof(period_frames), &period_frames);
+    if (sc != noErr)
+    {
+        WARN("Failed to set device buffer frame size: %x\n", (int)sc);
+        return osstatus_to_hresult(sc);
+    }
+    return S_OK;
+}
+
+static HRESULT get_device_sample_rate(AudioDeviceID dev_id, EDataFlow flow,
+                                      unsigned int *n_samples_per_sec)
+{
+    AudioObjectPropertyAddress addr;
+    Float64 rate;
+    UInt32 size = sizeof(rate);
+    OSStatus sc;
+
+    addr.mSelector = kAudioDevicePropertyNominalSampleRate;
+    addr.mScope = get_scope(flow);
+    addr.mElement = kAudioObjectPropertyElementMain;
+    sc = AudioObjectGetPropertyData(dev_id, &addr, 0, NULL, &size, &rate);
+    if (sc != noErr)
+    {
+        WARN("Unable to get device nominal sample rate: %x\n", (int)sc);
+        return osstatus_to_hresult(sc);
+    }
+    if (size != sizeof(rate) || !(rate >= 1 && rate <= UINT_MAX)) return E_INVALIDARG;
+    *n_samples_per_sec = rate;
+    return S_OK;
+}
+
 static NTSTATUS unix_create_stream(void *args)
 {
     struct create_stream_params *params = args;
@@ -736,6 +832,7 @@ static NTSTATUS unix_create_stream(void *args)
         return STATUS_SUCCESS;
     }
 
+    stream->period_probe_enabled = TRACE_ON(coreaudio);
     stream->fmt = clone_format(params->fmt);
     if(!stream->fmt){
         params->result = E_OUTOFMEMORY;
@@ -744,10 +841,32 @@ static NTSTATUS unix_create_stream(void *args)
 
     stream->period = params->period;
     stream->period_frames = muldiv(params->period, stream->fmt->nSamplesPerSec, 10000000);
+    if (!stream->period_frames)
+    {
+        params->result = E_INVALIDARG;
+        goto end;
+    }
     stream->dev_id = dev_id_from_device(params->device);
     stream->flow = params->flow;
     stream->flags = params->flags;
     stream->share = params->share;
+
+    if (macrunner_hardware_period_enabled())
+    {
+        unsigned int min_period_frames, max_period_frames;
+        if (FAILED(params->result = get_device_period_frame_range(stream->dev_id, stream->flow,
+                                                                  &min_period_frames, &max_period_frames)))
+            goto end;
+        stream->period_frames = max(min_period_frames, min(stream->period_frames, max_period_frames));
+        if (FAILED(params->result = set_device_period_frame_size(stream->dev_id, stream->flow,
+                                                                 stream->period_frames)))
+            goto end;
+        /* Drivers may round the requested size. Use their actual value. */
+        if (FAILED(params->result = get_device_period_frame_size(stream->dev_id, stream->flow,
+                                                                 &stream->period_frames)))
+            goto end;
+        stream->period = muldiv(stream->period_frames, 10000000, stream->fmt->nSamplesPerSec);
+    }
 
     stream->bufsize_frames = muldiv(params->duration, stream->fmt->nSamplesPerSec, 10000000);
     if(params->share == AUDCLNT_SHAREMODE_EXCLUSIVE)
@@ -1024,7 +1143,6 @@ static NTSTATUS unix_get_mix_format(void *args)
     AudioObjectPropertyAddress addr;
     AudioChannelLayout *layout;
     AudioBufferList *buffers;
-    Float64 rate;
     UInt32 size;
     OSStatus sc;
     int i;
@@ -1097,15 +1215,8 @@ static NTSTATUS unix_get_mix_format(void *args)
         params->fmt->dwChannelMask = get_channel_mask(params->fmt->Format.nChannels);
     }
 
-    addr.mSelector = kAudioDevicePropertyNominalSampleRate;
-    size = sizeof(Float64);
-    sc = AudioObjectGetPropertyData(dev_id, &addr, 0, NULL, &size, &rate);
-    if(sc != noErr){
-        WARN("Unable to get _NominalSampleRate property: %x\n", (int)sc);
-        params->result = osstatus_to_hresult(sc);
+    if(FAILED(params->result = get_device_sample_rate(dev_id, params->flow, &params->fmt->Format.nSamplesPerSec)))
         return STATUS_SUCCESS;
-    }
-    params->fmt->Format.nSamplesPerSec = rate;
 
     params->fmt->Format.wBitsPerSample = 32;
     params->fmt->SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
@@ -1142,6 +1253,32 @@ static NTSTATUS unix_is_format_supported(void *args)
 static NTSTATUS unix_get_device_period(void *args)
 {
     struct get_device_period_params *params = args;
+
+    TRACE("MacRunner period device_uid=%s flow=%u hardware_key=%u\n",
+          params->device, params->flow, macrunner_hardware_period_enabled());
+    if (macrunner_hardware_period_enabled())
+    {
+        unsigned int rate, frames, min_frames, max_frames;
+        AudioDeviceID dev_id = dev_id_from_device(params->device);
+        if (FAILED(params->result = get_device_sample_rate(dev_id, params->flow, &rate)))
+            return STATUS_SUCCESS;
+        if (params->def_period)
+        {
+            if (FAILED(params->result = get_device_period_frame_size(dev_id, params->flow, &frames)))
+                return STATUS_SUCCESS;
+            TRACE("MacRunner actual period device_uid=%s frames=%u rate=%u\n", params->device, frames, rate);
+            *params->def_period = muldiv(frames, 10000000, rate);
+        }
+        if (params->min_period)
+        {
+            if (FAILED(params->result = get_device_period_frame_range(dev_id, params->flow,
+                                                                      &min_frames, &max_frames)))
+                return STATUS_SUCCESS;
+            *params->min_period = muldiv(min_frames, 10000000, rate);
+        }
+        params->result = S_OK;
+        return STATUS_SUCCESS;
+    }
 
     if (params->def_period)
         *params->def_period = def_period;
@@ -1369,6 +1506,13 @@ static NTSTATUS unix_get_current_padding(void *args)
 
     os_unfair_lock_lock(&stream->lock);
     *params->padding = get_current_padding_nolock(stream);
+    if (stream->period_probe_frames && stream->period_probe_printed < 3)
+    {
+        ++stream->period_probe_printed;
+        TRACE("MacRunner render period sample=%u dev_id=%u callback_frames=%u stream_period_frames=%u rate=%u\n",
+              stream->period_probe_printed, stream->dev_id, stream->period_probe_frames,
+              stream->period_frames, stream->fmt->nSamplesPerSec);
+    }
     os_unfair_lock_unlock(&stream->lock);
     params->result = S_OK;
     return STATUS_SUCCESS;
