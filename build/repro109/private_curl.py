@@ -13,7 +13,7 @@ SOURCE_HOSTS = PUBLIC_HOSTS | {'codeload.github.com', 'ftp.gnu.org',
     'downloads.xiph.org', 'downloads.sourceforge.net', '*.dl.sourceforge.net',
     'distfiles.ariadne.space', 'www.mpg123.de', 'download.gnome.org', 'www.gnupg.org',
     'gstreamer.freedesktop.org', 'ffmpeg.org', 'gitlab.freedesktop.org',
-    'code.videolan.org', 'gitlab.com'}
+    'code.videolan.org', 'gitlab.com', 'download.videolan.org'}
 MARKER = '\nREPRO109_CURL_META\n'
 HEADER_LIMIT = 128 * 1024
 TRANSIENT_CURL = {5, 6, 7, 18, 28, 35, 52, 55, 56, 92}

@@ -82,6 +82,10 @@ def download(row, destination, out, transfer=None):
                 # the real transport classifier's retry decision before checking
                 # fields which only describe a complete successful HTTP 200 body.
                 reason = reason or 'curl transport failed'
+            elif reason is not None:
+                # Do not turn an explicit transport metadata/redirect refusal
+                # into a checksum mismatch eligible for another endpoint.
+                pass
             elif response.get('http_status') != 200:
                 reason = reason or 'expected HTTP 200'
             elif response.get('content_encoding', 'identity') not in ('', 'identity'):
@@ -112,11 +116,12 @@ def download(row, destination, out, transfer=None):
                                selected_final_host=response.get('final_host', 'NOT_ENABLED'))
                 record()
                 return receipt
-            # Only availability failures may select the next sealed source. A
-            # complete but incorrect body, certificate failure or malformed
-            # metadata remains terminal, even if another mirror exists.
+            # A wrong body is evidence about this endpoint, not about the next
+            # independently sealed URL. Preserve it before trying that URL.
+            # Certificate and local I/O failures retain their existing handling.
             fallback = source_index + 1 < len(urls) and (
                 retryable or
+                reason == 'archive checksum or size differs' or
                 (reason == 'expected HTTP 200' and response.get('http_status') in (404, 410)) or
                 (reason == response.get('failure_reason') and
                  response.get('failure_stage') == 'REDIRECT_DESTINATION_REFUSED'))

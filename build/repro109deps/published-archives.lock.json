@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "kind": "OFFICIAL_PUBLISHED_ARCHIVE_METADATA",
+  "archive_bytes_on_local_mac": "NOT_ENABLED",
+  "raw_remote_metadata": "NOT_CAPTURED_DERIVED_FIELDS_ONLY",
+  "files": [
+    {
+      "name": "dav1d",
+      "version": "1.5.3",
+      "size": 1022836,
+      "sha256": "732010aa5ef461fa93355ed2c6c5fedb48ddc4b74e697eaabe8907eaeb943011",
+      "checksum_url": "https://download.videolan.org/pub/videolan/dav1d/1.5.3/dav1d-1.5.3.tar.xz.sha256",
+      "size_url": "https://download.videolan.org/pub/videolan/dav1d/1.5.3/"
+    },
+    {
+      "name": "fontconfig",
+      "version": "2.18.2",
+      "size": 1347988,
+      "sha256": "cf8e6576ef0484c15079bdaf77cd9c51c464df5365814ada4d3ee7331ea31eb5",
+      "checksum_url": "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.2/fontconfig-2.18.2.tar.xz.sha256sum",
+      "size_url": "https://gitlab.freedesktop.org/api/v4/projects/890/packages/1262/package_files"
+    },
+    {
+      "name": "zstd",
+      "version": "1.5.7",
+      "size": 2434947,
+      "sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+      "checksum_url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz.sha256",
+      "size_url": "https://api.github.com/repos/facebook/zstd/releases/tags/v1.5.7"
+    }
+  ]
+}

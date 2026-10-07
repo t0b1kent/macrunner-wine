@@ -2,6 +2,12 @@ name: REPRO-109 Wine for c9 from pinned sources
 
 on:
   workflow_dispatch:
+    inputs:
+      phase:
+        description: 'inputs first; full only after reviewing the complete input receipt'
+        type: choice
+        options: [inputs, full]
+        default: inputs
 
 permissions:
   contents: read
@@ -11,7 +17,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  inputs:
+    runs-on: xcode-27
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+    steps:
+      - name: Checkout component recipe
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Select pinned driver Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Acquire and verify all 47 source components without building
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -B build/repro109deps/preflight_sources.py \
+            --work "$RUNNER_TEMP/repro109-wine-c9-inputs" --workers 8 --minutes 10 \
+            > "$RUNNER_TEMP/repro109-wine-c9-inputs.log" 2>&1
+          tar -czf "$RUNNER_TEMP/repro109-wine-c9-inputs.tar.gz" \
+            -C "$RUNNER_TEMP/repro109-wine-c9-inputs" .
+      - name: Preserve every input status and verified source set
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: repro109-wine-c9-inputs-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/repro109-wine-c9-inputs/reports/
+            ${{ runner.temp }}/repro109-wine-c9-inputs.tar.gz
+            ${{ runner.temp }}/repro109-wine-c9-inputs.log
+          if-no-files-found: error
+          retention-days: 7
   wine:
+    needs: inputs
+    if: ${{ inputs.phase == 'full' }}
     runs-on: xcode-27
     timeout-minutes: 360
     env:
@@ -35,12 +78,23 @@ jobs:
           [ "$(xcrun --show-sdk-version)" = '27.0' ] || { printf 'Pinned SDK 27.0 missing\n'; exit 1; }
       - name: Check source recipe without downloads
         run: python3 -I -B build/repro109wine/build_full.py --check-inputs
+      - name: Receive the verified source set from the first job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: repro109-wine-c9-inputs-${{ github.sha }}
+          path: ${{ runner.temp }}/repro109-wine-c9-prepared
+      - name: Restore source modes and rehash the entire input set before any compiler
+        run: >-
+          python3 -I -B build/repro109deps/preflight_sources.py
+          --extract "${{ runner.temp }}/repro109-wine-c9-prepared/repro109-wine-c9-inputs.tar.gz"
+          --work "${{ runner.temp }}/repro109-wine-c9-prepared-inputs"
       - name: Build all source dependencies and Wine
         shell: bash
         run: |
           set -uo pipefail
           python3 -I -B build/repro109wine/build_full.py --profile github-xcode27-arm64 \
             --build --work "$RUNNER_TEMP/repro109-wine-c9-work" --jobs 3 \
+            --source-inputs "$RUNNER_TEMP/repro109-wine-c9-prepared-inputs" \
             > "$RUNNER_TEMP/repro109-wine-c9-driver.log" 2>&1
           build_rc=$?
           printf '%s\n' "$build_rc" > "$RUNNER_TEMP/repro109-wine-c9-rc.txt"

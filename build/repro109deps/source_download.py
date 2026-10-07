@@ -21,14 +21,26 @@ def read_pins():
     rows = json.loads((HERE / 'deps.lock.json').read_text())['components']
     archives = {r['name'] for r in rows if r.get('source_kind') != 'git'}
     sizes = pins['component_sizes_lines']
+    published = pins.get('published_sizes', {})
     missing = pins['unpinned_sizes']
-    if (set(sizes) | set(missing) != archives or set(sizes) & set(missing) or
-            missing != ['ffmpeg', 'gst-libav'] or len(sizes) != 44):
+    if (set(sizes) | set(published) | set(missing) != archives or
+            set(sizes) & set(published) or (set(sizes) | set(published)) & set(missing) or
+            missing != ['ffmpeg', 'gst-libav'] or len(sizes) + len(published) != 44):
         raise ValueError('Source download size coverage differs')
     if any(type(v) is not list or len(v) != 2 or type(v[0]) is not int or
            not 0 < v[0] <= 256 * 1024**2 or type(v[1]) is not int or v[1] < 1
            for v in sizes.values()):
         raise ValueError('Source archive size/receipt line refused')
+    locked = {r['name']: r for r in rows}
+    if published:
+        metadata_sha = hashlib.sha256((HERE/'published-archives.lock.json').read_bytes()).hexdigest()
+        if any(locked[name]['metadata'].get('sha256') != metadata_sha for name in published):
+            raise ValueError('Published source metadata file differs from dependency pin')
+    if any(type(v) is not dict or type(v.get('bytes')) is not int or
+           not 0 < v['bytes'] <= 256 * 1024**2 or v.get('sha256') != locked[name]['sha256'] or
+           not isinstance(v.get('metadata_urls'), list) or not v['metadata_urls']
+           for name, v in published.items()):
+        raise ValueError('Published source size/SHA metadata refused')
     return pins
 
 
@@ -41,6 +53,8 @@ def download(row, destination, out):
     request = dict(name=row['name'], url=row['url'], sha256=row['sha256'])
     if row['name'] in pins['component_sizes_lines']:
         request['size'] = pins['component_sizes_lines'][row['name']][0]
+    elif row['name'] in pins.get('published_sizes', {}):
+        request['size'] = pins['published_sizes'][row['name']]['bytes']
     elif row['name'] in pins['unpinned_sizes']:
         request['maximum_size'] = 256 * 1024**2
     else:
@@ -54,6 +68,47 @@ def download(row, destination, out):
     request['source_route'] = dict(component=row['name'], allowed_hosts=route['allowed_hosts'],
                                   route_lock_sha256=hashlib.sha256((HERE/'source-routes.lock.json').read_bytes()).hexdigest())
     return public_archive.download(request, destination, out, transfer=transfer)
+
+
+def other_official_mirrors(row, route):
+    parsed = urllib.parse.urlparse(row['url'])
+    origin, path = parsed.hostname, parsed.path
+    if origin == 'github.com':
+        parts = path.split('/')
+        project = '/'.join(parts[1:3])
+        if '/archive/refs/tags/' in path and path.endswith('.tar.gz'):
+            tag = path.split('/archive/refs/tags/')[1][:-7]
+            return ['https://codeload.github.com/' + project + '/tar.gz/refs/tags/' + tag]
+        asset = route.get('github_asset_id')
+        if '/releases/download/' not in path or type(asset) is not int or asset < 1:
+            raise ValueError('Official GitHub release asset identity missing')
+        return ['https://api.github.com/repos/' + project + '/releases/assets/' + str(asset)]
+    if row['name'] == 'fontconfig' and origin == 'gitlab.freedesktop.org':
+        prefix = '/api/v4/projects/890/packages/generic/fontconfig/'
+        if not path.startswith(prefix):
+            raise ValueError('Static fontconfig package route refused')
+        return ['https://gitlab.freedesktop.org/api/v4/projects/fontconfig%2Ffontconfig/packages/generic/fontconfig/' + path[len(prefix):]]
+    if row['name'] == 'svt-av1' and origin == 'gitlab.com':
+        return ['https://gitlab.com/api/v4/projects/AOMediaCodec%2FSVT-AV1/repository/archive.tar.bz2?sha=v' + row['version']]
+    if origin == 'download.videolan.org':
+        return ['https://downloads.videolan.org' + path]
+    if origin == 'downloads.xiph.org':
+        return ['https://ftp.osuosl.org/pub/xiph' + path]
+    if origin == 'gstreamer.freedesktop.org' and path.startswith('/src/'):
+        return ['https://' + origin + '/data' + path]
+    if origin == 'distfiles.ariadne.space':
+        return ['https://distfiles.dereferenced.org' + path]
+    if origin == 'www.mpg123.de':
+        return ['https://mpg123.org' + path]
+    if origin == 'download.gnome.org':
+        return ['https://ftp.gnome.org/pub/GNOME' + path]
+    if origin == 'www.gnupg.org' and path.startswith('/ftp/'):
+        return ['https://ftp.gnupg.org' + path[4:]]
+    if origin == 'ffmpeg.org':
+        return ['https://www.ffmpeg.org' + path]
+    if origin == 'files.pythonhosted.org' and row['name'] == 'meson':
+        return ['https://files.pythonhosted.org/packages/source/m/meson/meson-' + row['version'] + '.tar.gz']
+    raise ValueError('Official mirror rule missing for component: ' + row['name'])
 
 
 def read_routes():
@@ -103,8 +158,13 @@ def read_routes():
                 raise ValueError('SourceForge source mirror order/path differs from locked publisher')
             if not all(urllib.parse.urlparse(url).hostname in hosts for url in mirrors):
                 raise ValueError('SourceForge source mirror exact hosts missing')
-        elif 'mirror_urls' in route:
-            raise ValueError('Source mirror list is only enabled for GNU/SourceForge components')
+        else:
+            mirrors = other_official_mirrors(row, route)
+            if route.get('mirror_urls') != mirrors:
+                raise ValueError('Source mirror order/path differs from locked publisher')
+            official_hosts.update(urllib.parse.urlparse(url).hostname for url in mirrors)
+            if not all(urllib.parse.urlparse(url).hostname in hosts for url in mirrors):
+                raise ValueError('Source mirror exact hosts missing')
         if origin == 'github.com':
             official_hosts.add('codeload.github.com' if '/archive/' in row['url'] else 'release-assets.githubusercontent.com')
         elif origin == 'downloads.xiph.org':

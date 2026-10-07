@@ -96,15 +96,15 @@ class GnuMirrorTests(unittest.TestCase):
         self.assertEqual(receipt['time_cap_seconds'], 150)
         self.assertFalse(self.destination.exists())
 
-    def test_wrong_sha_is_terminal_at_each_endpoint(self):
+    def test_wrong_sha_tries_all_remaining_endpoints_before_failure(self):
         for index in range(3):
             with self.subTest(source_index=index), tempfile.TemporaryDirectory() as directory:
                 self.out = Path(directory) / 'out'; self.out.mkdir()
                 self.destination = Path(directory) / 'accepted.archive'
                 result, error, receipt, seen = self.exercise([self.tls_failure()] * index +
-                                                            [(b'X' * len(self.body), {})])
+                                                            [(b'X' * len(self.body), {})] * (3 - index))
                 self.assertIsNone(result)
-                self.assertEqual(len(seen), index + 1)
+                self.assertEqual(len(seen), 3)
                 self.assertEqual(receipt['attempts'][-1]['failure_reason'], 'archive checksum or size differs')
                 self.assertFalse(receipt['attempts'][-1]['fallback_next_source'])
                 self.assertFalse(self.destination.exists())
@@ -212,8 +212,8 @@ class GnuMirrorTests(unittest.TestCase):
             elif row['url'].startswith('https://downloads.sourceforge.net/project/'):
                 self.assertEqual(len(request['source_urls']), 3)
             else:
-                self.assertNotIn('mirror_urls', route)
-                self.assertEqual(len(request['source_urls']), 1)
+                self.assertEqual(len(route['mirror_urls']), 1)
+                self.assertEqual(len(request['source_urls']), 2)
         self.assertEqual(set(gnu), {'libunistring', 'gettext', 'bison', 'gmp', 'nettle', 'libtasn1', 'libidn2'})
 
     def test_mirror_lock_rejects_order_path_protocol_query_host_and_non_gnu_grants(self):

@@ -20,9 +20,10 @@ from test_public_archive import PublicArchiveTests, PublicCurlTests
 
 
 class SourceDownloadTests(unittest.TestCase):
-    def test_44_measured_sizes_and_two_explicit_unknowns_bind_exact_lock(self):
+    def test_41_measured_three_published_sizes_and_two_unknowns_bind_exact_lock(self):
         pins = source.read_pins()
-        self.assertEqual(len(pins['component_sizes_lines']), 44)
+        self.assertEqual(len(pins['component_sizes_lines']), 41)
+        self.assertEqual(set(pins['published_sizes']), {'dav1d', 'fontconfig', 'zstd'})
         self.assertEqual(pins['unpinned_sizes'], ['ffmpeg', 'gst-libav'])
         rows = deps.read_lock()['components']
         for row in rows:
@@ -35,7 +36,7 @@ class SourceDownloadTests(unittest.TestCase):
                 self.assertIs(kwargs['transfer'].func, source.source_transfer)
                 self.assertEqual(kwargs['transfer'].keywords['allowed_hosts'],
                                  source.read_routes()['routes'][row['name']]['allowed_hosts'])
-                self.assertEqual('size' in args[0], row['name'] in pins['component_sizes_lines'])
+                self.assertEqual('size' in args[0], row['name'] not in pins['unpinned_sizes'])
 
     def test_modified_source_url_or_digest_never_reaches_transport(self):
         original = deps.read_lock()['components'][0]

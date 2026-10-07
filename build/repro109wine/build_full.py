@@ -202,8 +202,12 @@ def compose(prefix, deps_manifest, molten_prefix, molten_manifest, out, dep, win
     return path
 
 
-def build(root, lock, jobs=4, profile='github'):
+def build(root, lock, jobs=4, profile='github', source_inputs=None):
     cloud_guard(profile)  # Before work creation, source/tool execution or downloads.
+    if source_inputs is not None:
+        source_inputs = source_inputs.resolve()
+        source_check = load_driver('repro109_full_source_check', REPO / 'repro109deps/preflight_sources.py')
+        source_check.validate(source_inputs, source_check.dep.read_lock())
     root = root.resolve()
     require(not root.exists(), 'Fresh cloud work required; no overwrite/retry')
     require(not any(char.isspace() for char in str(root)), 'Work path must not contain whitespace')
@@ -226,7 +230,8 @@ def build(root, lock, jobs=4, profile='github'):
             sdk, _, _ = dep.toolchain_preflight(selected['toolchain'], out)
             result['sdk_exports'] = check_sdk_exports(sdk, out)
         phase = 'DEPS10'
-        dep.build(SimpleNamespace(work=root / 'deps', jobs=jobs, minutes=95), apply_profile(dep.read_lock(), profile))
+        dep.build(SimpleNamespace(work=root / 'deps', jobs=jobs, minutes=95, source_inputs=source_inputs),
+                  apply_profile(dep.read_lock(), profile))
         phase = 'MOLTENVK2'
         require(time.monotonic() < deadline, 'Task deadline before MoltenVK')
         mv.build(SimpleNamespace(work=root / 'moltenvk', jobs=jobs, minutes=60), apply_profile(mv.read_lock(), profile))
@@ -267,6 +272,7 @@ def main():
     mode.add_argument('--build', action='store_true')
     parser.add_argument('--work', type=Path)
     parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--source-inputs', type=Path, help='Verified all-component cloud source set')
     parser.add_argument('--profile', choices=['github', 'github-macos15-arm64', 'github-xcode27-arm64', 'xcode-cloud'], default='github-xcode27-arm64')
     args = parser.parse_args()
     lock = check_inputs()
@@ -274,7 +280,7 @@ def main():
         print(json.dumps(dict(status='FULL_WINE_INPUTS_PINNED_NOT_BUILT', files=len(lock['files']))))
     else:
         require(args.work is not None and 1 <= args.jobs <= 8, 'Supply fresh work and 1..8 jobs')
-        build(args.work, lock, args.jobs, args.profile)
+        build(args.work, lock, args.jobs, args.profile, args.source_inputs)
 
 
 if __name__ == '__main__':

@@ -123,15 +123,15 @@ class SourceForgeMirrorTests(unittest.TestCase):
                 self.assertEqual(receipt['time_cap_seconds'], 150)
                 self.assertFalse(destination.exists())
 
-    def test_checksum_failure_remains_terminal_at_every_source(self):
+    def test_checksum_failure_tries_every_remaining_source(self):
         for component in COMPONENTS:
             for index in range(3):
                 with self.subTest(component=component, source_index=index):
                     prefix = ([self.unknown(component)] + [(35, 0, b'', None)] * (index - 1)) if index else []
                     result, error, receipt, seen, destination = self.exercise(component,
-                        prefix + [(0, 200, b'X' * len(self.body), None)])
+                        prefix + [(0, 200, b'X' * len(self.body), None)] * (3 - index))
                     self.assertIsNotNone(error)
-                    self.assertEqual(len(seen), index + 1)
+                    self.assertEqual(len(seen), 3)
                     self.assertEqual(receipt['attempts'][-1]['failure_reason'], 'archive checksum or size differs')
                     self.assertFalse(receipt['attempts'][-1]['fallback_next_source'])
                     self.assertFalse(destination.exists())

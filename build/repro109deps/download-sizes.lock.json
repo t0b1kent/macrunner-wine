@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "deps_lock_sha256": "6234ff2dfc0c00de9487fb6be0609e90ca01189d15c17dc2e5036c4038451177",
+  "deps_lock_sha256": "72d0408b6b46e3cd5b82eeb111388af58d9b37950f55086c332cf96e425fceed",
   "timeline_path": "artifacts/claude-hb-work/cloud-runs/repro109-deps8-37211082215/x/timeline.jsonl",
   "timeline_sha256": "e935ea8f76fb354878aa35a45d484968203cc1b57e0e2344f302924ed2542937",
   "component_sizes_lines": {
@@ -104,10 +104,6 @@
       5782636,
       219
     ],
-    "fontconfig": [
-      654441,
-      228
-    ],
     "p11-kit": [
       1069216,
       233
@@ -115,10 +111,6 @@
     "gnutls": [
       7275324,
       244
-    ],
-    "zstd": [
-      2451884,
-      254
     ],
     "vulkan-headers": [
       3058600,
@@ -160,10 +152,6 @@
       234348,
       381
     ],
-    "dav1d": [
-      1217030,
-      393
-    ],
     "lame": [
       1524133,
       402
@@ -187,5 +175,34 @@
   ],
   "git_source": [
     "x264"
-  ]
+  ],
+  "published_sizes": {
+    "dav1d": {
+      "bytes": 1022836,
+      "sha256": "732010aa5ef461fa93355ed2c6c5fedb48ddc4b74e697eaabe8907eaeb943011",
+      "metadata_urls": [
+        "https://download.videolan.org/pub/videolan/dav1d/1.5.3/dav1d-1.5.3.tar.xz.sha256",
+        "https://download.videolan.org/pub/videolan/dav1d/1.5.3/"
+      ],
+      "state": "OFFICIAL_METADATA_ARCHIVE_BYTES_TO_BE_VERIFIED_IN_CLOUD"
+    },
+    "fontconfig": {
+      "bytes": 1347988,
+      "sha256": "cf8e6576ef0484c15079bdaf77cd9c51c464df5365814ada4d3ee7331ea31eb5",
+      "metadata_urls": [
+        "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.2/fontconfig-2.18.2.tar.xz.sha256sum",
+        "https://gitlab.freedesktop.org/api/v4/projects/890/packages/1262/package_files"
+      ],
+      "state": "OFFICIAL_METADATA_ARCHIVE_BYTES_TO_BE_VERIFIED_IN_CLOUD"
+    },
+    "zstd": {
+      "bytes": 2434947,
+      "sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+      "metadata_urls": [
+        "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz.sha256",
+        "https://api.github.com/repos/facebook/zstd/releases/tags/v1.5.7"
+      ],
+      "state": "OFFICIAL_METADATA_ARCHIVE_BYTES_TO_BE_VERIFIED_IN_CLOUD"
+    }
+  }
 }

@@ -31,7 +31,7 @@ MAX_EXPANDED = 2 * 1024 * 1024 * 1024
 MAX_LOG = 64 * 1024 * 1024
 OFFICIAL_HOSTS = {'ftp.gnu.org', 'downloads.xiph.org', 'downloads.sourceforge.net',
                   'distfiles.ariadne.space', 'www.mpg123.de', 'download.gnome.org', 'www.gnupg.org',
-                  'gstreamer.freedesktop.org', 'ffmpeg.org'}
+                  'gstreamer.freedesktop.org', 'ffmpeg.org', 'download.videolan.org'}
 GITHUB_PROJECTS = {'Kitware/CMake', 'ninja-build/ninja', 'westes/flex',
                    'libffi/libffi', 'PCRE2Project/pcre2', 'libusb/libusb', 'libsdl-org/SDL',
                     'openssl/openssl', 'p11-glue/p11-kit', 'fmtlib/fmt', 'Cyan4973/xxHash',
@@ -83,7 +83,8 @@ def official(url):
         if not ((_repro_check_4_0 := url) == (_repro_check_4_1 := MESON_SDIST)):
             raise AssertionError(_check_message('url == MESON_SDIST', {'url': locals().get('_repro_check_4_0', 'NOT_EVALUATED'), 'MESON_SDIST': locals().get('_repro_check_4_1', 'NOT_EVALUATED')}, 'Only pinned official Meson source distribution is permitted'))
     elif parsed.hostname == 'gitlab.freedesktop.org':
-        if not ((_repro_check_5_0 := parsed.path.startswith('/fontconfig/fontconfig/-/archive/'))):
+        if not ((_repro_check_5_0 := parsed.path.startswith('/fontconfig/fontconfig/-/archive/') or
+                parsed.path.startswith('/api/v4/projects/890/packages/generic/fontconfig/'))):
             raise AssertionError(_check_message("parsed.path.startswith('/fontconfig/fontconfig/-/archive/')", {"parsed.path.startswith('/fontconfig/fontconfig/-/archive/')": locals().get('_repro_check_5_0', 'NOT_EVALUATED')}, 'Foreign source project'))
     elif parsed.hostname == 'code.videolan.org':
         if not (parsed.path.startswith('/videolan/dav1d/-/archive/') or
@@ -695,6 +696,10 @@ def cloud_guard(tool):
 
 def build(args, lock):
     cloud_guard(lock['toolchain'])  # Before work creation, source execution or downloads.
+    prepared = getattr(args, 'source_inputs', None)
+    if prepared is not None:
+        import preflight_sources
+        preflight_sources.validate(prepared, lock)  # Before SDK probes or any compiler.
     root = args.work.resolve()
     if not (not (_repro_check_62_0 := root.exists()) and (not (_repro_check_62_1 := re.search('\\s', str(root))))):
         raise AssertionError(_check_message("not root.exists() and not re.search(r'\\s', str(root))", {'root.exists()': locals().get('_repro_check_62_0', 'NOT_EVALUATED'), "re.search('\\\\s', str(root))": locals().get('_repro_check_62_1', 'NOT_EVALUATED')}, 'Fresh work path without whitespace required'))
@@ -702,6 +707,8 @@ def build(args, lock):
     root.mkdir(parents=True)
     prefix, out = root / 'prefix', root / 'reports'
     prefix.mkdir(); out.mkdir()
+    if prepared is not None:
+        shutil.copyfile(Path(prepared) / 'reports/RESULT.json', out / 'source-inputs-RESULT.json')
     sdk, clang, clangxx = toolchain_preflight(tool, out)
     for directory in ['bin', 'lib/pkgconfig', 'share/pkgconfig', 'include']:
         (prefix / directory).mkdir(parents=True, exist_ok=True)
@@ -751,7 +758,13 @@ def build(args, lock):
                        parent_inherited_keys=sorted(set(env).intersection({'HOME', 'TMPDIR', 'DEVELOPER_DIR'})))
                 if current == 'libpng':
                     probe_sdk_zlib(prefix, env, out, deadline, command)
-                if row.get('source_kind') == 'git':
+                if prepared is not None:
+                    phase = 'PREPARED_SOURCE_COPY'
+                    source = preflight_sources.copy_source(row, prepared, archive, root)
+                    event(out, component=current, state='PREPARED_SOURCE_PRESENT',
+                          bytes=archive.stat().st_size, sha256=file_sha(archive),
+                          evidence='source-inputs-RESULT.json')
+                elif row.get('source_kind') == 'git':
                     source = git_source(row, root, archive, env, out, deadline)
                 else:
                     download(row, archive, out)
