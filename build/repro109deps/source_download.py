@@ -169,6 +169,12 @@ def read_routes():
             official_hosts.add('codeload.github.com' if '/archive/' in row['url'] else 'release-assets.githubusercontent.com')
         elif origin == 'downloads.xiph.org':
             official_hosts.add('ftp.osuosl.org')
+        elif (row['name'] == 'fontconfig' and origin == 'gitlab.freedesktop.org' and
+              row['url'] == 'https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/' +
+              row['version'] + '/fontconfig-' + row['version'] + '.tar.xz'):
+            # Publisher package redirects observed in the pinned 47-input run.
+            # This exact backend is granted to fontconfig only; no wildcard.
+            official_hosts.add('fsn1.your-objectstorage.com')
         elif origin == 'downloads.sourceforge.net':
             official_hosts.update({'cfhcable.dl.sourceforge.net', 'gigenet.dl.sourceforge.net', 'netactuate.dl.sourceforge.net'})
             # Exact b27/b30 publisher redirects; no wildcard or cross-component grant.

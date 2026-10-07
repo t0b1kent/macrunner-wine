@@ -20,6 +20,60 @@ from test_public_archive import PublicArchiveTests, PublicCurlTests
 
 
 class SourceDownloadTests(unittest.TestCase):
+    def test_fontconfig_backend_is_component_scoped_and_origins_stay_locked(self):
+        routes = source.read_routes()
+        backend = 'fsn1.your-objectstorage.com'
+        self.assertEqual(routes['routes']['fontconfig']['allowed_hosts'],
+                         ['gitlab.freedesktop.org', backend])
+        for name, route in routes['routes'].items():
+            if name != 'fontconfig':
+                self.assertNotIn(backend, route['allowed_hosts'])
+        changed = copy.deepcopy(routes)
+        changed['routes']['zstd']['allowed_hosts'].append(backend)
+        original_read = Path.read_text
+        def read(path, *args, **kwargs):
+            if path.name == 'source-routes.lock.json':
+                return json.dumps(changed)
+            return original_read(path, *args, **kwargs)
+        with patch.object(Path, 'read_text', read), self.assertRaisesRegex(ValueError, 'not an official mirror'):
+            source.read_routes()
+
+    def test_fontconfig_publisher_redirect_follows_only_exact_backend_without_tokens(self):
+        row = next(r for r in deps.read_lock()['components'] if r['name'] == 'fontconfig')
+        first = row['url']
+        hosts = source.read_routes()['routes']['fontconfig']['allowed_hosts']
+        for destination, accepted in [
+            ('https://fsn1.your-objectstorage.com/fdo-gitlab-packages/owned-fixture?temporary=synthetic', True),
+            ('https://fsn1.your-objectstorage.com.foreign.invalid/fdo-gitlab-packages/owned', False),
+            ('http://fsn1.your-objectstorage.com/fdo-gitlab-packages/owned', False),
+            ('https://foreign.invalid/owned', False)]:
+            with self.subTest(accepted=accepted), tempfile.TemporaryDirectory() as directory:
+                calls = []
+                def run(argv, **kwargs):
+                    config = kwargs['input'].decode()
+                    url = json.loads(config.splitlines()[0].partition(' = ')[2])
+                    calls.append(url)
+                    self.assertNotIn('Authorization:', config)
+                    self.assertNotIn('owned-secret', config)
+                    self.assertFalse({'RESULTS_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'} & set(kwargs['env']))
+                    code = 302 if len(calls) == 1 else 200
+                    headers = ('HTTP/1.1 302 Found\r\nLocation: ' + destination + '\r\n\r\n'
+                               if code == 302 else 'HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n')
+                    Path(argv[argv.index('--output') + 1]).write_bytes(b'' if code == 302 else b'own')
+                    return subprocess.CompletedProcess(argv, 0,
+                        (headers + private_curl.MARKER + str(code) + '\n' + url + '\n').encode(), b'')
+                with patch.object(private_curl.subprocess, 'run', side_effect=run), \
+                     patch.dict(os.environ, dict(RESULTS_TOKEN='owned-secret', GH_TOKEN='owned-secret',
+                                                 GITHUB_TOKEN='owned-secret')):
+                    receipt = private_curl.source_transfer(first, Path(directory) / 'archive', 16,
+                                                          allowed_hosts=hosts)
+                self.assertEqual(calls, [first, destination] if accepted else [first])
+                if accepted:
+                    self.assertEqual(receipt['http_status'], 200)
+                    self.assertEqual(receipt['redirects'], 1)
+                else:
+                    self.assertEqual(receipt['failure_stage'], 'REDIRECT_DESTINATION_REFUSED')
+
     def test_41_measured_three_published_sizes_and_two_unknowns_bind_exact_lock(self):
         pins = source.read_pins()
         self.assertEqual(len(pins['component_sizes_lines']), 41)

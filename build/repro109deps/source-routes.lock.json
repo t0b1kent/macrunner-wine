@@ -323,9 +323,10 @@
     "fontconfig": {
       "url": "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.2/fontconfig-2.18.2.tar.xz",
       "allowed_hosts": [
-        "gitlab.freedesktop.org"
+        "gitlab.freedesktop.org",
+        "fsn1.your-objectstorage.com"
       ],
-      "evidence": "OFFICIAL_PROJECT_ENDPOINTS_PINNED_SHA_BACKUPS_NOT_YET_CLOUD_TESTED",
+      "evidence": "PINNED_OFFICIAL_GITLAB_PACKAGE_REDIRECT_OBSERVED_RUN37604151411; exact fontconfig backend; archive size/SHA remain mandatory; query not stored",
       "mirror_urls": [
         "https://gitlab.freedesktop.org/api/v4/projects/fontconfig%2Ffontconfig/packages/generic/fontconfig/2.18.2/fontconfig-2.18.2.tar.xz"
       ]
