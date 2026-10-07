@@ -103,20 +103,53 @@ static void init_options(void)
          nb_debug_options ? debug_options[0].name : "(net)", debug_options[0].flags );
 }
 
-/* add a string to the output buffer */
+static int flush_output( struct debug_info *info, size_t len )
+{
+    int ret = __wine_dbg_write( info->output, len );
+
+    if (ret > 0)
+    {
+        info->out_pos -= ret;
+        memmove( info->output, info->output + ret, info->out_pos );
+    }
+    return ret == len ? 0 : -1;
+}
+
+/* Keep a byte pending on partial lines, just as on the Unix side. */
 static int append_output( struct debug_info *info, const char *str, size_t len )
 {
-    if (len >= sizeof(info->output) - info->out_pos)
+    size_t total = len, count;
+
+    while (len)
     {
-        __wine_dbg_write( info->output, info->out_pos );
-        info->out_pos = 0;
-        ERR_(thread)( "debug buffer overflow:\n" );
-        __wine_dbg_write( str, len );
-        RtlRaiseStatus( STATUS_BUFFER_OVERFLOW );
+        count = min( len, sizeof(info->output) - info->out_pos );
+        memcpy( info->output + info->out_pos, str, count );
+        info->out_pos += count;
+        str += count;
+        len -= count;
+        if (info->out_pos == sizeof(info->output) &&
+            flush_output( info, sizeof(info->output) - 1 ) < 0) return -1;
     }
-    memcpy( info->output + info->out_pos, str, len );
-    info->out_pos += len;
-    return len;
+    return total;
+}
+
+/* Logging can precede process-heap initialization.  Scratch formatting
+ * storage therefore uses the NT VM allocator, not the process heap. */
+void * __cdecl __wine_dbg_alloc( unsigned int size )
+{
+    void *ptr = NULL;
+    SIZE_T region_size = size;
+
+    if (NtAllocateVirtualMemory( NtCurrentProcess(), &ptr, 0, &region_size,
+                                 MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE )) return NULL;
+    return ptr;
+}
+
+void __cdecl __wine_dbg_free( void *ptr )
+{
+    SIZE_T size = 0;
+
+    NtFreeVirtualMemory( NtCurrentProcess(), &ptr, &size, MEM_RELEASE );
 }
 
 /***********************************************************************
@@ -176,7 +209,8 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
 {
     static const char * const classes[] = { "fixme", "err", "warn", "trace" };
     struct debug_info *info = get_info();
-    char *pos = info->output;
+    char prefix[80];
+    int ret = 0, len;
 
     if (!(__wine_dbg_get_channel_flags( channel ) & (1 << cls))) return -1;
 
@@ -186,15 +220,28 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
     if (TRACE_ON(timestamp))
     {
         ULONG ticks = NtGetTickCount();
-        pos += sprintf( pos, "%3lu.%03lu:", ticks / 1000, ticks % 1000 );
+        len = snprintf( prefix, sizeof(prefix), "%3lu.%03lu:", ticks / 1000, ticks % 1000 );
+        if (append_output( info, prefix, len ) < 0) return -1;
+        ret += len;
     }
-    if (TRACE_ON(pid)) pos += sprintf( pos, "%04lx:", GetCurrentProcessId() );
-    pos += sprintf( pos, "%04lx:", GetCurrentThreadId() );
+    if (TRACE_ON(pid))
+    {
+        len = snprintf( prefix, sizeof(prefix), "%04lx:", GetCurrentProcessId() );
+        if (append_output( info, prefix, len ) < 0) return -1;
+        ret += len;
+    }
+    len = snprintf( prefix, sizeof(prefix), "%04lx:", GetCurrentThreadId() );
+    if (append_output( info, prefix, len ) < 0) return -1;
+    ret += len;
     if (function && cls < ARRAY_SIZE( classes ))
-        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%s:%s:%s ",
-                         classes[cls], channel->name, function );
-    info->out_pos = pos - info->output;
-    return info->out_pos;
+    {
+        len = snprintf( prefix, sizeof(prefix), "%s:%.15s:", classes[cls], channel->name );
+        if (append_output( info, prefix, len ) < 0 ||
+            append_output( info, function, strlen(function) ) < 0 ||
+            append_output( info, " ", 1 ) < 0) return -1;
+        ret += len + strlen(function) + 1;
+    }
+    return ret;
 }
 
 /***********************************************************************
@@ -218,12 +265,16 @@ int __cdecl __wine_dbg_output( const char *str )
 
     if (end)
     {
-        ret += append_output( info, str, end + 1 - str );
-        __wine_dbg_write( info->output, info->out_pos );
-        info->out_pos = 0;
+        if ((ret = append_output( info, str, end + 1 - str )) < 0) return -1;
+        if (flush_output( info, info->out_pos ) < 0) return -1;
         str = end + 1;
     }
-    if (*str) ret += append_output( info, str, strlen( str ));
+    if (*str)
+    {
+        int tail = append_output( info, str, strlen( str ));
+        if (tail < 0) return -1;
+        ret += tail;
+    }
     return ret;
 }
 
