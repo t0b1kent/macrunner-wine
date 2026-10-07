@@ -103,20 +103,45 @@ static void init_options(void)
          nb_debug_options ? debug_options[0].name : "(net)", debug_options[0].flags );
 }
 
-/* add a string to the output buffer */
+static int flush_output( struct debug_info *info, size_t len )
+{
+    int ret = __wine_dbg_write( info->output, len );
+
+    if (ret > 0)
+    {
+        info->out_pos -= ret;
+        memmove( info->output, info->output + ret, info->out_pos );
+    }
+    return ret == len ? 0 : -1;
+}
+
+/* Write long strings directly, retaining a byte to mark partial lines. */
 static int append_output( struct debug_info *info, const char *str, size_t len )
 {
+    size_t total = len, count;
+    int ret;
+
     if (len >= sizeof(info->output) - info->out_pos)
     {
-        __wine_dbg_write( info->output, info->out_pos );
-        info->out_pos = 0;
-        ERR_(thread)( "debug buffer overflow:\n" );
-        __wine_dbg_write( str, len );
-        RtlRaiseStatus( STATUS_BUFFER_OVERFLOW );
+        if (flush_output( info, info->out_pos ) < 0) return -1;
+        if (len >= sizeof(info->output))
+        {
+            ret = __wine_dbg_write( str, len - 1 );
+            if (ret != len - 1)
+            {
+                if (ret < 0) ret = 0;
+                count = min( len - ret, sizeof(info->output) );
+                memcpy( info->output, str + ret, count );
+                info->out_pos = count;
+                return -1;
+            }
+            str += len - 1;
+            len = 1;
+        }
     }
     memcpy( info->output + info->out_pos, str, len );
     info->out_pos += len;
-    return len;
+    return total;
 }
 
 /***********************************************************************
@@ -176,7 +201,8 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
 {
     static const char * const classes[] = { "fixme", "err", "warn", "trace" };
     struct debug_info *info = get_info();
-    char *pos = info->output;
+    char prefix[80];
+    int ret = 0, len;
 
     if (!(__wine_dbg_get_channel_flags( channel ) & (1 << cls))) return -1;
 
@@ -186,15 +212,28 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
     if (TRACE_ON(timestamp))
     {
         ULONG ticks = NtGetTickCount();
-        pos += sprintf( pos, "%3lu.%03lu:", ticks / 1000, ticks % 1000 );
+        len = snprintf( prefix, sizeof(prefix), "%3lu.%03lu:", ticks / 1000, ticks % 1000 );
+        if (append_output( info, prefix, len ) < 0) return -1;
+        ret += len;
     }
-    if (TRACE_ON(pid)) pos += sprintf( pos, "%04lx:", GetCurrentProcessId() );
-    pos += sprintf( pos, "%04lx:", GetCurrentThreadId() );
+    if (TRACE_ON(pid))
+    {
+        len = snprintf( prefix, sizeof(prefix), "%04lx:", GetCurrentProcessId() );
+        if (append_output( info, prefix, len ) < 0) return -1;
+        ret += len;
+    }
+    len = snprintf( prefix, sizeof(prefix), "%04lx:", GetCurrentThreadId() );
+    if (append_output( info, prefix, len ) < 0) return -1;
+    ret += len;
     if (function && cls < ARRAY_SIZE( classes ))
-        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%s:%s:%s ",
-                         classes[cls], channel->name, function );
-    info->out_pos = pos - info->output;
-    return info->out_pos;
+    {
+        len = snprintf( prefix, sizeof(prefix), "%s:%.15s:", classes[cls], channel->name );
+        if (append_output( info, prefix, len ) < 0 ||
+            append_output( info, function, strlen(function) ) < 0 ||
+            append_output( info, " ", 1 ) < 0) return -1;
+        ret += len + strlen(function) + 1;
+    }
+    return ret;
 }
 
 /***********************************************************************
@@ -218,12 +257,16 @@ int __cdecl __wine_dbg_output( const char *str )
 
     if (end)
     {
-        ret += append_output( info, str, end + 1 - str );
-        __wine_dbg_write( info->output, info->out_pos );
-        info->out_pos = 0;
+        if ((ret = append_output( info, str, end + 1 - str )) < 0) return -1;
+        if (flush_output( info, info->out_pos ) < 0) return -1;
         str = end + 1;
     }
-    if (*str) ret += append_output( info, str, strlen( str ));
+    if (*str)
+    {
+        int tail = append_output( info, str, strlen( str ));
+        if (tail < 0) return -1;
+        ret += tail;
+    }
     return ret;
 }
 
