@@ -1,0 +1,10 @@
+{
+  "profile": "xcode-cloud",
+  "classification": "DIAGNOSTIC_ONLY_NOT_GOLDEN",
+  "xcode_major": 27,
+  "sdk": "27.0",
+  "ld": "27037.1",
+  "python_minimum": [3, 9],
+  "unmeasured_exact_pins": ["Xcode build number", "Apple clang build", "Apple driver Python patch version", "macOS build"],
+  "policy": "Record exact selected tools before source downloads; archive/source pins unchanged; GitHub profile retains its exact pins. No platform equality or runtime acceptance claimed."
+}

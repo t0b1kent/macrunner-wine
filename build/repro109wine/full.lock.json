@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "classification": "FULL_WINE_SOURCE_BUILD_NOT_GOLDEN",
+  "python": "3.13.7",
+  "minutes": 330,
+  "files": {
+    "repro109deps/build_deps.py": "3f038bce483170abc528d6a4ff88bda54e01b97ff8a8993249214214cf73e429",
+    "repro109deps/deps.lock.json": "6234ff2dfc0c00de9487fb6be0609e90ca01189d15c17dc2e5036c4038451177",
+    "repro109deps/source_fixes.py": "cf406e73da199481f76f6478da507285cc11fd1259d2e1df081cd15908b8ed43",
+    "repro109moltenvk/build_moltenvk.py": "d9c2770dbe034dfb0bb84d02395402e40471a831bc2df9d7b63130e2d176e317",
+    "repro109moltenvk/moltenvk.lock.json": "7ecf835f6addc4478eae6e21e6043655ae0b600117c1cf54f61d6e7a90569cfb",
+    "repro109wine/build_wine.py": "3c3d25ffca8db6aa8842a6818fda8cd0f3e88165e9f6d7b37274524d768c6aed",
+    "repro109wine/wine.lock.json": "05a66acaa8d9cd1d431740dfd7172373e8ffba42c26f14e10c98011125542b3f",
+    "repro109wine/check-build-srcdir.sh": "ac378727521764ad407f4276443b3411a5cf31c4a3f0fe4b13b54a57407299e4",
+    "repro109wine/check-arm64ec-dist.py": "b9a00a75e80341717ea39aad6d85d93b1e72c9e5ece63bd87bd14c540cafbad9",
+    "repro109/public_archive.py": "7a9eb2bf00aa699a802422548b9bb8e5146ba42cff19237f4018bcbce34b9940",
+    "repro109/private_curl.py": "266055b9d94dfb30fccc3d51a24db27d8d4386a5924030e3dd7d37f7da362177",
+    "repro109/archive_safety.py": "3a13e7c6a335a2e6cbf282e2c755a7caed0000720fd719cf2b282f5473355305",
+    "repro109/fex64.lock.json": "46f2adebeeb5fe301735d7131d092ad67c9203f1e68b96c65ae42380f732e1ee",
+    "repro109deps/source_download.py": "9b4e8b41e255af0691f1315f45e4ba7a54537c5781d0ed93b7e6f6738306c161",
+    "repro109deps/source-routes.lock.json": "0bdba189e57d8b3d3429b8eb5196bdd35af1276f2c2f33f2fcca9bd6890b88c9",
+    "repro109deps/download-sizes.lock.json": "4f8f171daa33af993e4a95f7fd337f43cba1b30ee6e120c5e64c2c70d88e9c8c",
+    "repro109deps/xcode-cloud.lock.json": "a417b08cdbfd879628a6792999fb957125a4ed89e3a1fac8fb0c2d04730bbb72",
+    "repro109wine/keyboard109.lock.json": "3da62337b5590e0b7f086741a76fc861713c25f63925d37556903a17966b4141",
+    "repro109wine/late_source.py": "5036b1735b15f6a290bd10c4558b033d641cf48f4ad4f9ca362a457d969e7a95",
+    "repro109wine/late/0097-winemac-keyboard-ascii.patch": "0d5ea043c78fd408cb85d6688a98df28600ba929eb7d22cc92ab201dafe39a12",
+    "repro109wine/build_full.py": "94aea3bc6a36ace80b920cba6ff0ab3091f40e7cdde329a31010e7a761280acc",
+    "repro109wine/github-macos15.lock.json": "eb29cff86b28659b42ee404887510874f42ce239c6d65ed84473fdc101171bcf",
+    "repro109deps/port_probe.py": "d8bf3c5c32b875a1f41f73c6e55aa03cffedfb818a52bfd1183d2557d8b97b28",
+    "repro109deps/deps13_support.py": "4f59693d64bdd6a3b601ea406d88d95cdf2d572012f0a0df24ec7fe8b3273c74",
+    "repro109deps/native_timeout.py": "73277515bc81843d117aa752c70b388870e0406126328f0cb7344fafa3e06a92",
+    "repro109deps/deps14_support.py": "6349ac9b9e8fd9dca0e4e5faa91dee68d79a424f1e6e9c2f43fe80cd6b18eff2",
+    "repro109deps/deps9_support.py": "6c1a7e86718fbae563cbd15c933db3040ca6e1442d1400409344ea27dfaca0ce",
+    "repro109deps/failure_evidence.py": "96a3593f3ca761b056ff04479779f31c743d72b62b32755d18770cf14dcfcbd4"
+  },
+  "compiler": {
+    "name": "llvm-mingw",
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260505/llvm-mingw-20260505-ucrt-macos-universal.tar.xz",
+    "sha256": "050379de888f0c843787819dadf183df3693330a5724643919e9121f16355295",
+    "size": 121913248
+  }
+}

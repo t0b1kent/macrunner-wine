@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "classification": "SOURCE_CANDIDATE_109_NOT_RELEASE_108_R5",
+  "wine_revision": "ce9f9ed6177d57a43f6fd1e9c8d9be87224eb08a",
+  "target": "dlls/winemac.drv/cocoa_app.m",
+  "base_blob": "a4c181718e04e0bbedc31415b29e08bb50aa56a9",
+  "base_bytes": 133046,
+  "base_sha256": "8f06b3d9c749d86b6393c89fdf2ea04846257d874388342f86e4b7e685b6730c",
+  "patch": "late/0097-winemac-keyboard-ascii.patch",
+  "patch_bytes": 2560,
+  "patch_sha256": "0d5ea043c78fd408cb85d6688a98df28600ba929eb7d22cc92ab201dafe39a12",
+  "result_bytes": 134109,
+  "result_sha256": "638fb958fe6d69f2f8f58c530a20c92fa3d3b992fa669b7f18d8e8a48da6a220",
+  "fixture": "fixtures/keyboard109-base-cocoa_app.m",
+  "origin": "Retained r2 source archive ee235b915cdfc89ffd35aa82f2df4ac5a1f2e5e80f0afc9bf17f09ad3b30d89a; public immutable Wine tree confirms base blob; APP32 source patch receipt."
+}

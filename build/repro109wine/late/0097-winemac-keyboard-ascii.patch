@@ -1,0 +1,60 @@
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -731,6 +731,8 @@
+     - (void) keyboardSelectionDidChange:(BOOL)force
+     {
+         TISInputSourceRef inputSource, inputSourceLayout;
++        static int ascii_enabled = -1;
++        BOOL useASCII;
+ 
+         if (!force)
+         {
+@@ -739,8 +741,16 @@
+                 return;
+         }
+ 
+-        inputSource = TISCopyCurrentKeyboardInputSource();
+-        inputSourceLayout = TISCopyCurrentKeyboardLayoutInputSource();
++        if (ascii_enabled < 0)
++        {
++            const char *value = getenv("MACRUNNER_KEYBOARD_ASCII");
++            ascii_enabled = value && !strcmp(value, "1");
++        }
++        useASCII = ascii_enabled && !self.inputSourceIsInputMethod;
++        inputSource = useASCII ? TISCopyCurrentASCIICapableKeyboardInputSource() :
++                                 TISCopyCurrentKeyboardInputSource();
++        inputSourceLayout = useASCII ? TISCopyCurrentASCIICapableKeyboardLayoutInputSource() :
++                                       TISCopyCurrentKeyboardLayoutInputSource();
+         if (!force && EqualInputSource(inputSource, lastKeyboardInputSource) &&
+             EqualInputSource(inputSourceLayout, lastKeyboardLayoutInputSource))
+         {
+@@ -3033,8 +3043,17 @@
+ {
+     OnMainThread(^{
+         TISInputSourceRef inputSourceLayout;
+-
+-        inputSourceLayout = TISCopyCurrentKeyboardLayoutInputSource();
++        static int ascii_enabled = -1;
++        BOOL useASCII;
++
++        if (ascii_enabled < 0)
++        {
++            const char *value = getenv("MACRUNNER_KEYBOARD_ASCII");
++            ascii_enabled = value && !strcmp(value, "1");
++        }
++        useASCII = ascii_enabled && ![WineApplicationController sharedController].inputSourceIsInputMethod;
++        inputSourceLayout = useASCII ? TISCopyCurrentASCIICapableKeyboardLayoutInputSource() :
++                                       TISCopyCurrentKeyboardLayoutInputSource();
+         if (inputSourceLayout)
+         {
+             CFDataRef data = TISGetInputSourceProperty(inputSourceLayout,
+@@ -3045,7 +3064,8 @@
+             *keyboard_type = [WineApplicationController sharedController].keyboardType;
+             *is_iso = (KBGetLayoutType(*keyboard_type) == kKeyboardISO);
+             if (input_source)
+-                *input_source = TISCopyCurrentKeyboardInputSource();
++                *input_source = useASCII ? TISCopyCurrentASCIICapableKeyboardInputSource() :
++                                          TISCopyCurrentKeyboardInputSource();
+         }
+     });
+ }

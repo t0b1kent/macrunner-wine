@@ -1,0 +1,94 @@
+{"schema": 1, "scope": "OPTIONAL_BUILD_ACCELERATOR_NOT_RELEASE_DEPENDENCY", "reason": "ccache is not needed for compiler semantics; all seven helpers have only ccache as consumer in deps7 DAG", "components": [
+    {
+      "name": "fmt",
+      "version": "12.1.0",
+      "url": "https://github.com/fmtlib/fmt/releases/download/12.1.0/fmt-12.1.0.zip",
+      "sha256": "695fd197fa5aff8fc67b5f2bbc110490a875cdf7a41686ac8512fb480fa8ada7",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/fmt/12.1.0/.brew/fmt.rb", "sha256": "a521cb96bd2bef636a2660198473ad6026164a8f87bdf36eb6be182f18f27a88"},
+      "kind": "cmake",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DBUILD_SHARED_LIBS=ON", "-DFMT_TEST=OFF", "-DFMT_DOC=OFF"],
+      "outputs": ["include/fmt/format.h", "lib/libfmt.dylib"]
+    },
+    {
+      "name": "xxhash",
+      "version": "0.8.3",
+      "url": "https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.3.tar.gz",
+      "sha256": "aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/xxhash/0.8.3/.brew/xxhash.rb", "sha256": "45752d81027af8794aee985cfbd081741565d51ea8a3a76d5a0dd3e9f430ec8d"},
+      "kind": "cmake",
+      "source_subdir": "cmake_unofficial",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DBUILD_SHARED_LIBS=ON", "-DXXHASH_BUILD_XXHSUM=OFF"],
+      "outputs": ["include/xxhash.h", "lib/libxxhash.dylib"]
+    },
+    {
+      "name": "blake3",
+      "version": "1.8.5",
+      "url": "https://github.com/BLAKE3-team/BLAKE3/archive/refs/tags/1.8.5.tar.gz",
+      "sha256": "220bd81286e2a0585beac66d41ac3f4c2c33ae8a4e339fc88cf22d5e00514fe9",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/blake3/1.8.5/.brew/blake3.rb", "sha256": "61a74466bad6d8f03fa3542c135b22605f100977c8c4bea052dbacdb25d54977"},
+      "kind": "cmake",
+      "source_subdir": "c",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DBUILD_SHARED_LIBS=ON"],
+      "outputs": ["include/blake3.h", "lib/libblake3.dylib"]
+    },
+    {
+      "name": "cpp-httplib",
+      "version": "0.59.0",
+      "url": "https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.59.0.tar.gz",
+      "sha256": "7c8cc7df044abb837d75f7c1e56333305acb40335c3788b8f5fbf5927e63e148",
+      "metadata": {"kind": "official_homebrew_formula_api_source_pin_not_download_verification", "url": "https://formulae.brew.sh/api/formula/cpp-httplib.json", "sha256": "495f1f5c844aa840a518b12d9911354c0b22112ac7374185c202fadbfb136f13"},
+      "kind": "cmake",
+      "depends": ["cmake", "ninja", "openssl"],
+      "args": ["-DHTTPLIB_TEST=OFF", "-DHTTPLIB_COMPILE=OFF", "-DHTTPLIB_REQUIRE_OPENSSL=ON", "-DHTTPLIB_USE_ZLIB_IF_AVAILABLE=OFF", "-DHTTPLIB_USE_BROTLI_IF_AVAILABLE=OFF"],
+      "outputs": ["include/httplib.h"]
+    },
+    {
+      "name": "doctest",
+      "version": "2.5.3",
+      "url": "https://github.com/doctest/doctest/archive/refs/tags/v2.5.3.tar.gz",
+      "sha256": "174ebc4e769928959614789c5b4e9c3d0a0f81a62bb608756b127bfebfb21331",
+      "metadata": {"kind": "official_homebrew_formula_api_source_pin_not_download_verification", "url": "https://formulae.brew.sh/api/formula/doctest.json", "sha256": "82e34e6dde6d69f39979f44da9237fd6f04f6964e227f5d37dc494eda2e8b9d1"},
+      "kind": "cmake",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DDOCTEST_WITH_TESTS=OFF", "-DDOCTEST_WITH_MAIN_IN_STATIC_LIB=OFF"],
+      "outputs": ["include/doctest/doctest.h"]
+    },
+    {
+      "name": "span-lite",
+      "version": "0.11.0",
+      "url": "https://github.com/nonstd-lite/span-lite/archive/refs/tags/v0.11.0.tar.gz",
+      "sha256": "ef4e028e18ff21044da4b4641ca1bc8a2e2d656e2028322876c0e1b9b6904f9d",
+      "metadata": {"kind": "official_homebrew_formula_api_source_pin_not_download_verification", "url": "https://formulae.brew.sh/api/formula/span-lite.json", "sha256": "773ea62d902657d7c5009a7f4d7c5323b38abe99f754e452dc0caa4966742178"},
+      "kind": "cmake",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DSPAN_LITE_OPT_BUILD_TESTS=OFF"],
+      "outputs": ["include/nonstd/span.hpp"]
+    },
+    {
+      "name": "tl-expected",
+      "version": "1.3.1",
+      "url": "https://github.com/TartanLlama/expected/archive/refs/tags/v1.3.1.tar.gz",
+      "sha256": "9a04f4f472fbb5c30bf60402f1ca626c4a76987f867978d0b8a35d7ab3fb8fe7",
+      "metadata": {"kind": "official_homebrew_formula_api_source_pin_not_download_verification", "url": "https://formulae.brew.sh/api/formula/tl-expected.json", "sha256": "f7f2c643e4f09d02ccf24b831d408b845d66d0e133d7f46eb0abe612c7f401d2"},
+      "kind": "cmake",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DEXPECTED_BUILD_TESTS=OFF"],
+      "outputs": ["include/tl/expected.hpp"]
+    },
+    {
+      "name": "ccache",
+      "version": "4.13.6",
+      "url": "https://github.com/ccache/ccache/releases/download/v4.13.6/ccache-4.13.6.tar.xz",
+      "sha256": "a7de667ca08cf67c3c8af9f213f6aa701a1188a2b3163fb74483858ce5e79fbb",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/ccache/4.13.6/.brew/ccache.rb", "sha256": "33af1e6c4f04d9a664ac097ee200799e9a5cefa6523e8779d140e9d190a5694d"},
+      "kind": "cmake",
+      "depends": ["cmake", "ninja", "pkgconf", "fmt", "xxhash", "zstd", "blake3", "cpp-httplib", "doctest", "span-lite", "tl-expected"],
+      "args": ["-DDEPS=LOCAL", "-DENABLE_DOCUMENTATION=OFF", "-DENABLE_TESTING=ON", "-DHTTP_STORAGE_BACKEND=OFF", "-DREDIS_STORAGE_BACKEND=OFF"],
+      "test_args": ["--no-tests=error"],
+      "outputs": ["bin/ccache"],
+      "probe": ["bin/ccache", "--version"]
+    }
+  ]}

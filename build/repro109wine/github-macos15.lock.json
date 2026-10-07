@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "classification": "SOURCE_RECIPE_NOT_ACCEPTED_NOT_GOLDEN",
+  "runner_label": "macos-15",
+  "toolchain": {
+    "python": "3.13.7",
+    "xcode": "26.3",
+    "xcode_build": "17C529",
+    "sdk": "26.2",
+    "apple_clang": "Apple clang version",
+    "deployment_target": "14.0"
+  },
+  "compiler_pin_scope": "Compiler is selected from the exact Xcode bundle; full version is recorded before source downloads. Additional clang version assertion is NOT_ENABLED until first cloud receipt.",
+  "official_runner_document": "https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md",
+  "document_observed_image": "20260907.0337.1",
+  "sdk_x18_exports": "UNKNOWN_UNTIL_CLOUD_PREFLIGHT",
+  "expected_standalone_wine": {"ec": 642, "pe64": 757, "hexpthk": 642, "a64xrm": 642},
+  "count_reference": "Retained source-built Wine b43; package r2 643/759 is a different composition.",
+  "engine_pairing": {
+    "repository": "https://github.com/t0b1kent/hyperbridge.git",
+    "base_revision": "4d489f182db3b05bb7465d9705483c490f718114",
+    "candidate_revision": "94bc17c974eba1633c1f15fe227a883a765e1fd5",
+    "candidate_directory": "stands/hardware/candidates/c9-release-defaults-aa-20261007",
+    "fex64": "r5 plus c9",
+    "fex32": "r5 unchanged",
+    "scope": "FEX is built by its separate pinned workflow; no translator binary is an input to the Wine source build. Assembly and ABI stands remain pending."
+  },
+  "signing": "OWNER_ONLY",
+  "games": "NOT_ENABLED"
+}

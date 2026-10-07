@@ -1,0 +1,288 @@
+{
+  "schema": 1,
+  "classification": "CLEAN_SOURCE_RECIPE_PENDING_CLOUD_BUILD_AND_SECTION_COMPARISON",
+  "repo_source_observed": "t0b1kent/hyperbridge",
+  "repo_source_revision": "3915d9fe0b03d37cf08a43f8e621eb730a912ac2",
+  "fex_repo": "https://github.com/FEX-Emu/FEX.git",
+  "base": "fd141ed6d721d03062619e4702bca1a0c93b6dd9",
+  "patches": [
+    {
+      "path": "source/fex-patches/0001-0001-Darwin-executable-JIT-memory-through-MAP-JIT-MacRunner-N2.patch",
+      "sha256": "b634d5ab4a6bb4b7be5b78a2da969d1745a952126f9a3010c99649f8d77eda11"
+    },
+    {
+      "path": "source/fex-patches/0002-0002-Darwin-unixlib-handler-7-EnableJITExec-and-W-X-write-scopes-.patch",
+      "sha256": "01ec8164fb59c2de2ad9d803fb6411b3d0ce3a6d7425cf13d6c2f156ebcc092f"
+    },
+    {
+      "path": "source/fex-patches/0003-0003-Darwin-unixlib-ABI-marker-fex-darwin-unixlib-abi-MacRunner-N.patch",
+      "sha256": "53f3d4144ecf6d0e2908dfdedcdba766db020915711fa964960d0ff5fa96f1f1"
+    },
+    {
+      "path": "source/fex-patches/0004-0004-ARM64EC-load-TEB-Self-for-GS-seeding-on-Darwin-inlin.patch",
+      "sha256": "428af39e7c0d517f2a6cb494ed9789512cce4820323da41dd1893fc0d41d6555"
+    },
+    {
+      "path": "source/fex-patches/0005-0005-Windows-InvalidationTracker-works-in-16-KiB-host-pro.patch",
+      "sha256": "fddd27450bbefea2b402ee92bb837361bd8f95fe42696feaeef5523ae3276eb6"
+    },
+    {
+      "path": "source/fex-patches/0006-0006-FEXCore-validate-code-in-writable-pages-under-mtrack.patch",
+      "sha256": "14ff6a0f4fc8a897da28ea77299a3ed1bb8e1bef49af98e10206ed3b45f886da"
+    },
+    {
+      "path": "source/fex-patches/0007-0007-Windows-16-KiB-call-ret-stack-guards-on-Darwin.patch",
+      "sha256": "9d3cacb30c2015801149dddd546ddc0fc985517a64fbaa996cea93317ff1d79b"
+    },
+    {
+      "path": "source/fex-patches/0008-0008-FEX-do-not-publish-stale-block-links-full-parity-at-.patch",
+      "sha256": "d9437510ec975d4e602ce65734ea216ed73d51fecdf24ce9b75488a2cd6a2ba7"
+    },
+    {
+      "path": "source/fex-patches/0009-0009-Elden-Ring-lane-JIT-statistics-writable-code-validat.patch",
+      "sha256": "5553b5cee486802883f115d009f4c58b47396eaa9566151c15de46fae7d8ae5b"
+    },
+    {
+      "path": "source/fex-patches/0010-0010-Invalidation-keep-translations-across-permission-fli.patch",
+      "sha256": "37351a8742caa5f4f34d6d213433eb0aeb55a8f6243bdf64251b1a99daec754d"
+    },
+    {
+      "path": "source/fex-patches/0011-0011-x87-division-by-zero-raises-the-exception-SF-in-the-.patch",
+      "sha256": "8187e6c8d75a6090133f23216784a9678808c0728272fa64b92e3f88d228534c"
+    },
+    {
+      "path": "source/fex-patches/0012-0012-JIT-map-on-Windows-MACRUNNER_FEX_JITMAP_DIR-and-a-wo.patch",
+      "sha256": "4406bfdff8fd9efd21714c8a6b3bb89fd80678412db1864c9233f405cedcead3"
+    },
+    {
+      "path": "source/fex-patches/0013-0013-Windows-GetSectionFilePath-without-process-heap-allo.patch",
+      "sha256": "036029e5b95e7191b92dbd506e527e6b6519022be93d1712740afddb35a3a331"
+    },
+    {
+      "path": "source/fex-patches/0014-0014-DIV-IDIV-DE-on-quotient-overflow-divisor-read-once-M.patch",
+      "sha256": "67ed1836b2b71e23bcfe6b4988cb9bc2048d0e9d8921da13385a40408d020144"
+    },
+    {
+      "path": "source/fex-patches/0015-0015-SHLD-r-m16-r16-16-CF-by-the-double-wide-rule-upstrea.patch",
+      "sha256": "6169dde49f1b788043162552add19ee476bfaa057d7560b59f16702e80f08c4f"
+    },
+    {
+      "path": "source/fex-patches/0016-0016-ExitFunction-no-jump-to-host-0-for-a-branch-to-guest.patch",
+      "sha256": "74ff49c0ecc7dacd00ce840c811dc9f32acdb497699cfe7a5e680224f39d57af"
+    },
+    {
+      "path": "source/fex-patches/0017-0017-DIV-IDIV-plain-n-bit-division-after-xor-edx-edx-CDQ-.patch",
+      "sha256": "32cc0a73ec0eead84e7a328962c76bd3f875f2622d2dce60d307f0d611b81b48"
+    },
+    {
+      "path": "source/fex-patches/0018-0018-DIV-IDIV-STATUS_INTEGER_OVERFLOW-for-a-quotient-over.patch",
+      "sha256": "078dc87752f05d059b204f5f3e61c484c11bb324d6236640048321f6767da5ac"
+    },
+    {
+      "path": "source/fex-patches/0019-0019-Darwin-no-process-wide-hardware-TSO-from-a-single-th.patch",
+      "sha256": "199c9a1114a55f2320342204562eef2bb85e0ae83f1815f5d6552cffeb46aa0f"
+    },
+    {
+      "path": "source/fex-patches/0020-0020-EXPERIMENT-REVIVE-must-not-return-translations-made-.patch",
+      "sha256": "6e143f744390a17896dbb8d3ee314a709ff52a9a3df480dd047d4d850e6fd1d4"
+    },
+    {
+      "path": "source/fex-patches/0021-0021-EXPERIMENT-non-writable-executable-range-starts-at-t.patch",
+      "sha256": "574c2787c6f4c77b83b59d041f8fd9f3a20e9804938197dbd13d32aa99afd715"
+    },
+    {
+      "path": "source/fex-patches/0022-0022-EXPERIMENT-keep-pre-exception-PF-AF-DF-across-an-exc.patch",
+      "sha256": "1e3aebb2f9154409f8470c5d716a062339ebd0c3e3fd1b90250af26003fb8fc8"
+    },
+    {
+      "path": "source/fex-patches/0023-0023-EXPERIMENT-MACRUNNER_FEX_RANGE_CACHE-1-answers-the-w.patch",
+      "sha256": "c2d2317d3d535818b74ff4fae5b690b4192553a27928e2614d1e94c2e1fed1ed"
+    },
+    {
+      "path": "source/fex-patches/0024-0024-EXPERIMENT-precise-invalidation-for-Mono-call-target.patch",
+      "sha256": "66ed22cdbc5efa1b6d1d2164b14fca0f8ab709da7adf62e06d6a22aa379c2a50"
+    },
+    {
+      "path": "source/fex-patches/0025-0025-EXPERIMENT-precise-invalidation-also-for-Mono-call-t.patch",
+      "sha256": "c8fedf071010fa49bb9de74890269da50dd6d090ad72e2aa48f20fea4234b085"
+    },
+    {
+      "path": "source/fex-patches/0026-0026-EXPERIMENT-Indiana-MACRUNNER_FEX_RA_NO_X16-ARM64EC-a.patch",
+      "sha256": "d2465b0ba8eefd41ffe95a6b47f50d7e0801ace80d3305868d382183b8c04ef7"
+    },
+    {
+      "path": "source/fex-patches/0027-0027-EXPERIMENT-ExecutableRangeInfo-NoTrap-validation-mod.patch",
+      "sha256": "ae888b734b9446a961924e4d8eeafb7bb10d11bbdceca85765c61199e1086c9f"
+    },
+    {
+      "path": "source/fex-patches/0028-0028-EXPERIMENT-MACRUNNER_FEX_ALIAS_VIEWS-executable-view.patch",
+      "sha256": "dfebadd11b6c00cae41e5324cc2db0e666c5453d5975b8d386e8484978b80601"
+    },
+    {
+      "path": "source/fex-patches/0029-0029-EXPERIMENT-MACRUNNER_FEX_HOOK_GUARD-no-memory-hook-n.patch",
+      "sha256": "f23418e74e7ffac2d0147c47218f15bc84a09c613012e9a631df9757822a41d3"
+    },
+    {
+      "path": "source/fex-patches/0030-0030-EXPERIMENT-MACRUNNER_FEX_HOOK_GUARD-compile-and-code.patch",
+      "sha256": "ed12351bc0968d7a07b6123b01e6a33cde6d543cf315f346b3faa870b67d2096"
+    },
+    {
+      "path": "source/fex-patches/0031-0031-EXPERIMENT-MACRUNNER_FEX_HOOK_GUARD-Flush-and-Dirty-.patch",
+      "sha256": "ca741e98d6e120441a035db94656b6a5fb009ead19bb3536f3884a03379d7f3d"
+    },
+    {
+      "path": "source/fex-patches/0032-0032-Fix-FEX-diagnostic-output-transport-without-Wine-buf.patch",
+      "sha256": "c32fc6bde8fed49055a97d3cc7427a29913738ca7ad4507b60883b9bc769f482"
+    },
+    {
+      "path": "source/fex-patches/0033-0033-EXPERIMENT-not-for-publication-x87-fast-path-in-the-.patch",
+      "sha256": "e9a4b7290783f3eca21c0a52349510d227b584b8b695784a385f24d5904c8f18"
+    },
+    {
+      "path": "source/fex-patches/0034-0034-EXPERIMENT-build-fixes-for-the-x87-fast-path-FPSR-sy.patch",
+      "sha256": "67fd4d4189e35235d5ae8adaadfe52a2ed771bea41d7b4f5b1265cdc67056e55"
+    },
+    {
+      "path": "source/fex-patches/0035-0035-EXPERIMENT-not-for-publication-x87-early-FCW-check-a.patch",
+      "sha256": "de25ed4af1450e3ef6f2fa8468399d620d141cf23fa4fe676f2e0b010da7c37c"
+    },
+    {
+      "path": "source/fex-patches/0036-0036-test-validate-guarded-x87-arithmetic-against-FEX-Sof.patch",
+      "sha256": "9d1d4cfcc1b486d90d2517309eed9bb069b9cc8b4c8049fb5b6da9a18a1fe246"
+    },
+    {
+      "path": "source/fex-patches/0037-0037-Test-x87-guarded-admission-across-every-FCW-and-PC24.patch",
+      "sha256": "097fe1a5110a9ad194a29bafc3cee3fd95a56134227b25b2c4d860e0dbd8552d"
+    },
+    {
+      "path": "source/fex-patches/0038-0038-EXPERIMENT-gate-consuming-x87-pop-tag-correction-def.patch",
+      "sha256": "1c5cd0e550dc092e2f145966d7c663ee7cc63f8d8dbef33b9640a471e789f903"
+    },
+    {
+      "path": "source/fex-patches/0039-0039-EXPERIMENT-gate-preservation-of-sticky-x87-invalid-s.patch",
+      "sha256": "c37a5ca4a54050382950da9c02e2f0e4a19df0eacda2acccf613b58a6afbf8e3"
+    },
+    {
+      "path": "source/fex-patches/0040-0040-EXPERIMENT-gate-full-x87-tag-classification-for-save.patch",
+      "sha256": "bfc46ac061ac42e867b22a4838f9933370d7af6a56ef5bffaa214db02fe519c1"
+    },
+    {
+      "path": "source/fex-patches/0041-0041-EXPERIMENT-exact-representable-guarded-FST-FSTP-memo.patch",
+      "sha256": "ce6b165c6eaf8bb82bc9442515d9102ea3df026e39a48b2292826a00f18ae7c3"
+    },
+    {
+      "path": "source/fex-patches/0042-0042-EXPERIMENT-import-gated-PE32-x87-FIP-CS-metadata-fro.patch",
+      "sha256": "89f16deb1c4f3c0126b78c5ee070ac927af7df85689dc914d3af93e984a9387f"
+    },
+    {
+      "path": "source/fex-patches/0043-0043-EXPERIMENT-constrain-PE32-FIP-tracking-to-x87-decode.patch",
+      "sha256": "c41cda9c6ab8b469477dcce611020cad56d3ca33b54f5f9fb87035b359d3ad4e"
+    },
+    {
+      "path": "source/fex-patches/0044-0044-EXPERIMENT-guarded-binary32-64-subnormal-loads-and-r.patch",
+      "sha256": "8cc3ac9d8fbfd74ebaaa53066c5a224ab78ee81759a043025e67a79838cab36c"
+    },
+    {
+      "path": "source/fex-patches/0045-0045-EXPERIMENT-guarded-full80-RNE-FST-FSTP-m32-m64-store.patch",
+      "sha256": "3443749343361f124472bd4e44ddc2a519f9b482469665cbf48ed97191794b5e"
+    },
+    {
+      "path": "source/fex-patches/0046-0046-EXPERIMENT-elide-unchanged-x87-control-status-writes.patch",
+      "sha256": "acb2224413946c4c5d50061d53f8f6a3816961f27c9da76fd0cd5d4b8925ec40"
+    },
+    {
+      "path": "source/fex-patches/0047-0047-EXPERIMENT-exact-bounded-FSCALE-exponent-path-defaul.patch",
+      "sha256": "0c0c3c729d3c08e2215181606a1d1d5b4f9b82dd38361b0592f0bb0283f3673e"
+    },
+    {
+      "path": "source/fex-patches/0048-0048-fp-default-off-and-ec-width-on-718cd790.patch",
+      "sha256": "3b36db6a529f1d4b4cb6095a10c36b120e7a5b8215ad4cb8abeeb96e6befe270"
+    },
+    {
+      "path": "source/fex-patches/0049-0049-Darwin-arm-HG-ALIAS-on-CLR-module-map.patch",
+      "sha256": "7e0923607e65405ec34f61d9733afbffa57e4be6303b09aa81ce8b32b3d796e5"
+    },
+    {
+      "path": "source/fex-patches/0055-0055-HW-TSO-R2.patch",
+      "sha256": "f7966974ff54ef23b45d7c74e998be61e447480125e2ef09ebadc69705fcded1"
+    },
+    {
+      "path": "source/fex-patches/0056-0056-AVX-SMC-CHECKPOINT.patch",
+      "sha256": "a9bc5fab483e1c1581b47c8c6faf980d3ee8e6e025b5c81b5f3b0af110b98962"
+    },
+    {
+      "path": "source/fex-patches/0065-0065-EXPERIMENT-apple-afpcr-mxcsr-restore-family.patch",
+      "sha256": "4607a3651063d63faaa2a767a64cfb9c12183c8ca2c434bfaee551f4dc343c43"
+    },
+    {
+      "path": "source/fex-patches/0075-0075-BLSR-BLSMSK-CF-operand-width.patch",
+      "sha256": "3196294d2a6f7fc7c75e0635efd2dd560e2b4cd4233e00a911d68a077cc8061b"
+    }
+  ],
+  "submodules": [
+    {
+      "path": "External/rpmalloc",
+      "repo": "https://github.com/FEX-Emu/rpmalloc.git",
+      "revision": "1d85c246cd827ead6865f4f880d4fef53f2b1864"
+    },
+    {
+      "path": "External/fmt",
+      "repo": "https://github.com/fmtlib/fmt.git",
+      "revision": "1be298e1bd68957e4cd352e1f676f00e07dcfb57"
+    },
+    {
+      "path": "External/xxhash",
+      "repo": "https://github.com/Cyan4973/xxHash.git",
+      "revision": "e626a72bc2321cd320e953a0ccf1584cad60f363"
+    },
+    {
+      "path": "External/range-v3",
+      "repo": "https://github.com/ericniebler/range-v3.git",
+      "revision": "ca1388fb9da8e69314dda222dc7b139ca84e092f"
+    },
+    {
+      "path": "External/unordered_dense",
+      "repo": "https://github.com/martinus/unordered_dense.git",
+      "revision": "3234af2c03549bc85656bfd3a86993bf1cd8aef1"
+    },
+    {
+      "path": "Source/Common/cpp-optparse",
+      "repo": "https://github.com/Sonicadvance1/cpp-optparse",
+      "revision": "9f94388a339fcbb0bc95c17768eb786c85988f6e"
+    }
+  ],
+  "expected_source_files": 3577,
+  "expected_source_digest": "16977228e5ce0d1cefa7fa8c9cd4b1f11bfabeb581ecc604bd5da7926d4bd84b",
+  "source_digest_format": "sha256 UTF-8 sorted relative-path TAB file-sha256 LF; git-listed files only, exclude gitlink directories",
+  "bridge_source_sha256": {
+    "CMakeLists.txt": "6bac1fb0eb913ec13446cf7ebb8730ebf462c988eb9950530364ec9c1f08d94c",
+    "FEXUnixLib.cpp": "2c0d4e563fb66bef97ac6ae49ff72a67b29f07ed8de6978880f045c0a87e4197",
+    "FEXUnixLib.h": "dd2098336d0551beff6d65661c5dd94a5bc53fbd71a0f70ddd8aec34f24891bb",
+    "MacRunnerHardwareTSO.cpp": "310f58fea9bf964d2e293408aeee580cc2099ec1390f882d40ebaa20d982be75",
+    "MacRunnerHardwareTSO.h": "ad35fec3711444f34df5222f3e3623aa8957397b1e050519af23f7cd7ad391a8"
+  },
+  "override_hash": "fd141ed6d721d03062619e4702bca1a0c93b6dd9",
+  "pe_link_timestamp": 1788779472,
+  "deployment_target": "26.0",
+  "xcode": "26.6",
+  "xcode_build": "17F113",
+  "sdk": "26.5",
+  "apple_clang_build": "clang-2100.1.1.101",
+  "llvm_mingw_version": "20260505",
+  "llvm_mingw_url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260505/llvm-mingw-20260505-ucrt-macos-universal.tar.xz",
+  "llvm_mingw_sha256": "050379de888f0c843787819dadf183df3693330a5724643919e9121f16355295",
+  "llvm_mingw_size": 121913248,
+  "reference_engine_sha256": "62b39efa4edf01e1ed1ec56f1a462ffddbcecb52be6720cd159273a91064255f",
+  "reference_handoff_sha256": "eb594ba5d39f115fe8d60a3fa309284d5aa3535f426fd2109bf2e0aa06fcf1ce",
+  "reference_selected_binaries": {
+    "fex/aarch64-windows/xtajit64.dll": "e7222d530b0b57ed38bf418a3500d9a4c82d2f99077509bd9f7ff0acfb54caf3",
+    "fex/aarch64-unix/libarm64ecfex.so": "8396338e881c3922f15e6e0eaeb18ad3274d2b7d58394ee6e385dd0575cb3b1d",
+    "wine/lib/wine/aarch64-windows/libarm64ecfex.dll": "12914f851ca31309dbcc3f16be3621aec8f5efcd2c2fc3f52169316997cab8c7"
+  },
+  "limits": [
+    "Compiler/tool selection differs from historical native builds; section comparison remains required.",
+    "No FEX32, Wine, application, media or final signing is included.",
+    "The historical accepted handoff reported install skipped.",
+    "Driver Python is pinned to 3.13.7 in the GitHub job; the Xcode Cloud driver version is recorded, not claimed identical."
+  ]
+}

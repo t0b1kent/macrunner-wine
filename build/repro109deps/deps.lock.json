@@ -1,0 +1,1200 @@
+{
+  "schema": 1,
+  "scope": "PARTIAL_WINE_DEPENDENCIES_NOT_WINE_READY",
+  "batch": "deps9",
+  "requested_components": 47,
+  "wine_required": [
+    "bison",
+    "flex",
+    "pkgconf",
+    "gettext",
+    "glib",
+    "gstreamer",
+    "gst-plugins-base",
+    "ffmpeg",
+    "freetype",
+    "fontconfig",
+    "libpng",
+    "gnutls",
+    "libusb",
+    "sdl2",
+    "MoltenVK",
+    "Vulkan-Headers"
+  ],
+  "runtime_gaps": [
+    "CA trust bundle is not source pinned or packaged; GnuTLS/p11-kit trust paths use the cloud OS /etc/ssl/cert.pem and need runtime acceptance",
+    "GLib introspection, documentation and tests disabled; accepted runtime coverage still requires section/function comparison and media stands",
+    "MoltenVK Wine requirement remains; this prefix is not Wine ready and no runtime binary is replaced",
+    "ccache and seven exclusive dependencies moved to optional-ccache.lock.json; compiler commands use selected compilers directly",
+    "Vulkan-Headers 1.4.341.0 closes the Wine header requirement only; Indiana SDK and patched MoltenVK source closure remain separate",
+    "Media source recipes cover 33/33 selected GStreamer plugins and all eight explicitly enabled FFmpeg external codec libraries; no runtime acceptance or function/section comparison yet",
+    "FFmpeg autodetection disabled and SDK libraries explicit; prefix/install names and disabled programs require explained section/function differences against r2",
+    "x264 full official Git history is required for revision 3222; both commit and uncompressed git archive SHA256 are pinned",
+    "x265 8/10/12-bit shared runtime is selected; static library aggregation and CLI differ from Homebrew and are not packaged runtime claims"
+  ],
+  "toolchain": {
+    "python": "3.13.7",
+    "xcode": "26.6",
+    "xcode_build": "17F113",
+    "sdk": "26.5",
+    "apple_clang": "clang-2100.1.1.101",
+    "deployment_target": "14.0"
+  },
+  "platform_dependencies": {
+    "sdk": [
+      "libz",
+      "libbz2",
+      "libiconv",
+      "libxml2",
+      "libedit",
+      "libcurl",
+      "ncurses",
+      "expat",
+      "Apple frameworks"
+    ],
+    "tools": [
+      "xxd",
+      "gperf",
+      "make",
+      "m4",
+      "perl",
+      "sh",
+      "git"
+    ],
+    "policy": "Only selected Xcode SDK and /usr/bin tools; no Homebrew or /usr/local"
+  },
+  "remaining_wine_required": [
+    "MoltenVK"
+  ],
+  "components": [
+    {
+      "name": "cmake",
+      "version": "4.3.2",
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.3.2/cmake-4.3.2.tar.gz",
+      "sha256": "b0231eb39b3c3cabdc568c619df78208a7bd95ea10c9b2236d61218bac1b367d",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/cmake/4.3.2/.brew/cmake.rb",
+        "sha256": "105f3b19d7ab9bf5099fa3d6b78c9bd953ee13b3e37655b59fa57c523452c6a9"
+      },
+      "kind": "cmake-bootstrap",
+      "depends": [],
+      "args": [],
+      "outputs": [
+        "bin/cmake"
+      ],
+      "probe": [
+        "bin/cmake",
+        "--version"
+      ]
+    },
+    {
+      "name": "ninja",
+      "version": "1.13.2",
+      "url": "https://github.com/ninja-build/ninja/archive/refs/tags/v1.13.2.tar.gz",
+      "sha256": "974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/ninja/1.13.2/.brew/ninja.rb",
+        "sha256": "42c86860b78e1688b26aec685e09c848662d35ce4789473a73b91fe8276d407c"
+      },
+      "kind": "ninja-bootstrap",
+      "depends": [],
+      "args": [],
+      "outputs": [
+        "bin/ninja"
+      ],
+      "probe": [
+        "bin/ninja",
+        "--version"
+      ]
+    },
+    {
+      "name": "libunistring",
+      "version": "1.4.2",
+      "url": "https://ftp.gnu.org/gnu/libunistring/libunistring-1.4.2.tar.gz",
+      "sha256": "e82664b170064e62331962126b259d452d53b227bb4a93ab20040d846fec01d8",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libunistring/1.4.2/.brew/libunistring.rb",
+        "sha256": "475a2914858445ba29061977337b455660e99ba50086565ce5089dd1f873dc2a"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--disable-silent-rules"
+      ],
+      "outputs": [
+        "lib/libunistring.dylib"
+      ]
+    },
+    {
+      "name": "gettext",
+      "version": "1.0",
+      "url": "https://ftp.gnu.org/gnu/gettext/gettext-1.0.tar.gz",
+      "sha256": "85d99b79c981a404874c02e0342176cf75c7698e2b51fe41031cf6526d974f1a",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/gettext/1.0/.brew/gettext.rb",
+        "sha256": "170f5a29d2eb95b9dd1f1f754c0f9b90692c3d5dcf6db02c199c93e2c445177d"
+      },
+      "kind": "autotools",
+      "depends": [
+        "libunistring"
+      ],
+      "args": [
+        "--disable-java",
+        "--disable-csharp",
+        "--without-emacs",
+        "--without-git",
+        "--without-cvs",
+        "--without-xz",
+        "--with-included-gettext",
+        "--with-libunistring-prefix={prefix}"
+      ],
+      "outputs": [
+        "bin/msgfmt",
+        "lib/libintl.dylib"
+      ],
+      "probe": [
+        "bin/msgfmt",
+        "--version"
+      ]
+    },
+    {
+      "name": "bison",
+      "version": "3.8.2",
+      "url": "https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz",
+      "sha256": "9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/bison/3.8.2/.brew/bison.rb",
+        "sha256": "e9b2520902153ad0beec7fdfcdcdce39279d19dc20d4c34a20630fd38999efb4"
+      },
+      "kind": "autotools",
+      "depends": [
+        "gettext"
+      ],
+      "args": [
+        "--disable-dependency-tracking"
+      ],
+      "outputs": [
+        "bin/bison"
+      ],
+      "probe": [
+        "bin/bison",
+        "--version"
+      ]
+    },
+    {
+      "name": "flex",
+      "version": "2.6.4",
+      "url": "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz",
+      "sha256": "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/flex/2.6.4_2/.brew/flex.rb",
+        "sha256": "21ff6a1699198889b9cae120d1b6d5593a5b8a3c9eabd74cd90277fc28e4c86f"
+      },
+      "kind": "autotools",
+      "depends": [
+        "bison",
+        "gettext"
+      ],
+      "args": [
+        "--enable-shared",
+        "--disable-silent-rules"
+      ],
+      "outputs": [
+        "bin/flex",
+        "lib/libfl.dylib"
+      ],
+      "probe": [
+        "bin/flex",
+        "--version"
+      ],
+      "make_args": [
+        "libfl_la_LDFLAGS=-version-info 2:0:0 -Wl,-undefined,dynamic_lookup"
+      ],
+      "flex_libfl_probe": true
+    },
+    {
+      "name": "pkgconf",
+      "version": "3.0.7",
+      "url": "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.7.tar.xz",
+      "sha256": "c926ff491cbd9a331a589160811bd97ab1749b4d5198a519338f2cdfabe6940a",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/pkgconf/3.0.7/.brew/pkgconf.rb",
+        "sha256": "18650320e9599caed229bbd6dec72d42944df0e2cbe571c659e0ab2b59050b50"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--with-pkg-config-dir={prefix}/lib/pkgconfig:{prefix}/share/pkgconfig",
+        "--with-system-includedir={sdk}/usr/include",
+        "--with-system-libdir=/usr/lib"
+      ],
+      "outputs": [
+        "bin/pkgconf",
+        "bin/pkg-config"
+      ],
+      "probe": [
+        "bin/pkgconf",
+        "--version"
+      ]
+    },
+    {
+      "name": "gmp",
+      "version": "6.3.0",
+      "url": "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
+      "sha256": "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/gmp/6.3.0/.brew/gmp.rb",
+        "sha256": "d458d70303d72cbd434e5d9b83adbd3b7cbdeb4d2567389fb512fd2d9cf5414a"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--enable-cxx",
+        "--with-pic"
+      ],
+      "outputs": [
+        "lib/libgmp.dylib"
+      ]
+    },
+    {
+      "name": "nettle",
+      "version": "4.0",
+      "url": "https://ftp.gnu.org/gnu/nettle/nettle-4.0.tar.gz",
+      "sha256": "3addbc00da01846b232fb3bc453538ea5468da43033f21bb345cb1e9073f5094",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/nettle/4.0/.brew/nettle.rb",
+        "sha256": "b1ed3c65911e70e6d51807f3b55ef59d893cb1f6172d6889b55bd90f7641ae35"
+      },
+      "kind": "autotools",
+      "depends": [
+        "gmp"
+      ],
+      "args": [
+        "--enable-shared",
+        "--disable-documentation"
+      ],
+      "outputs": [
+        "lib/pkgconfig/nettle.pc",
+        "lib/pkgconfig/hogweed.pc"
+      ]
+    },
+    {
+      "name": "libtasn1",
+      "version": "4.21.0",
+      "url": "https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.21.0.tar.gz",
+      "sha256": "1d8a444a223cc5464240777346e125de51d8e6abf0b8bac742ac84609167dc87",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libtasn1/4.21.0/.brew/libtasn1.rb",
+        "sha256": "751ed417e412362cc0764381e59f342bf860c06cf6aea840cd3ab7d84c538bfe"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--disable-dependency-tracking",
+        "--disable-silent-rules"
+      ],
+      "outputs": [
+        "lib/pkgconfig/libtasn1.pc"
+      ]
+    },
+    {
+      "name": "libidn2",
+      "version": "2.3.8",
+      "url": "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
+      "sha256": "f557911bf6171621e1f72ff35f5b1825bb35b52ed45325dcdee931e5d3c0787a",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libidn2/2.3.8/.brew/libidn2.rb",
+        "sha256": "c899b49a77eabe13be5ca7961ace8ecf8e2f6d8dbd4aa1676cbb9e85abbed408"
+      },
+      "kind": "autotools",
+      "depends": [
+        "gettext",
+        "libunistring"
+      ],
+      "args": [
+        "--disable-silent-rules",
+        "--with-libintl-prefix={prefix}"
+      ],
+      "outputs": [
+        "lib/pkgconfig/libidn2.pc"
+      ]
+    },
+    {
+      "name": "libffi",
+      "version": "3.8.0",
+      "url": "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz",
+      "sha256": "7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libffi/3.8.0/.brew/libffi.rb",
+        "sha256": "e6b90dc667c91046f8160dcf531aa2f1f5d51ff5cab9b8ddb817849b5b0bf826"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [],
+      "outputs": [
+        "lib/pkgconfig/libffi.pc"
+      ]
+    },
+    {
+      "name": "pcre2",
+      "version": "10.47",
+      "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.bz2",
+      "sha256": "47fe8c99461250d42f89e6e8fdaeba9da057855d06eb7fc08d9ca03fd08d7bc7",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/pcre2/10.47_1/.brew/pcre2.rb",
+        "sha256": "40d07c0619cc42e570dfe34e22f02841254777c8a7eab72da2a4af5d60a5310e"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--enable-pcre2-16",
+        "--enable-pcre2-32",
+        "--enable-pcre2grep-libz",
+        "--enable-pcre2grep-libbz2",
+        "--enable-jit"
+      ],
+      "outputs": [
+        "lib/pkgconfig/libpcre2-8.pc"
+      ]
+    },
+    {
+      "name": "libpng",
+      "version": "1.6.58",
+      "url": "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz",
+      "sha256": "28eb403f51f0f7405249132cecfe82ea5c0ef97f1b32c5a65828814ae0d34775",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libpng/1.6.58/.brew/libpng.rb",
+        "sha256": "c125a77d8263e0fb215f8f5d693c53324caabb63801df7093d9f3c8e42f4dd22"
+      },
+      "kind": "autotools",
+      "depends": ["pkgconf"],
+      "args": [
+        "--disable-silent-rules"
+      ],
+      "outputs": [
+        "lib/pkgconfig/libpng.pc"
+      ]
+    },
+    {
+      "name": "freetype",
+      "version": "2.14.3",
+      "url": "https://downloads.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.xz",
+      "sha256": "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/freetype/2.14.3/.brew/freetype.rb",
+        "sha256": "cc500226718264185ecf4b0560e0d9daee933c3e40622dd936b955536d025613"
+      },
+      "kind": "autotools",
+      "depends": [
+        "pkgconf",
+        "libpng"
+      ],
+      "args": [
+        "--enable-freetype-config",
+        "--without-harfbuzz",
+        "--without-brotli"
+      ],
+      "outputs": [
+        "lib/pkgconfig/freetype2.pc"
+      ]
+    },
+    {
+      "name": "libogg",
+      "version": "1.3.6",
+      "url": "https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz",
+      "sha256": "83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libogg/1.3.6/.brew/libogg.rb",
+        "sha256": "e31fcdaf937004b95262421789f2d9c749dc74cdd47f84e15f2cdd974a0b3bf0"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [],
+      "outputs": [
+        "lib/pkgconfig/ogg.pc"
+      ]
+    },
+    {
+      "name": "libvorbis",
+      "version": "1.3.7",
+      "url": "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz",
+      "sha256": "b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libvorbis/1.3.7/.brew/libvorbis.rb",
+        "sha256": "877d592b67f88751b839bd00b6d22af1e3eb11dce990750d0a29aacb5ba1f06d"
+      },
+      "kind": "autotools",
+      "depends": [
+        "pkgconf",
+        "libogg"
+      ],
+      "args": [],
+      "outputs": [
+        "lib/pkgconfig/vorbis.pc",
+        "lib/pkgconfig/vorbisenc.pc"
+      ]
+    },
+    {
+      "name": "flac",
+      "version": "1.5.0",
+      "url": "https://downloads.xiph.org/releases/flac/flac-1.5.0.tar.xz",
+      "sha256": "f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/flac/1.5.0/.brew/flac.rb",
+        "sha256": "bb7e020a626bf470004d87060078b5704e3bd692d6ff8fe5ccfd33d266c5b312"
+      },
+      "kind": "autotools",
+      "depends": [
+        "pkgconf",
+        "libogg"
+      ],
+      "args": [
+        "--enable-static"
+      ],
+      "outputs": [
+        "lib/pkgconfig/flac.pc"
+      ]
+    },
+    {
+      "name": "mpg123",
+      "version": "1.33.5",
+      "url": "https://www.mpg123.de/download/mpg123-1.33.5.tar.bz2",
+      "sha256": "0d7ebc8da0aff3ca383c8c6b5a6adbe402ee5bb256685b8c5499f3a739f9d6dd",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/mpg123/1.33.5/.brew/mpg123.rb",
+        "sha256": "cfa3a8fd2ff4ab21bdf1bc4a0d47f14a44c6edac0f2be1da145411776750f20a"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--with-module-suffix=.so",
+        "--enable-static",
+        "--with-default-audio=coreaudio",
+        "--with-cpu=aarch64"
+      ],
+      "outputs": [
+        "lib/pkgconfig/libmpg123.pc"
+      ]
+    },
+    {
+      "name": "opus",
+      "version": "1.6.1",
+      "url": "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz",
+      "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/opus/1.6.1/.brew/opus.rb",
+        "sha256": "7ebe72e9352ceb9236cfb49c8ba7134556295ca330ea9054135b1401257f03c4"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--disable-doc"
+      ],
+      "outputs": [
+        "lib/pkgconfig/opus.pc"
+      ]
+    },
+    {
+      "name": "libusb",
+      "version": "1.0.29",
+      "url": "https://github.com/libusb/libusb/releases/download/v1.0.29/libusb-1.0.29.tar.bz2",
+      "sha256": "5977fc950f8d1395ccea9bd48c06b3f808fd3c2c961b44b0c2e6e29fc3a70a85",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libusb/1.0.29/.brew/libusb.rb",
+        "sha256": "198b6af13e62152a6aa98b1a00b7771f3a51e5859d12c9ad79c5da58c8b804fc"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--disable-dependency-tracking"
+      ],
+      "outputs": [
+        "lib/pkgconfig/libusb-1.0.pc"
+      ]
+    },
+    {
+      "name": "sdl2",
+      "version": "2.32.10",
+      "url": "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz",
+      "sha256": "5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/sdl2/2.32.10/.brew/sdl2.rb",
+        "sha256": "c774c1547452f0e04dc43a4994e12c57f202f94e5e4e27e09467ef7d29e3a7fb"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--enable-hidapi",
+        "--without-x"
+      ],
+      "outputs": [
+        "lib/pkgconfig/sdl2.pc"
+      ]
+    },
+    {
+      "name": "openssl",
+      "version": "3.6.4",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.6.4/openssl-3.6.4.tar.gz",
+      "sha256": "9bffaa1ad1e07b354c21bd3324ec02fa15579f45a7d0494b3e74bc449b7333ef",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/openssl@3/3.6.4/.brew/openssl@3.rb",
+        "sha256": "6216802c53421571f69c2be676bed96c42a559e2dc6c230949f47181909a2f80"
+      },
+      "kind": "openssl",
+      "depends": [],
+      "args": [
+        "no-ssl3",
+        "no-ssl3-method",
+        "no-zlib",
+        "darwin64-arm64-cc",
+        "enable-ec_nistp_64_gcc_128"
+      ],
+      "outputs": [
+        "lib/libcrypto.3.dylib",
+        "lib/libssl.3.dylib",
+        "lib/pkgconfig/openssl.pc"
+      ],
+      "deployment_target": "26.0"
+    },
+    {
+      "name": "meson",
+      "version": "1.11.0",
+      "url": "https://files.pythonhosted.org/packages/1b/88/23a6aefb29398b290469914e9ecbdd21803bd53c826aa75e4e2a9b778e98/meson-1.11.0.tar.gz",
+      "sha256": "dffdd0915ceb028541fe3bed77d63ba35e78514591c043736b450d62634eeb31",
+      "metadata": {
+        "kind": "official_pypi_release_metadata_not_download_verification",
+        "url": "https://pypi.org/pypi/meson/1.11.0/json",
+        "sha256": "17530cae519491e2fc49ac5da6121c4342de940724b0bb68f597d8b87a8f0749"
+      },
+      "kind": "meson-bootstrap",
+      "depends": [],
+      "args": [],
+      "outputs": ["bin/meson", "share/meson/mesonbuild/mesonmain.py"],
+      "probe": ["bin/meson", "--version"]
+    },
+    {
+      "name": "glib",
+      "version": "2.88.2",
+      "url": "https://download.gnome.org/sources/glib/2.88/glib-2.88.2.tar.xz",
+      "sha256": "cf3f215a640c8a4257f14317586b8f1fdd25a10a93cb4bdda147c0f9ad88e74f",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/glib/2.88.2/.brew/glib.rb",
+        "sha256": "56e097d19a0fddbb2df3c241380f769610c2366f29347d163b3be49ac16142fb"
+      },
+      "kind": "meson",
+      "depends": ["meson", "ninja", "pkgconf", "gettext", "pcre2", "libffi"],
+      "args": [
+        "-Dintrospection=disabled", "-Ddocumentation=false", "-Dman-pages=disabled",
+        "-Ddtrace=false", "-Dtests=false", "-Dbsymbolic_functions=false",
+        "-Dgio_module_dir={prefix}/lib/gio/modules", "-Druntime_dir={prefix}/var/run"
+      ],
+      "outputs": ["lib/pkgconfig/glib-2.0.pc", "lib/pkgconfig/gobject-2.0.pc", "lib/pkgconfig/gio-2.0.pc", "lib/pkgconfig/gmodule-2.0.pc"],
+      "pkg_config_version": "2.88.2"
+    },
+    {
+      "name": "fontconfig",
+      "version": "2.18.2",
+      "url": "https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/2.18.2/fontconfig-2.18.2.tar.gz",
+      "sha256": "a84d41b57cfb015783d7973b398c26d8763a64b803f97f31fa126fd2aa5eaaca",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/fontconfig/2.18.2/.brew/fontconfig.rb",
+        "sha256": "120eda18229aed8fbff91bbf2cd10ec15897fc3016db3b41c98caafa207e26a1"
+      },
+      "kind": "meson",
+      "depends": ["meson", "ninja", "pkgconf", "gettext", "freetype"],
+      "args": ["-Ddoc=disabled", "-Dtests=disabled", "-Dtools=enabled", "-Dcache-build=disabled", "-Dadditional-fonts-dirs=no", "-Ddefault-fonts-dirs=/System/Library/Fonts,/Library/Fonts"],
+      "outputs": ["lib/pkgconfig/fontconfig.pc", "bin/fc-list"],
+      "pkg_config_version": "2.18.2"
+    },
+    {
+      "name": "p11-kit",
+      "version": "0.26.2",
+      "url": "https://github.com/p11-glue/p11-kit/releases/download/0.26.2/p11-kit-0.26.2.tar.xz",
+      "sha256": "09fd9f44da4813a3141e73d5e7cf7008e5660d0405f13d56c15e1da9dcecf828",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/p11-kit/0.26.2/.brew/p11-kit.rb",
+        "sha256": "b09e81c33907b26794410c70b6dac94b323ef2aedbd255c8fcb19d10a81cdbac"
+      },
+      "kind": "meson",
+      "depends": ["meson", "ninja", "pkgconf", "libffi", "libtasn1"],
+      "args": ["-Dsystem_config={prefix}/etc", "-Dmodule_config={prefix}/etc/pkcs11/modules", "-Dtrust_paths=/etc/ssl/cert.pem", "-Dsystemd=disabled"],
+      "test_args": ["--timeout-multiplier=2"],
+      "outputs": ["lib/pkgconfig/p11-kit-1.pc"],
+      "pkg_config_version": "0.26.2"
+    },
+    {
+      "name": "gnutls",
+      "version": "3.8.13",
+      "url": "https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.13.tar.xz",
+      "sha256": "ffed8ec1bf09c2426d4f14aae377de4753b53e537d685e604e99a8b16ca9c97e",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/gnutls/3.8.13_2/.brew/gnutls.rb",
+        "sha256": "0013861bbb54e9eb75e4ea0c85a49a888f881e797fd0b111ced8c1eede0adca1"
+      },
+      "kind": "autotools",
+      "depends": ["pkgconf", "gettext", "gmp", "nettle", "libtasn1", "libidn2", "p11-kit"],
+      "args": ["--disable-libdane", "--disable-silent-rules", "--disable-static", "--disable-heartbeat-support", "--with-p11-kit", "--with-default-trust-store-file=/etc/ssl/cert.pem"],
+      "test_args": ["check"],
+      "outputs": ["lib/pkgconfig/gnutls.pc", "bin/gnutls-cli"],
+      "probe": ["bin/gnutls-cli", "--version"],
+      "pkg_config_version": "3.8.13"
+    },
+    {
+      "name": "zstd",
+      "version": "1.5.7",
+      "url": "https://github.com/facebook/zstd/archive/refs/tags/v1.5.7.tar.gz",
+      "sha256": "37d7284556b20954e56e1ca85b80226768902e2edabd3b649e9e72c0c9012ee3",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/zstd/1.5.7_1/.brew/zstd.rb", "sha256": "9a9b0183896886e82b915af4db576f27d34d1cee7757d6c5beb0e1eb74c68e0d"},
+      "kind": "cmake",
+      "source_subdir": "build/cmake",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DZSTD_BUILD_SHARED=ON", "-DZSTD_BUILD_STATIC=OFF", "-DZSTD_BUILD_PROGRAMS=OFF", "-DZSTD_BUILD_TESTS=OFF", "-DZSTD_ZLIB_SUPPORT=OFF", "-DZSTD_LZMA_SUPPORT=OFF", "-DZSTD_LZ4_SUPPORT=OFF"],
+      "outputs": ["include/zstd.h", "lib/libzstd.dylib"]
+    },
+    {
+      "name": "vulkan-headers",
+      "wine_requirement": "Vulkan-Headers",
+      "version": "1.4.341.0",
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.341.0.tar.gz",
+      "sha256": "d73bc5036b6556b741f6985ff600ca720308c5f2850e4a43ceb498bd3de069e7",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/vulkan-headers/1.4.341.0/.brew/vulkan-headers.rb", "sha256": "315c61ee0599440cad8dbcb4a593f62d685150e6ed912a51a09521f9c7dec1b0"},
+      "kind": "cmake",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DVULKAN_HEADERS_ENABLE_TESTS=OFF"],
+      "outputs": ["include/vulkan/vulkan_core.h", "share/vulkan/registry/vk.xml"]
+    },
+    {
+      "name": "orc",
+      "version": "0.4.42",
+      "url": "https://gstreamer.freedesktop.org/src/orc/orc-0.4.42.tar.xz",
+      "sha256": "7ec912ab59af3cc97874c456a56a8ae1eec520c385ec447e8a102b2bd122c90c",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/orc/0.4.42/.brew/orc.rb",
+        "sha256": "fd35e46a1a609fc6d23be34e532006f8db55cf17124d48875cb503132ebb568e"
+      },
+      "kind": "meson",
+      "depends": [
+        "meson",
+        "ninja",
+        "pkgconf"
+      ],
+      "args": [],
+      "outputs": [
+        "lib/pkgconfig/orc-0.4.pc",
+        "bin/orcc"
+      ]
+    },
+    {
+      "name": "jpeg-turbo",
+      "version": "3.2.0",
+      "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.0/libjpeg-turbo-3.2.0.tar.gz",
+      "sha256": "6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/jpeg-turbo/3.2.0/.brew/jpeg-turbo.rb",
+        "sha256": "b1937813c7c67fa8a44a7a958f1496e9e237d942052b52d421c41e61df4b526b"
+      },
+      "kind": "cmake",
+      "depends": [
+        "cmake",
+        "ninja"
+      ],
+      "args": [
+        "-DWITH_JPEG8=ON",
+        "-DFLOATTEST8=fp-contract",
+        "-DFLOATTEST12=fp-contract"
+      ],
+      "outputs": [
+        "lib/pkgconfig/libjpeg.pc",
+        "lib/libjpeg.8.dylib"
+      ],
+      "test_args": [
+        "--no-tests=error"
+      ]
+    },
+    {
+      "name": "theora",
+      "version": "1.2.0",
+      "url": "https://downloads.xiph.org/releases/theora/libtheora-1.2.0.tar.gz",
+      "sha256": "279327339903b544c28a92aeada7d0dcfd0397b59c2f368cc698ac56f515906e",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/theora/1.2.0/.brew/theora.rb",
+        "sha256": "c26774a31fd1b0a9c2b5ff6832d470e88c45c218ed509ec60d2776229e082e40"
+      },
+      "kind": "autotools",
+      "depends": [
+        "pkgconf",
+        "libogg",
+        "libvorbis"
+      ],
+      "args": [
+        "--disable-oggtest",
+        "--disable-vorbistest",
+        "--disable-examples"
+      ],
+      "outputs": [
+        "lib/pkgconfig/theoradec.pc",
+        "lib/pkgconfig/theoraenc.pc"
+      ]
+    },
+    {
+      "name": "libvpx",
+      "version": "1.16.0",
+      "url": "https://github.com/webmproject/libvpx/archive/refs/tags/v1.16.0.tar.gz",
+      "sha256": "7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c",
+      "metadata": {
+        "kind": "installed_formula_source_pin_not_download_verification",
+        "path": "Cellar/libvpx/1.16.0/.brew/libvpx.rb",
+        "sha256": "c221276a228e690c9e97e857e2573e7b4ce4c840b13befdb4283ee22b5c6aefd"
+      },
+      "kind": "autotools",
+      "depends": [],
+      "args": [
+        "--disable-dependency-tracking",
+        "--disable-examples",
+        "--disable-unit-tests",
+        "--enable-pic",
+        "--enable-runtime-cpu-detect",
+        "--enable-shared",
+        "--enable-vp9-highbitdepth",
+        "--target=arm64-darwin25-gcc"
+      ],
+      "outputs": [
+        "lib/pkgconfig/vpx.pc",
+        "lib/libvpx.dylib"
+      ]
+    },
+    {
+      "name": "gstreamer",
+      "version": "1.28.3",
+      "url": "https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-1.28.3.tar.xz",
+      "sha256": "5e84ecb942e136944eb9812f19cff7bcf05a85637482a32da55b892914c397d1",
+      "metadata": {
+        "kind": "accepted_official_archive_sha_rechecked_offline_not_cloud_verification",
+        "path": "A-source-pins.json",
+        "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"
+      },
+      "kind": "meson",
+      "depends": [
+        "meson",
+        "ninja",
+        "pkgconf",
+        "glib",
+        "bison",
+        "flex",
+        "gettext"
+      ],
+      "args": [
+        "-Dauto_features=disabled",
+        "-Dtests=disabled",
+        "-Dexamples=disabled",
+        "-Dbenchmarks=disabled",
+        "-Ddoc=disabled",
+        "-Dintrospection=disabled",
+        "-Dnls=enabled",
+        "-Dtools=enabled",
+        "-Dptp-helper=disabled",
+        "-Dptp-helper-permissions=none"
+      ],
+      "outputs": [
+        "lib/libgstreamer-1.0.0.dylib",
+        "lib/libgstbase-1.0.0.dylib",
+        "lib/pkgconfig/gstreamer-1.0.pc",
+        "bin/gst-inspect-1.0",
+        "libexec/gstreamer-1.0/gst-plugin-scanner",
+        "lib/gstreamer-1.0/libgstcoreelements.dylib"
+      ],
+      "gst_plugins": [
+        "coreelements"
+      ],
+      "pkg_config_version": "1.28.3",
+      "probe": [
+        "bin/gst-inspect-1.0",
+        "--version"
+      ]
+    },
+    {
+      "name": "gst-plugins-base",
+      "version": "1.28.3",
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.28.3.tar.xz",
+      "sha256": "27880f3d87efa3bb5aa5f99f7ef6e4be7c95229f44eee928c1633d32e87d0099",
+      "metadata": {
+        "kind": "accepted_official_archive_sha_rechecked_offline_not_cloud_verification",
+        "path": "A-source-pins.json",
+        "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"
+      },
+      "kind": "meson",
+      "depends": [
+        "meson",
+        "ninja",
+        "pkgconf",
+        "gstreamer",
+        "orc",
+        "libogg",
+        "libvorbis",
+        "opus",
+        "theora"
+      ],
+      "args": [
+        "-Dauto_features=disabled",
+        "-Dtests=disabled",
+        "-Dexamples=disabled",
+        "-Ddoc=disabled",
+        "-Dintrospection=disabled",
+        "-Dnls=enabled",
+        "-Dorc=enabled",
+        "-Dorc-compiler=disabled",
+        "-Dapp=enabled",
+        "-Daudioconvert=enabled",
+        "-Daudioresample=enabled",
+        "-Dogg=enabled",
+        "-Dopus=enabled",
+        "-Dplayback=enabled",
+        "-Drawparse=enabled",
+        "-Dsubparse=enabled",
+        "-Dtheora=enabled",
+        "-Dtypefind=enabled",
+        "-Dvideoconvertscale=enabled",
+        "-Dvolume=enabled",
+        "-Dvorbis=enabled"
+      ],
+      "outputs": [
+        "lib/pkgconfig/gstreamer-plugins-base-1.0.pc",
+        "lib/libgstapp-1.0.0.dylib",
+        "lib/libgstaudio-1.0.0.dylib",
+        "lib/libgstpbutils-1.0.0.dylib",
+        "lib/libgstriff-1.0.0.dylib",
+        "lib/libgstrtp-1.0.0.dylib",
+        "lib/libgstrtsp-1.0.0.dylib",
+        "lib/libgstsdp-1.0.0.dylib",
+        "lib/libgsttag-1.0.0.dylib",
+        "lib/libgstvideo-1.0.0.dylib",
+        "lib/gstreamer-1.0/libgstapp.dylib",
+        "lib/gstreamer-1.0/libgstaudioconvert.dylib",
+        "lib/gstreamer-1.0/libgstaudioresample.dylib",
+        "lib/gstreamer-1.0/libgstogg.dylib",
+        "lib/gstreamer-1.0/libgstopus.dylib",
+        "lib/gstreamer-1.0/libgstplayback.dylib",
+        "lib/gstreamer-1.0/libgstrawparse.dylib",
+        "lib/gstreamer-1.0/libgstsubparse.dylib",
+        "lib/gstreamer-1.0/libgsttheora.dylib",
+        "lib/gstreamer-1.0/libgsttypefindfunctions.dylib",
+        "lib/gstreamer-1.0/libgstvideoconvertscale.dylib",
+        "lib/gstreamer-1.0/libgstvolume.dylib",
+        "lib/gstreamer-1.0/libgstvorbis.dylib"
+      ],
+      "gst_plugins": [
+        "app",
+        "audioconvert",
+        "audioresample",
+        "ogg",
+        "opus",
+        "playback",
+        "rawparse",
+        "subparse",
+        "theora",
+        "typefindfunctions",
+        "videoconvertscale",
+        "volume",
+        "vorbis"
+      ],
+      "pkg_config_version": "1.28.3"
+    },
+    {
+      "name": "gst-plugins-good",
+      "version": "1.28.3",
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.28.3.tar.xz",
+      "sha256": "47f78f500cbd900f758f9ba74288fda0e2ca5a7855096025641e121ffec40a5d",
+      "metadata": {
+        "kind": "accepted_official_archive_sha_rechecked_offline_not_cloud_verification",
+        "path": "A-source-pins.json",
+        "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"
+      },
+      "kind": "meson",
+      "depends": [
+        "meson",
+        "ninja",
+        "pkgconf",
+        "gst-plugins-base",
+        "orc",
+        "flac",
+        "jpeg-turbo",
+        "mpg123",
+        "libpng",
+        "libvpx"
+      ],
+      "args": [
+        "-Dauto_features=disabled",
+        "-Dtests=disabled",
+        "-Dexamples=disabled",
+        "-Ddoc=disabled",
+        "-Dnls=enabled",
+        "-Dorc=enabled",
+        "-Dorc-compiler=disabled",
+        "-Daudioparsers=enabled",
+        "-Davi=enabled",
+        "-Ddeinterlace=enabled",
+        "-Dflac=enabled",
+        "-Dflv=enabled",
+        "-Disomp4=enabled",
+        "-Djpeg=enabled",
+        "-Dmatroska=enabled",
+        "-Dmpg123=enabled",
+        "-Dpng=enabled",
+        "-Dvideofilter=enabled",
+        "-Dvpx=enabled",
+        "-Dwavparse=enabled"
+      ],
+      "outputs": [
+        "lib/gstreamer-1.0/libgstaudioparsers.dylib",
+        "lib/gstreamer-1.0/libgstavi.dylib",
+        "lib/gstreamer-1.0/libgstdeinterlace.dylib",
+        "lib/gstreamer-1.0/libgstflac.dylib",
+        "lib/gstreamer-1.0/libgstflv.dylib",
+        "lib/gstreamer-1.0/libgstisomp4.dylib",
+        "lib/gstreamer-1.0/libgstjpeg.dylib",
+        "lib/gstreamer-1.0/libgstmatroska.dylib",
+        "lib/gstreamer-1.0/libgstmpg123.dylib",
+        "lib/gstreamer-1.0/libgstpng.dylib",
+        "lib/gstreamer-1.0/libgstvideofilter.dylib",
+        "lib/gstreamer-1.0/libgstvpx.dylib",
+        "lib/gstreamer-1.0/libgstwavparse.dylib"
+      ],
+      "gst_plugins": [
+        "audioparsers",
+        "avi",
+        "deinterlace",
+        "flac",
+        "flv",
+        "isomp4",
+        "jpeg",
+        "matroska",
+        "mpg123",
+        "png",
+        "videofilter",
+        "vpx",
+        "wavparse"
+      ],
+      "pkg_config_version": "1.28.3"
+    },
+    {
+      "name": "gst-plugins-bad",
+      "version": "1.28.3",
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-bad/gst-plugins-bad-1.28.3.tar.xz",
+      "sha256": "4213f43ddb875bb141e5040e97735579d74665bec3d17b51052aade395b83f00",
+      "metadata": {
+        "kind": "accepted_official_archive_sha_rechecked_offline_not_cloud_verification",
+        "path": "A-source-pins.json",
+        "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"
+      },
+      "kind": "meson",
+      "depends": [
+        "meson",
+        "ninja",
+        "pkgconf",
+        "gst-plugins-base",
+        "orc"
+      ],
+      "args": [
+        "-Dauto_features=disabled",
+        "-Dtests=disabled",
+        "-Dexamples=disabled",
+        "-Ddoc=disabled",
+        "-Dintrospection=disabled",
+        "-Dnls=enabled",
+        "-Dorc=enabled",
+        "-Dorc-compiler=disabled",
+        "-Dgpl=enabled",
+        "-Daiff=enabled",
+        "-Dmpegdemux=enabled",
+        "-Dmpegtsdemux=enabled",
+        "-Dvideoparsers=enabled"
+      ],
+      "outputs": [
+        "lib/libgstcodecparsers-1.0.0.dylib",
+        "lib/libgstmpegts-1.0.0.dylib",
+        "lib/gstreamer-1.0/libgstaiff.dylib",
+        "lib/gstreamer-1.0/libgstmpegpsdemux.dylib",
+        "lib/gstreamer-1.0/libgstmpegtsdemux.dylib",
+        "lib/gstreamer-1.0/libgstvideoparsersbad.dylib"
+      ],
+      "gst_plugins": [
+        "aiff",
+        "mpegpsdemux",
+        "mpegtsdemux",
+        "videoparsersbad"
+      ],
+      "pkg_config_version": "1.28.3"
+    },
+    {
+      "name": "gst-plugins-ugly",
+      "version": "1.28.3",
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-ugly/gst-plugins-ugly-1.28.3.tar.xz",
+      "sha256": "0c04763200467b9b61a916b33646a6916a97cc9869d8b6dca57427b1f2734dee",
+      "metadata": {
+        "kind": "accepted_official_archive_sha_rechecked_offline_not_cloud_verification",
+        "path": "A-source-pins.json",
+        "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"
+      },
+      "kind": "meson",
+      "depends": [
+        "meson",
+        "ninja",
+        "pkgconf",
+        "gst-plugins-base",
+        "orc"
+      ],
+      "args": [
+        "-Dauto_features=disabled",
+        "-Dtests=disabled",
+        "-Ddoc=disabled",
+        "-Dnls=enabled",
+        "-Dorc=enabled",
+        "-Dorc-compiler=disabled",
+        "-Dgpl=enabled",
+        "-Dasfdemux=enabled"
+      ],
+      "outputs": [
+        "lib/gstreamer-1.0/libgstasf.dylib"
+      ],
+      "gst_plugins": [
+        "asf"
+      ],
+      "pkg_config_version": "1.28.3"
+    },
+    {
+      "name": "dav1d",
+      "version": "1.5.3",
+      "url": "https://code.videolan.org/videolan/dav1d/-/archive/1.5.3/dav1d-1.5.3.tar.bz2",
+      "sha256": "e099f53253f6c247580c554d53a13f1040638f2066edc3c740e4c2f15174ce22",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/dav1d/1.5.3/.brew/dav1d.rb", "sha256": "6b7c613a508d10e580d786f8560a6b80939c6e861ebba9948efd417558b82a97"},
+      "kind": "meson",
+      "depends": ["meson", "ninja", "pkgconf"],
+      "args": [],
+      "outputs": ["lib/libdav1d.dylib", "lib/pkgconfig/dav1d.pc"],
+      "pkg_config_version": "1.5.3"
+    },
+    {
+      "name": "lame",
+      "version": "3.100",
+      "url": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+      "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e",
+      "metadata": {"kind": "accepted_official_archive_sha_not_cloud_verification", "path": "A-source-pins.json", "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"},
+      "kind": "autotools",
+      "depends": [],
+      "args": ["--disable-dependency-tracking", "--disable-debug", "--enable-shared", "--disable-static"],
+      "outputs": ["lib/libmp3lame.dylib", "include/lame/lame.h"]
+    },
+    {
+      "name": "libvmaf",
+      "version": "3.1.0",
+      "url": "https://github.com/Netflix/vmaf/archive/refs/tags/v3.1.0.tar.gz",
+      "sha256": "80090e29d7fd0db472ddc663513f5be89bc936815e62b767e630c1d627279fe2",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/libvmaf/3.1.0/.brew/libvmaf.rb", "sha256": "e7e60c54af01f3d10a648a7622f35dda9c2cb0e08b997d9b9acbca73feef8096"},
+      "kind": "meson",
+      "source_subdir": "libvmaf",
+      "depends": ["meson", "ninja", "pkgconf"],
+      "args": [],
+      "copy_trees": [{"source": "model", "destination": "share/vmaf/model"}],
+      "outputs": ["lib/libvmaf.dylib", "lib/pkgconfig/libvmaf.pc", "share/vmaf/model/vmaf_v0.6.1.json"],
+      "pkg_config_version": "3.0.0"
+    },
+    {
+      "name": "svt-av1",
+      "version": "4.1.0",
+      "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.1.0/SVT-AV1-v4.1.0.tar.bz2",
+      "sha256": "184162d3db3a4448882b17230413b4938ca252eef6b3c5e2f1236b2fcf497881",
+      "metadata": {"kind": "installed_formula_source_pin_not_download_verification", "path": "Cellar/svt-av1/4.1.0/.brew/svt-av1.rb", "sha256": "3b1ad068f0192f773b663a7abb3ad00c2a7c1b4e55262a1d0051a9db29083140"},
+      "kind": "cmake",
+      "depends": ["cmake", "ninja"],
+      "args": ["-DBUILD_SHARED_LIBS=ON"],
+      "outputs": ["lib/libSvtAv1Enc.dylib", "lib/pkgconfig/SvtAv1Enc.pc"],
+      "pkg_config_version": "4.1.0"
+    },
+    {
+      "name": "x264",
+      "version": "r3222",
+      "url": "https://code.videolan.org/videolan/x264.git",
+      "source_kind": "git",
+      "revision": "b35605ace3ddf7c1a5d67a2eb553f034aef41d55",
+      "revision_count": 3222,
+      "archive_prefix": "x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55/",
+      "sha256": "df62afece4eecef8ddf196f115dfec6e936a21b04ec2117a0f4e412de29b20e5",
+      "metadata": {"kind": "accepted_git_archive_uncompressed_sha_rechecked_offline", "path": "A-source-pins.json", "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"},
+      "kind": "autotools",
+      "depends": [],
+      "args": ["--enable-shared", "--disable-cli", "--disable-lsmash", "--disable-swscale", "--disable-ffms", "--disable-lavf"],
+      "configure_ownership": {"file": "config.mak", "key": "SRCPATH"},
+      "outputs": ["lib/libx264.dylib", "lib/pkgconfig/x264.pc"]
+    },
+    {
+      "name": "x265",
+      "version": "4.2",
+      "url": "https://github.com/Multicorewareinc/x265/releases/download/4.2/x265_4.2.tar.gz",
+      "sha256": "40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210",
+      "metadata": {"kind": "accepted_official_archive_sha_rechecked_offline_not_cloud_verification", "path": "A-source-pins.json", "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"},
+      "kind": "cmake",
+      "source_subdir": "source",
+      "multi_bit_depth": true,
+      "depends": ["cmake", "ninja"],
+      "args": ["-DENABLE_SHARED=ON", "-DENABLE_CLI=OFF", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"],
+      "outputs": ["lib/libx265.dylib", "lib/pkgconfig/x265.pc"],
+      "pkg_config_version": "4.2"
+    },
+    {
+      "name": "ffmpeg",
+      "version": "8.1.1",
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz",
+      "sha256": "b6863adde98898f42602017462871b5f6333e65aec803fdd7a6308639c52edf3",
+      "metadata": {"kind": "accepted_official_archive_sha_rechecked_offline_not_cloud_verification", "path": "A-source-pins.json", "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"},
+      "kind": "autotools",
+      "depends": ["pkgconf", "dav1d", "lame", "libvmaf", "svt-av1", "x264", "x265", "opus", "libvpx", "openssl", "sdl2"],
+      "args": ["--cc={cc}", "--cxx={cxx}", "--arch=aarch64", "--target-os=darwin", "--disable-autodetect", "--enable-shared", "--disable-static", "--disable-programs", "--enable-pthreads", "--enable-version3", "--enable-gpl", "--enable-libsvtav1", "--enable-libopus", "--enable-libx264", "--enable-libmp3lame", "--enable-libdav1d", "--enable-libvmaf", "--enable-libvpx", "--enable-libx265", "--enable-openssl", "--enable-videotoolbox", "--enable-audiotoolbox", "--enable-neon", "--enable-sdl2", "--enable-zlib", "--enable-bzlib", "--enable-iconv", "--enable-rpath", "--extra-libs=-liconv"],
+      "configure_ownership": {"file": "ffbuild/config.mak", "key": "SRC_PATH"},
+      "outputs": ["lib/libavcodec.dylib", "lib/libavdevice.dylib", "lib/libavfilter.dylib", "lib/libavformat.dylib", "lib/libavutil.dylib", "lib/libswresample.dylib", "lib/libswscale.dylib", "lib/pkgconfig/libavcodec.pc", "lib/pkgconfig/libavformat.pc", "lib/pkgconfig/libavfilter.pc", "lib/pkgconfig/libavutil.pc"],
+      "ffmpeg_external": ["libsvtav1", "libopus", "libx264", "libmp3lame", "libdav1d", "libvmaf", "libvpx", "libx265", "openssl"]
+    },
+    {
+      "name": "gst-libav",
+      "version": "1.28.3",
+      "url": "https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.28.3.tar.xz",
+      "sha256": "28fcd45d9ace261d4bda896466d5326af6efd2fcf0a20f24502094b5a9955bdf",
+      "metadata": {"kind": "accepted_official_archive_sha_rechecked_offline_not_cloud_verification", "path": "A-source-pins.json", "sha256": "ff08f2ac25a0e7f55f0ec6c51537ecc230c4a47960f26c6a4572d7e53a4e7c1f"},
+      "kind": "meson",
+      "depends": ["meson", "ninja", "pkgconf", "gst-plugins-base", "ffmpeg"],
+      "args": ["-Dauto_features=disabled", "-Dtests=disabled", "-Ddoc=disabled"],
+      "outputs": ["lib/gstreamer-1.0/libgstlibav.dylib"],
+      "gst_plugins": ["libav"],
+      "pkg_config_version": "1.28.3"
+    }
+  ]
+}

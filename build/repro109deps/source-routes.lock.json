@@ -1,0 +1,415 @@
+{
+  "schema": 1,
+  "deps_lock_sha256": "6234ff2dfc0c00de9487fb6be0609e90ca01189d15c17dc2e5036c4038451177",
+  "scope": "EXACT_COMPONENT_HOSTS_HTTPS_ONLY_NO_WILDCARDS",
+  "routes": {
+    "cmake": {
+      "url": "https://github.com/Kitware/CMake/releases/download/v4.3.2/cmake-4.3.2.tar.gz",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "ninja": {
+      "url": "https://github.com/ninja-build/ninja/archive/refs/tags/v1.13.2.tar.gz",
+      "allowed_hosts": [
+        "codeload.github.com",
+        "github.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "libunistring": {
+      "url": "https://ftp.gnu.org/gnu/libunistring/libunistring-1.4.2.tar.gz",
+      "allowed_hosts": [
+        "ftp.gnu.org",
+        "ftpmirror.gnu.org",
+        "mirrors.kernel.org"
+      ],
+      "mirror_urls": [
+        "https://ftpmirror.gnu.org/libunistring/libunistring-1.4.2.tar.gz",
+        "https://mirrors.kernel.org/gnu/libunistring/libunistring-1.4.2.tar.gz"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "gettext": {
+      "url": "https://ftp.gnu.org/gnu/gettext/gettext-1.0.tar.gz",
+      "allowed_hosts": [
+        "ftp.gnu.org",
+        "ftpmirror.gnu.org",
+        "mirrors.kernel.org"
+      ],
+      "mirror_urls": [
+        "https://ftpmirror.gnu.org/gettext/gettext-1.0.tar.gz",
+        "https://mirrors.kernel.org/gnu/gettext/gettext-1.0.tar.gz"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "bison": {
+      "url": "https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz",
+      "allowed_hosts": [
+        "ftp.gnu.org",
+        "ftpmirror.gnu.org",
+        "mirrors.kernel.org"
+      ],
+      "mirror_urls": [
+        "https://ftpmirror.gnu.org/bison/bison-3.8.2.tar.xz",
+        "https://mirrors.kernel.org/gnu/bison/bison-3.8.2.tar.xz"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "flex": {
+      "url": "https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "pkgconf": {
+      "url": "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.7.tar.xz",
+      "allowed_hosts": [
+        "distfiles.ariadne.space"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "gmp": {
+      "url": "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
+      "allowed_hosts": [
+        "ftp.gnu.org",
+        "ftpmirror.gnu.org",
+        "mirrors.kernel.org"
+      ],
+      "mirror_urls": [
+        "https://ftpmirror.gnu.org/gmp/gmp-6.3.0.tar.xz",
+        "https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "nettle": {
+      "url": "https://ftp.gnu.org/gnu/nettle/nettle-4.0.tar.gz",
+      "allowed_hosts": [
+        "ftp.gnu.org",
+        "ftpmirror.gnu.org",
+        "mirrors.kernel.org"
+      ],
+      "mirror_urls": [
+        "https://ftpmirror.gnu.org/nettle/nettle-4.0.tar.gz",
+        "https://mirrors.kernel.org/gnu/nettle/nettle-4.0.tar.gz"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "libtasn1": {
+      "url": "https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.21.0.tar.gz",
+      "allowed_hosts": [
+        "ftp.gnu.org",
+        "ftpmirror.gnu.org",
+        "mirrors.kernel.org"
+      ],
+      "mirror_urls": [
+        "https://ftpmirror.gnu.org/libtasn1/libtasn1-4.21.0.tar.gz",
+        "https://mirrors.kernel.org/gnu/libtasn1/libtasn1-4.21.0.tar.gz"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "libidn2": {
+      "url": "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
+      "allowed_hosts": [
+        "ftp.gnu.org",
+        "ftpmirror.gnu.org",
+        "mirrors.kernel.org"
+      ],
+      "mirror_urls": [
+        "https://ftpmirror.gnu.org/libidn/libidn2-2.3.8.tar.gz",
+        "https://mirrors.kernel.org/gnu/libidn/libidn2-2.3.8.tar.gz"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "libffi": {
+      "url": "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "pcre2": {
+      "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.bz2",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "libpng": {
+      "url": "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz",
+      "allowed_hosts": [
+        "cfhcable.dl.sourceforge.net",
+        "downloads.sourceforge.net",
+        "gigenet.dl.sourceforge.net",
+        "netactuate.dl.sourceforge.net",
+        "psychz.dl.sourceforge.net"
+      ],
+      "evidence": "B25_THREE_NAMED_SOURCEFORGE_MIRRORS_PLUS_B27_EXACT_LIBPNG_REDIRECT_B40_PINNED_FALLBACK",
+      "mirror_urls": [
+        "https://cfhcable.dl.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz",
+        "https://gigenet.dl.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz"
+      ]
+    },
+    "freetype": {
+      "url": "https://downloads.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.xz",
+      "allowed_hosts": [
+        "cfhcable.dl.sourceforge.net",
+        "downloads.sourceforge.net",
+        "gigenet.dl.sourceforge.net",
+        "netactuate.dl.sourceforge.net",
+        "psychz.dl.sourceforge.net"
+      ],
+      "evidence": "B25_THREE_NAMED_SOURCEFORGE_MIRRORS_B30_PSYCHZ_REDIRECT_B40_PINNED_FALLBACK",
+      "mirror_urls": [
+        "https://cfhcable.dl.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.xz",
+        "https://gigenet.dl.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.xz"
+      ]
+    },
+    "libogg": {
+      "url": "https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.gz",
+      "allowed_hosts": [
+        "downloads.xiph.org",
+        "ftp.osuosl.org"
+      ],
+      "evidence": "XIPH_OFFICIAL_HEAD_20261004T232827Z"
+    },
+    "libvorbis": {
+      "url": "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz",
+      "allowed_hosts": [
+        "downloads.xiph.org",
+        "ftp.osuosl.org"
+      ],
+      "evidence": "XIPH_OFFICIAL_HEAD_20261004T232827Z"
+    },
+    "flac": {
+      "url": "https://downloads.xiph.org/releases/flac/flac-1.5.0.tar.xz",
+      "allowed_hosts": [
+        "downloads.xiph.org",
+        "ftp.osuosl.org"
+      ],
+      "evidence": "XIPH_OFFICIAL_HEAD_20261004T232827Z"
+    },
+    "mpg123": {
+      "url": "https://www.mpg123.de/download/mpg123-1.33.5.tar.bz2",
+      "allowed_hosts": [
+        "www.mpg123.de"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "opus": {
+      "url": "https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz",
+      "allowed_hosts": [
+        "downloads.xiph.org",
+        "ftp.osuosl.org"
+      ],
+      "evidence": "XIPH_OFFICIAL_HEAD_20261004T232827Z"
+    },
+    "libusb": {
+      "url": "https://github.com/libusb/libusb/releases/download/v1.0.29/libusb-1.0.29.tar.bz2",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "sdl2": {
+      "url": "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "openssl": {
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.6.4/openssl-3.6.4.tar.gz",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "meson": {
+      "url": "https://files.pythonhosted.org/packages/1b/88/23a6aefb29398b290469914e9ecbdd21803bd53c826aa75e4e2a9b778e98/meson-1.11.0.tar.gz",
+      "allowed_hosts": [
+        "files.pythonhosted.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "glib": {
+      "url": "https://download.gnome.org/sources/glib/2.88/glib-2.88.2.tar.xz",
+      "allowed_hosts": [
+        "download.gnome.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "fontconfig": {
+      "url": "https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/2.18.2/fontconfig-2.18.2.tar.gz",
+      "allowed_hosts": [
+        "gitlab.freedesktop.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "p11-kit": {
+      "url": "https://github.com/p11-glue/p11-kit/releases/download/0.26.2/p11-kit-0.26.2.tar.xz",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "gnutls": {
+      "url": "https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.13.tar.xz",
+      "allowed_hosts": [
+        "www.gnupg.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "zstd": {
+      "url": "https://github.com/facebook/zstd/archive/refs/tags/v1.5.7.tar.gz",
+      "allowed_hosts": [
+        "codeload.github.com",
+        "github.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "vulkan-headers": {
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.341.0.tar.gz",
+      "allowed_hosts": [
+        "codeload.github.com",
+        "github.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "orc": {
+      "url": "https://gstreamer.freedesktop.org/src/orc/orc-0.4.42.tar.xz",
+      "allowed_hosts": [
+        "gstreamer.freedesktop.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "jpeg-turbo": {
+      "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.0/libjpeg-turbo-3.2.0.tar.gz",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "theora": {
+      "url": "https://downloads.xiph.org/releases/theora/libtheora-1.2.0.tar.gz",
+      "allowed_hosts": [
+        "downloads.xiph.org",
+        "ftp.osuosl.org"
+      ],
+      "evidence": "XIPH_OFFICIAL_HEAD_20261004T232827Z"
+    },
+    "libvpx": {
+      "url": "https://github.com/webmproject/libvpx/archive/refs/tags/v1.16.0.tar.gz",
+      "allowed_hosts": [
+        "codeload.github.com",
+        "github.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "gstreamer": {
+      "url": "https://gstreamer.freedesktop.org/src/gstreamer/gstreamer-1.28.3.tar.xz",
+      "allowed_hosts": [
+        "gstreamer.freedesktop.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "gst-plugins-base": {
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.28.3.tar.xz",
+      "allowed_hosts": [
+        "gstreamer.freedesktop.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "gst-plugins-good": {
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.28.3.tar.xz",
+      "allowed_hosts": [
+        "gstreamer.freedesktop.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "gst-plugins-bad": {
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-bad/gst-plugins-bad-1.28.3.tar.xz",
+      "allowed_hosts": [
+        "gstreamer.freedesktop.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "gst-plugins-ugly": {
+      "url": "https://gstreamer.freedesktop.org/src/gst-plugins-ugly/gst-plugins-ugly-1.28.3.tar.xz",
+      "allowed_hosts": [
+        "gstreamer.freedesktop.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "dav1d": {
+      "url": "https://code.videolan.org/videolan/dav1d/-/archive/1.5.3/dav1d-1.5.3.tar.bz2",
+      "allowed_hosts": [
+        "code.videolan.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "lame": {
+      "url": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+      "allowed_hosts": [
+        "cfhcable.dl.sourceforge.net",
+        "downloads.sourceforge.net",
+        "gigenet.dl.sourceforge.net",
+        "netactuate.dl.sourceforge.net",
+        "phoenixnap.dl.sourceforge.net"
+      ],
+      "evidence": "B25_THREE_NAMED_SOURCEFORGE_MIRRORS_PLUS_B27_EXACT_LAME_REDIRECT_B40_PINNED_FALLBACK",
+      "mirror_urls": [
+        "https://cfhcable.dl.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+        "https://gigenet.dl.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz"
+      ]
+    },
+    "libvmaf": {
+      "url": "https://github.com/Netflix/vmaf/archive/refs/tags/v3.1.0.tar.gz",
+      "allowed_hosts": [
+        "codeload.github.com",
+        "github.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "svt-av1": {
+      "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.1.0/SVT-AV1-v4.1.0.tar.bz2",
+      "allowed_hosts": [
+        "gitlab.com"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "x265": {
+      "url": "https://github.com/Multicorewareinc/x265/releases/download/4.2/x265_4.2.tar.gz",
+      "allowed_hosts": [
+        "github.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "evidence": "B25_FINAL_HOST_SAME_OFFICIAL_SERVICE"
+    },
+    "ffmpeg": {
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz",
+      "allowed_hosts": [
+        "ffmpeg.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    },
+    "gst-libav": {
+      "url": "https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.28.3.tar.xz",
+      "allowed_hosts": [
+        "gstreamer.freedesktop.org"
+      ],
+      "evidence": "PINNED_OFFICIAL_ORIGIN"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "scope": "Wine dependency only; stock MoltenVK, not the Indiana patched runtime",
+  "version": "1.4.1",
+  "url": "https://github.com/KhronosGroup/MoltenVK/archive/refs/tags/v1.4.1.tar.gz",
+  "sha256": "9985f141902a17de818e264d17c1ce334b748e499ee02fcb4703e4dc0038f89c",
+  "pin_evidence": "installed molten-vk 1.4.1 formula; archive not downloaded on the owner Mac",
+  "shared_driver_sha256": "3f038bce483170abc528d6a4ff88bda54e01b97ff8a8993249214214cf73e429",
+  "shared_source_fixes_sha256": "cf406e73da199481f76f6478da507285cc11fd1259d2e1df081cd15908b8ed43",
+  "bootstrap_lock_sha256": "6234ff2dfc0c00de9487fb6be0609e90ca01189d15c17dc2e5036c4038451177",
+  "toolchain": {
+    "python": "3.13.7",
+    "xcode": "26.6",
+    "xcode_build": "17F113",
+    "sdk": "26.5",
+    "apple_clang": "clang-2100.1.1.101",
+    "deployment_target": "14.0"
+  },
+  "external_pin_algorithm": "git-sha1-commit-object; recursive Git object integrity, no archive SHA256 claimed before cloud receipt",
+  "external": [
+    {"name": "SPIRV-Cross", "url": "https://github.com/KhronosGroup/SPIRV-Cross.git", "revision": "adec7acbf41a988713cdb85f93f26c8ca5ea863e"},
+    {"name": "SPIRV-Headers", "url": "https://github.com/KhronosGroup/SPIRV-Headers.git", "revision": "b824a462d4256d720bebb40e78b9eb8f78bbb305"},
+    {"name": "SPIRV-Tools", "url": "https://github.com/KhronosGroup/SPIRV-Tools.git", "revision": "262bdab48146c937467f826699a40da0fdfc0f1a"},
+    {"name": "Vulkan-Headers", "url": "https://github.com/KhronosGroup/Vulkan-Headers.git", "revision": "6aefb8eb95c8e170d0805fd0f2d02832ec1e099a"},
+    {"name": "Vulkan-Tools", "url": "https://github.com/KhronosGroup/Vulkan-Tools.git", "revision": "013058f74e2356347f8d9317233bc769816c9dfb"},
+    {"name": "cereal", "url": "https://github.com/USCiLab/cereal.git", "revision": "a56bad8bbb770ee266e930c95d37fff2a5be7fea"}
+  ]
+}
