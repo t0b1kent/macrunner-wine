@@ -20,6 +20,8 @@ History:
   [the precise archived source map](docs/release-source-map.json).
 - `macrunner-1.0.8`: corresponding Wine source updates for the published
   MacRunner 1.0.8 release. See [the signed release file hashes](docs/release-1.0.8-sha256.tsv).
+  MacRunner 1.0.9 ships the same Wine build as 1.0.8 — only the 64-bit CPU translator changed — so this
+  branch is also the corresponding Wine source of 1.0.9.
 
 Compared with 1.0.7, this release fixes lost window messages in 32-bit applications.
 It improves startup and suspension of 32-bit threads.
