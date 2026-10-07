@@ -13,7 +13,7 @@ sys.path.insert(0, str(HERE))
 import build_full as full
 
 STAGES = ('sdk', 'deps10', 'moltenvk2', 'compiler')
-PROFILE = 'github-macos15-arm64'
+PROFILE = 'github-xcode27-arm64'
 
 
 def skipped_lines(root):

@@ -246,7 +246,7 @@ class HeaderSources(unittest.TestCase):
 class Drivers(unittest.TestCase):
     def test_pinned_inputs(self):
         pinned = full.check_inputs()['files']
-        self.assertEqual(len(pinned), 28)
+        self.assertEqual(len(pinned), 30)
         self.assertIn('repro109deps/port_probe.py', pinned)
         self.assertEqual(pinned['repro109deps/port_probe.py'],
                          full.digest((full.REPO / 'repro109deps/port_probe.py').read_bytes()))
@@ -395,7 +395,7 @@ class TransitiveMoltenInputs(unittest.TestCase):
             return full.check_inputs()
 
     def test_matching_outer_and_transitive_inputs_pass(self):
-        self.assertEqual(len(self.check_inputs()['files']), 28)
+        self.assertEqual(len(self.check_inputs()['files']), 30)
 
     def test_matching_outer_lock_rejects_each_stale_shared_pin(self):
         for key in ['shared_driver_sha256', 'shared_source_fixes_sha256', 'bootstrap_lock_sha256']:

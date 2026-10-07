@@ -9,13 +9,18 @@
 
 Из чистого клона `t0b1kent/macrunner-wine` с этим рецептом:
 
-1. Запустите `.github/workflows/repro109-wine-c9-macos15-arm64.yml` через
+1. Сначала запустите `.github/workflows/repro109-wine-c9-matrix-xcode27-arm64.yml`:
+   отдельные задания sdk, deps10, moltenvk2 и compiler, fail-fast:false.
+   Полную `.github/workflows/repro109-wine-c9-xcode27-arm64.yml` запускайте
+   только после зелёной матрицы через
    GitHub Actions → Run workflow. Требуются только read permissions;
    подпись, нотаризация и отправка в выпуски отсутствуют.
-2. Задача выбирает Python 3.13.7 arm64 и Xcode 26.3/17C529, SDK 26.2.
+2. Образ `xcode-27`: Python 3.13.7 arm64, Xcode 27.0/27A266a, SDK 27.0;
+   DEVELOPER_DIR=/Applications/Xcode_27.app/Contents/Developer.
+   Образ предварительный; фактическое время очереди нужно измерить.
    Сначала выполняет `python3 -I -B build/repro109wine/build_full.py --check-inputs`.
 3. Сборка выполняется командой:
-   `python3 -I -B build/repro109wine/build_full.py --profile github-macos15-arm64 --build --work "$RUNNER_TEMP/repro109-wine-c9-work" --jobs 3`.
+   `python3 -I -B build/repro109wine/build_full.py --profile github-xcode27-arm64 --build --work "$RUNNER_TEMP/repro109-wine-c9-work" --jobs 3`.
    Каталог должен отсутствовать до запуска. Общее ограничение драйвера 330 минут,
    GitHub job — 360 минут. Перезапуск с прежним каталогом отвергается.
 4. Заберите artifact `repro109-wine-c9-<commit>`: архив Wine,
@@ -23,7 +28,8 @@
    первый отказ и код завершения. Частичный архив после отказа не является PASS.
 
 До скачивания стороннего исходника проверяются выбранный Xcode/SDK/компилятор
-и обе функции x18 ABI в SDK. Их наличие в SDK 26.2 пока UNKNOWN; при отсутствии
+и обе функции x18 ABI в SDK. Прежняя облачная SDK 26.2 дала 0/0 экспортов;
+профиль 27.0 требует их наличия до скачиваний. При отсутствии
 задача завершится на `SDK_PREFLIGHT`, с нулём скачиваний и компиляций.
 Профиль измеряет полный clang version из закреплённого Xcode до скачиваний;
 дополнительная проверка точной строки clang пока NOT_ENABLED. Первый облачный
@@ -45,5 +51,5 @@ LLVM-MinGW 20260505 используется как закреплённый и�
 FEX64 r5+c9 `94bc17c974eba1633c1f15fe227a883a765e1fd5` и FEX32 r5
 собираются отдельным закреплённым workflow hyperbridge. Wine не берёт готовый
 переводчик как вход. Объединение выходов, ABI-проверка c9, функция/секция против
-принятого пакета, стенды и полное BUILD.md приложения остаются PENDING.
+опубликованного 1.0.9/engine-0227, стенды и полное BUILD.md приложения остаются PENDING.
 Эта задача даёт SOURCE_BUILT_NOT_ACCEPTED, а не принятую версию 1.0.9.

@@ -13,7 +13,7 @@ concurrency:
 jobs:
   prerequisite:
     name: Source prerequisite ${{ matrix.stage }}
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 110
     strategy:
       fail-fast: false
@@ -21,6 +21,7 @@ jobs:
       matrix:
         stage: [sdk, deps10, moltenvk2, compiler]
     env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
       REPRO109_STAGE: ${{ matrix.stage }}
     steps:
       - name: Initialize slot evidence
@@ -42,21 +43,13 @@ jobs:
         with:
           python-version: '3.13.7'
           architecture: arm64
-      - name: Select pinned Xcode 26.3
+      - name: Verify pinned Xcode 27.0 and SDK 27.0
         shell: bash
         run: |
           set -euo pipefail
-          selected=0
-          for xcode_app in /Applications/Xcode*.app; do
-            [ -d "$xcode_app/Contents/Developer" ] || continue
-            actual=$(DEVELOPER_DIR="$xcode_app/Contents/Developer" xcodebuild -version)
-            if [ "$actual" = $'Xcode 26.3\nBuild version 17C529' ]; then
-              printf 'DEVELOPER_DIR=%s/Contents/Developer\n' "$xcode_app" >> "$GITHUB_ENV"
-              selected=1
-              break
-            fi
-          done
-          [ "$selected" = 1 ] || { printf 'Pinned Xcode 26.3/17C529 missing\n'; exit 1; }
+          actual=$(xcodebuild -version)
+          [ "$actual" = $'Xcode 27.0\nBuild version 27A266a' ] || { printf 'Pinned Xcode 27.0/27A266a missing\n'; exit 1; }
+          [ "$(xcrun --show-sdk-version)" = '27.0' ] || { printf 'Pinned SDK 27.0 missing\n'; exit 1; }
       - name: Execute only the selected source prerequisite
         shell: bash
         run: |

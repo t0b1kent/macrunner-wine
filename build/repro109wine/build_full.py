@@ -61,8 +61,9 @@ def check_inputs():
 
 def apply_profile(source_lock, profile):
     value = copy.deepcopy(source_lock)
-    if profile == 'github-macos15-arm64':
-        selected = json.loads((HERE / 'github-macos15.lock.json').read_bytes())
+    if profile in ['github-macos15-arm64', 'github-xcode27-arm64']:
+        filename = 'github-xcode27.lock.json' if profile == 'github-xcode27-arm64' else 'github-macos15.lock.json'
+        selected = json.loads((HERE / filename).read_bytes())
         previous = value['toolchain']
         value['toolchain'] = dict(selected['toolchain'])
         value['toolchain'].update({k: v for k, v in previous.items() if k.startswith('llvm_mingw')})
@@ -82,7 +83,7 @@ def cloud_guard(profile):
     require(os.environ.get('GITHUB_ACTIONS') == 'true' or
             (os.environ.get('CI_WORKSPACE_PATH') and os.environ.get('CI_PRIMARY_REPOSITORY_PATH')),
             'Source execution/download allowed only in the cloud')
-    require(profile in ['github', 'github-macos15-arm64', 'xcode-cloud'], 'Unexpected full Wine cloud profile')
+    require(profile in ['github', 'github-macos15-arm64', 'github-xcode27-arm64', 'xcode-cloud'], 'Unexpected full Wine cloud profile')
     if profile == 'xcode-cloud':
         require(bool(os.environ.get('CI_BUILD_NUMBER')), 'Xcode Cloud build number required')
         require(sys.version_info >= (3, 9), 'Use selected Apple Python >=3.9')
@@ -220,7 +221,7 @@ def build(root, lock, jobs=4, profile='github'):
         # nest detached drivers whose descendants would outlive a killed parent.
         dep.command(argv, cwd or REPO, env, log, out, 'wine:' + log.name, deadline, timeout=timeout)
     try:
-        if profile == 'github-macos15-arm64':
+        if profile in ['github-macos15-arm64', 'github-xcode27-arm64']:
             selected = apply_profile(dep.read_lock(), profile)
             sdk, _, _ = dep.toolchain_preflight(selected['toolchain'], out)
             result['sdk_exports'] = check_sdk_exports(sdk, out)
@@ -266,7 +267,7 @@ def main():
     mode.add_argument('--build', action='store_true')
     parser.add_argument('--work', type=Path)
     parser.add_argument('--jobs', type=int, default=4)
-    parser.add_argument('--profile', choices=['github', 'github-macos15-arm64', 'xcode-cloud'], default='github-macos15-arm64')
+    parser.add_argument('--profile', choices=['github', 'github-macos15-arm64', 'github-xcode27-arm64', 'xcode-cloud'], default='github-xcode27-arm64')
     args = parser.parse_args()
     lock = check_inputs()
     if args.check_inputs:
