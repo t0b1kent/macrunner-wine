@@ -25,7 +25,6 @@
 #include "config.h"
 
 #include <assert.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -77,64 +76,18 @@ static inline struct debug_info *get_info(void)
 #endif
 }
 
-/* A unixcall must not report success after a short write or EINTR.  On a
- * permanent sink error return the delivered prefix, so the caller can retain
- * the remaining bytes.  Do not log here: this is the logging transport. */
-static int write_output( const char *str, size_t len )
-{
-    size_t done = 0;
-    ssize_t ret;
-
-    while (done < len)
-    {
-        ret = write( 2, str + done, len - done );
-        if (ret > 0) done += ret;
-        else if (ret < 0 && errno == EINTR) continue;
-        else return done ? done : -1;
-    }
-    return done;
-}
-
-static int flush_output( struct debug_info *info, size_t len )
-{
-    int ret = write_output( info->output, len );
-
-    if (ret > 0)
-    {
-        info->out_pos -= ret;
-        memmove( info->output, info->output + ret, info->out_pos );
-    }
-    return ret == len ? 0 : -1;
-}
-
-/* Keep the last byte of an unfinished line buffered when streaming a full
- * buffer.  out_pos then continues to suppress a second header, without
- * changing the shared 0x800-byte TEB layout or adding a continuation flag. */
+/* add a string to the output buffer */
 static int append_output( struct debug_info *info, const char *str, size_t len )
 {
-    size_t total = len, count;
-
-    while (len)
+    if (len >= sizeof(info->output) - info->out_pos)
     {
-        count = min( len, sizeof(info->output) - info->out_pos );
-        memcpy( info->output + info->out_pos, str, count );
-        info->out_pos += count;
-        str += count;
-        len -= count;
-        if (info->out_pos == sizeof(info->output) &&
-            flush_output( info, sizeof(info->output) - 1 ) < 0) return -1;
+       fprintf( stderr, "wine_dbg_output: debugstr buffer overflow (contents: '%s')\n", info->output );
+       info->out_pos = 0;
+       abort();
     }
-    return total;
-}
-
-void * __cdecl __wine_dbg_alloc( unsigned int size )
-{
-    return malloc( size );
-}
-
-void __cdecl __wine_dbg_free( void *ptr )
-{
-    free( ptr );
+    memcpy( info->output + info->out_pos, str, len );
+    info->out_pos += len;
+    return len;
 }
 
 /* add a new debug option at the end of the option list */
@@ -358,7 +311,7 @@ NTSTATUS unixcall_wine_dbg_write( void *args )
             }
         }
     }
-    return write_output( params->str, params->len );
+    return write( 2, params->str, params->len );
 }
 
 #ifdef _WIN64
@@ -382,7 +335,7 @@ NTSTATUS wow64_wine_dbg_write( void *args )
      * без гостевой памяти по базе. */
     void *host = macrunner_hb_wow64_guest32_host_ptr( params32->str );
 
-    return write_output( host ? host : ULongToPtr(params32->str), params32->len );
+    return write( 2, host ? host : ULongToPtr(params32->str), params32->len );
 }
 #endif
 
@@ -397,16 +350,12 @@ int __cdecl __wine_dbg_output( const char *str )
 
     if (end)
     {
-        if ((ret = append_output( info, str, end + 1 - str )) < 0) return -1;
-        if (flush_output( info, info->out_pos ) < 0) return -1;
+        ret += append_output( info, str, end + 1 - str );
+        write( 2, info->output, info->out_pos );
+        info->out_pos = 0;
         str = end + 1;
     }
-    if (*str)
-    {
-        int tail = append_output( info, str, strlen( str ));
-        if (tail < 0) return -1;
-        ret += tail;
-    }
+    if (*str) ret += append_output( info, str, strlen( str ));
     return ret;
 }
 
@@ -418,8 +367,7 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
 {
     static const char * const classes[] = { "fixme", "err", "warn", "trace" };
     struct debug_info *info = get_info();
-    char prefix[80];
-    int ret = 0, len;
+    char *pos = info->output;
 
     if (!(__wine_dbg_get_channel_flags( channel ) & (1 << cls))) return -1;
 
@@ -431,29 +379,16 @@ int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_
         if (TRACE_ON(timestamp))
         {
             UINT ticks = NtGetTickCount();
-            len = snprintf( prefix, sizeof(prefix), "%3u.%03u:", ticks / 1000, ticks % 1000 );
-            if (append_output( info, prefix, len ) < 0) return -1;
-            ret += len;
+            pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%3u.%03u:", ticks / 1000, ticks % 1000 );
         }
-        if (TRACE_ON(pid))
-        {
-            len = snprintf( prefix, sizeof(prefix), "%04x:", GetCurrentProcessId() );
-            if (append_output( info, prefix, len ) < 0) return -1;
-            ret += len;
-        }
-        len = snprintf( prefix, sizeof(prefix), "%04x:", GetCurrentThreadId() );
-        if (append_output( info, prefix, len ) < 0) return -1;
-        ret += len;
+        if (TRACE_ON(pid)) pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", GetCurrentProcessId() );
+        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", GetCurrentThreadId() );
     }
     if (function && cls < ARRAY_SIZE( classes ))
-    {
-        len = snprintf( prefix, sizeof(prefix), "%s:%.15s:", classes[cls], channel->name );
-        if (append_output( info, prefix, len ) < 0 ||
-            append_output( info, function, strlen(function) ) < 0 ||
-            append_output( info, " ", 1 ) < 0) return -1;
-        ret += len + strlen(function) + 1;
-    }
-    return ret;
+        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%s:%s:%s ",
+                         classes[cls], channel->name, function );
+    info->out_pos = pos - info->output;
+    return info->out_pos;
 }
 
 /***********************************************************************

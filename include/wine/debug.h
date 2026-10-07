@@ -116,8 +116,6 @@ NTSYSAPI int WINAPI __wine_dbg_write( const char *str, unsigned int len );
 extern DECLSPEC_EXPORT unsigned char __cdecl __wine_dbg_get_channel_flags( struct __wine_debug_channel *channel );
 extern DECLSPEC_EXPORT const char * __cdecl __wine_dbg_strdup( const char *str );
 extern DECLSPEC_EXPORT int __cdecl __wine_dbg_output( const char *str );
-extern DECLSPEC_EXPORT void * __cdecl __wine_dbg_alloc( unsigned int size );
-extern DECLSPEC_EXPORT void __cdecl __wine_dbg_free( void *ptr );
 extern DECLSPEC_EXPORT int __cdecl __wine_dbg_header( enum __wine_debug_class cls, struct __wine_debug_channel *channel,
                                                       const char *function );
 
@@ -157,48 +155,14 @@ static inline const char * __wine_dbg_cdecl wine_dbg_sprintf( const char *format
     return ret;
 }
 
-/* Format before emitting a header: allocating the rare large message can
- * itself generate VM diagnostics.  Preserve the allocation-free short path
- * and never use an unbounded alloca on a guest thread's stack. */
-static inline int __wine_dbg_cdecl wine_dbg_vformat( struct __wine_debug_channel *channel,
-        enum __wine_debug_class cls, const char *function, const char *format, va_list args )
-{
-    char buffer[1024];
-    char *text = buffer;
-    va_list copy;
-    int len, ret, header = 0;
-
-    va_copy( copy, args );
-    len = vsnprintf( buffer, sizeof(buffer), format, copy );
-    va_end( copy );
-    if (len < 0) return -1;
-    if (len >= sizeof(buffer))
-    {
-        if (!(text = __wine_dbg_alloc( (unsigned int)len + 1 )))
-        {
-            static const char error[] = "wine_dbg_printf: formatting allocation failed\n";
-            __wine_dbg_output( error );
-            return -1;
-        }
-        va_copy( copy, args );
-        ret = vsnprintf( text, (size_t)len + 1, format, copy );
-        va_end( copy );
-        if (ret != len)
-        {
-            __wine_dbg_free( text );
-            return -1;
-        }
-    }
-    if (channel) header = __wine_dbg_header( cls, channel, function );
-    ret = header < 0 ? -1 : __wine_dbg_output( text );
-    if (text != buffer) __wine_dbg_free( text );
-    return ret < 0 ? -1 : header + ret;
-}
-
 static int __wine_dbg_cdecl wine_dbg_vprintf( const char *format, va_list args ) __WINE_PRINTF_ATTR(1,0);
 static inline int __wine_dbg_cdecl wine_dbg_vprintf( const char *format, va_list args )
 {
-    return wine_dbg_vformat( NULL, __WINE_DBCL_ERR, NULL, format, args );
+    char buffer[1024];
+
+    vsnprintf( buffer, sizeof(buffer), format, args );
+    buffer[sizeof(buffer) - 1] = 0;
+    return __wine_dbg_output( buffer );
 }
 
 static int __wine_dbg_cdecl wine_dbg_printf( const char *format, ... ) __WINE_PRINTF_ATTR(1,2);
@@ -220,13 +184,15 @@ static inline int __wine_dbg_cdecl wine_dbg_vlog( enum __wine_debug_class cls,
                                                   struct __wine_debug_channel *channel,
                                                   const char *function, const char *format, va_list args )
 {
+    int ret;
+
     if (*format == '\1')  /* special magic to avoid standard prefix */
     {
         format++;
         function = NULL;
     }
-    if (!(__wine_dbg_get_channel_flags( channel ) & (1 << cls))) return -1;
-    return wine_dbg_vformat( channel, cls, function, format, args );
+    if ((ret = __wine_dbg_header( cls, channel, function )) != -1) ret += wine_dbg_vprintf( format, args );
+    return ret;
 }
 
 static int __wine_dbg_cdecl wine_dbg_log( enum __wine_debug_class cls,
