@@ -424,6 +424,16 @@ struct range_entry
 
 static struct range_entry *free_ranges;
 static struct range_entry *free_ranges_end;
+static SIZE_T free_ranges_capacity = 0x100000;
+
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+#include "macrunner_vm_arena.h"
+#else
+#define MR_VM_INC(n) ((void)0)
+#define MR_VM_CALL(context,expression) (expression)
+#define mr_vm_ensure_free_range_slot() ((void)0)
+#define mr_vm_ranges_high() ((void)0)
+#endif
 
 
 static inline BOOL is_beyond_limit( const void *addr, size_t size, const void *limit )
@@ -1457,11 +1467,16 @@ static void free_ranges_insert_view( struct file_view *view )
     /* need to split the range in two */
     if (range->base < view_base && range->end > view_end)
     {
+        SIZE_T range_index = range - free_ranges, next_index = next - free_ranges;
+        mr_vm_ensure_free_range_slot();
+        range = free_ranges + range_index;
+        next = free_ranges + next_index;
         memmove( next + 1, next, (free_ranges_end - next) * sizeof(struct range_entry) );
         free_ranges_end += 1;
-        if ((char *)free_ranges_end - (char *)free_ranges > view_block_size)
+        mr_vm_ranges_high();
+        if ((char *)free_ranges_end - (char *)free_ranges > free_ranges_capacity)
             ERR( "Free range sequence is full, trouble ahead!\n" );
-        assert( (char *)free_ranges_end - (char *)free_ranges <= view_block_size );
+        assert( (char *)free_ranges_end - (char *)free_ranges <= free_ranges_capacity );
 
         next->base = view_end;
         next->end = range->end;
@@ -1561,11 +1576,15 @@ static void free_ranges_remove_view( struct file_view *view )
     /* otherwise create a new one */
     else
     {
+        SIZE_T range_index = range - free_ranges;
+        mr_vm_ensure_free_range_slot();
+        range = free_ranges + range_index;
         memmove( range + 1, range, (free_ranges_end - range) * sizeof(struct range_entry) );
         free_ranges_end += 1;
-        if ((char *)free_ranges_end - (char *)free_ranges > view_block_size)
+        mr_vm_ranges_high();
+        if ((char *)free_ranges_end - (char *)free_ranges > free_ranges_capacity)
             ERR( "Free range sequence is full, trouble ahead!\n" );
-        assert( (char *)free_ranges_end - (char *)free_ranges <= view_block_size );
+        assert( (char *)free_ranges_end - (char *)free_ranges <= free_ranges_capacity );
 
         range->base = view_base;
         range->end = view_end;
@@ -1783,7 +1802,8 @@ static BOOL alloc_pages_vprot( const void *addr, size_t size )
     for (i = idx >> pages_vprot_shift; i < (end + pages_vprot_mask) >> pages_vprot_shift; i++)
     {
         if (pages_vprot[i]) continue;
-        if ((ptr = anon_mmap_alloc( pages_vprot_mask + 1, PROT_READ | PROT_WRITE )) == MAP_FAILED)
+        if ((ptr = MR_VM_CALL( MR_VM_METADATA,
+                              anon_mmap_alloc( pages_vprot_mask + 1, PROT_READ | PROT_WRITE ) )) == MAP_FAILED)
         {
             ERR( "anon mmap error %s for vprot table, size %08lx\n", strerror(errno), pages_vprot_mask + 1 );
             return FALSE;
@@ -2239,10 +2259,13 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
 {
     ULONG64 before = macrunner_mapscan_steps;
     void *scan_start = start;
-    void *ret = try_map_free_area_impl( base, end, step, start, size, unix_prot );
+    void *ret = MR_VM_CALL( MR_VM_NOADDR, try_map_free_area_impl( base, end, step, start, size, unix_prot ) );
     ULONG64 n = macrunner_mapscan_steps - before;
     ULONG64 calls = ++macrunner_mapscan_calls;
     BOOL big = n >= 1024 && macrunner_mapscan_big_reports < 32;
+
+    MR_VM_INC(try_map_free);
+    MR_VM_INC(gap_steps);
 
     if (n > macrunner_mapscan_max_steps) macrunner_mapscan_max_steps = n;
     if (!ret) macrunner_mapscan_fail++;
@@ -2365,6 +2388,7 @@ static void* try_map_free_area_impl( void *base, void *end, ptrdiff_t step,
  */
 static void *map_free_area( void *base, void *end, size_t size, int top_down, int unix_prot, size_t align_mask )
 {
+    MR_VM_INC(map_free);
     struct wine_rb_entry *first = find_view_inside_range( &base, &end, top_down );
     ptrdiff_t step = top_down ? -(align_mask + 1) : (align_mask + 1);
     void *start;
@@ -2560,10 +2584,18 @@ static void unmap_area( void *start, size_t size )
         }
         if (area_end >= end)
         {
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+            mr_vm_restore_none( start, (char *)end - (char *)start );
+#else
             anon_mmap_fixed( start, (char *)end - (char *)start, PROT_NONE, MAP_NORESERVE );
+#endif
             return;
         }
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+        mr_vm_restore_none( start, (char *)area_end - (char *)start );
+#else
         anon_mmap_fixed( start, (char *)area_end - (char *)start, PROT_NONE, MAP_NORESERVE );
+#endif
         start = area_end;
     }
     munmap( start, (char *)end - (char *)start );
@@ -2585,7 +2617,10 @@ static struct file_view *alloc_view(void)
     }
     if (view_block_start == view_block_end)
     {
-        void *ptr = anon_mmap_alloc( view_block_size, PROT_READ | PROT_WRITE );
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+        if (mr_vm_metadata_ready) { MR_VM_INC(metadata_view_exhausted); return NULL; }
+#endif
+        void *ptr = MR_VM_CALL( MR_VM_METADATA, anon_mmap_alloc( view_block_size, PROT_READ | PROT_WRITE ) );
         if (ptr == MAP_FAILED) return NULL;
         view_block_start = ptr;
         view_block_end = view_block_start + view_block_size / sizeof(*view_block_start);
@@ -3597,7 +3632,19 @@ static void *map_reserved_area( void *limit_low, void *limit_high, size_t size, 
             if (ptr) break;
         }
     }
-    if (ptr && anon_mmap_fixed( ptr, size, unix_prot, 0 ) != ptr) ptr = NULL;
+    if (ptr)
+    {
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+        if (unix_prot == PROT_NONE && !mr_vm_dirty && mr_vm_contains( ptr, size ))
+        {
+            /* Fresh reserve and successful unmap_area replacements are anonymous zero PROT_NONE. */
+            MR_VM_INC(arena_none);
+            if (mr_vm_context == MR_VM_ARENA) MR_VM_INC(arena_none_noaddr);
+            return ptr;
+        }
+#endif
+        if (anon_mmap_fixed( ptr, size, unix_prot, 0 ) != ptr) ptr = NULL;
+    }
     return ptr;
 }
 
@@ -3635,6 +3682,14 @@ static NTSTATUS map_fixed_area( void *base, size_t size, int unix_prot )
         }
         if (area_end >= end)
         {
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+            if (unix_prot == PROT_NONE && !mr_vm_dirty && mr_vm_contains( start, end - start ))
+            {
+                MR_VM_INC(arena_none);
+                MR_VM_INC(arena_none_fixed);
+                return STATUS_SUCCESS;
+            }
+#endif
             if (anon_mmap_fixed( start, end - start, unix_prot, 0 ) == MAP_FAILED) goto failed;
             return STATUS_SUCCESS;
         }
@@ -3840,6 +3895,18 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
     NTSTATUS status;
     int mr_guest32_view = 0;   /* ★ 06.09 лейн ТЕНЕВАЯ-КАРТА-2: пришли ли на `done:` путём guest32 */
 
+    if (base) MR_VM_INC(view_fixed);
+    else MR_VM_INC(view_noaddr);
+    if (unix_prot == PROT_NONE)
+    {
+        if (base) MR_VM_INC(fixed_none);
+        else MR_VM_INC(noaddr_none);
+    }
+    if (vprot & SEC_IMAGE) MR_VM_INC(view_image);
+    else if (vprot & SEC_FILE) MR_VM_INC(view_file);
+    if (top_down) MR_VM_INC(view_topdown);
+    if (limit_low || limit_high) MR_VM_INC(view_limited);
+
     if (!align_mask) align_mask = granularity_mask;
     assert( align_mask >= host_page_mask );
 
@@ -4011,6 +4078,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
                 TRACE( "got fixed WOW64 guest32 mem %p-%p for guest %p-%p\n",
                        ptr, (char *)ptr + size, base, (char *)base + size );
                 mr_guest32_view = 1;
+                MR_VM_INC(guest32);
                 goto done;
             }
             return status;
@@ -4046,6 +4114,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
                     TRACE( "got WOW64 guest32 mem %p-%p for guest range %#lx-%#lx\n",
                            ptr, (char *)ptr + size, guest_low, guest_high );
                     mr_guest32_view = 1;
+                    MR_VM_INC(guest32);
                     goto done;
                 }
                 {
@@ -4140,7 +4209,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
                 return STATUS_CONFLICTING_ADDRESSES;
             }
         }
-        if ((status = map_fixed_area( base, size, unix_prot ))) return status;
+        if ((status = MR_VM_CALL( MR_VM_FIXED, map_fixed_area( base, size, unix_prot ) ))) return status;
         if (is_beyond_limit( base, size, working_set_limit )) working_set_limit = address_space_limit;
         ptr = base;
     }
@@ -4215,8 +4284,9 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
          * на x64 она убирает захват образов. */
         if (macrunner_fex_host_jit_alloc_wanted( base, vprot, alloc_type ))
         {
-            void *jit = mmap( NULL, view_size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                              MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0 );
+            void *jit = MR_VM_CALL( MR_VM_JIT,
+                        mmap( NULL, view_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                              MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0 ) );
             if (jit == MAP_FAILED)
             {
                 fprintf( stderr, "macrunner-fex-jit-map: ОТКАЗ size=%zx errno=%d (%s) — обычный путь\n",
@@ -4259,6 +4329,7 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
                 unsigned int n = __atomic_add_fetch( &mr_jit_maps, 1, __ATOMIC_RELAXED );
                 ptr = unmap_extra_space( jit, view_size, host_size, align_mask );
                 vprot |= VPROT_MACRUNNER_JIT;
+                MR_VM_INC(jit);
                 fprintf( stderr, "macrunner-fex-jit-map: base=%p size=%zx vprot=%#x n=%u\n",
                          ptr, host_size, vprot, n );
                 fflush( stderr );
@@ -4270,15 +4341,47 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
         if (limit_low && (void *)limit_low > start) start = (void *)limit_low;
         if (limit_high && (void *)limit_high < end) end = (char *)limit_high + 1;
 
-        if ((ptr = map_reserved_area( start, end, host_size, top_down, unix_prot, align_mask )))
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+        if (mr_vm_owned)
         {
+            void *arena_low = max( start, mr_vm_base );
+            void *arena_high = min( end, mr_vm_end );
+            if (arena_low < arena_high)
+            {
+                ULONG64 errors_before = mr_vm_get( &mr_vm_kernel[MR_VM_ARENA].eexist ) +
+                                        mr_vm_get( &mr_vm_kernel[MR_VM_ARENA].enomem ) +
+                                        mr_vm_get( &mr_vm_kernel[MR_VM_ARENA].einval ) +
+                                        mr_vm_get( &mr_vm_kernel[MR_VM_ARENA].other_errno );
+                ptr = MR_VM_CALL( MR_VM_ARENA,
+                      map_reserved_area( arena_low, arena_high, host_size, top_down, unix_prot, align_mask ) );
+                if (ptr) { MR_VM_INC(arena_maps); goto done; }
+                if (errors_before != mr_vm_get( &mr_vm_kernel[MR_VM_ARENA].eexist ) +
+                                     mr_vm_get( &mr_vm_kernel[MR_VM_ARENA].enomem ) +
+                                     mr_vm_get( &mr_vm_kernel[MR_VM_ARENA].einval ) +
+                                     mr_vm_get( &mr_vm_kernel[MR_VM_ARENA].other_errno ))
+                    MR_VM_INC(arena_mapping_failed);
+                else MR_VM_INC(arena_exhausted);
+                /* No silent scan fallback once this request selected our owned arena. */
+                return STATUS_NO_MEMORY;
+            }
+            MR_VM_INC(outside_limits);
+        }
+        else if (!mr_vm_gate) MR_VM_INC(gate_off);
+#endif
+
+        if ((ptr = MR_VM_CALL( MR_VM_NOADDR,
+                    map_reserved_area( start, end, host_size, top_down, unix_prot, align_mask ) )))
+        {
+            MR_VM_INC(legacy_reserved);
             TRACE( "got mem in reserved area %p-%p\n", ptr, (char *)ptr + size );
             goto done;
         }
 
         if (start > address_space_start || end < host_addr_space_limit || top_down)
         {
-            if (!(ptr = map_free_area( start, end, host_size, top_down, unix_prot, align_mask )))
+            MR_VM_INC(legacy_scan);
+            if (!(ptr = MR_VM_CALL( MR_VM_NOADDR,
+                       map_free_area( start, end, host_size, top_down, unix_prot, align_mask ) )))
                 return STATUS_NO_MEMORY;
             TRACE( "got mem with map_free_area %p-%p\n", ptr, (char *)ptr + size );
             goto done;
@@ -4286,7 +4389,8 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
 
         for (;;)
         {
-            if ((ptr = anon_mmap_alloc( view_size, unix_prot )) == MAP_FAILED)
+            MR_VM_INC(legacy_anon);
+            if ((ptr = MR_VM_CALL( MR_VM_NOADDR, anon_mmap_alloc( view_size, unix_prot ) )) == MAP_FAILED)
             {
                 status = (errno == ENOMEM) ? STATUS_NO_MEMORY : STATUS_INVALID_PARAMETER;
                 ERR( "anon mmap error %s, size %p, unix_prot %#x\n",
@@ -5195,6 +5299,10 @@ static NTSTATUS map_pe_header( void *ptr, size_t size, size_t map_size, int fd, 
  */
 static void *get_host_addr_space_limit(void)
 {
+#if defined(__APPLE__) && defined(__aarch64__)
+    const char *arena = getenv( "MACRUNNER_VM_ARENA" );
+    if (arena && !strcmp( arena, "1" )) return (void *)(UINT_PTR)MACH_VM_MAX_ADDRESS;
+#endif
     unsigned int flags = MAP_PRIVATE | MAP_ANON;
     UINT_PTR addr = (UINT_PTR)1 << 63;
 
@@ -6532,6 +6640,10 @@ void virtual_init(void)
         for (i = 0; (*preload_info)[i].size; i++)
             mmap_add_reserved_area( (*preload_info)[i].addr, (*preload_info)[i].size );
 
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+    mr_vm_arena_init();
+#endif
+
     mmap_init( preload_info ? *preload_info : NULL );
 
     if ((preload = getenv("WINEPRELOADRESERVE")))
@@ -6565,11 +6677,16 @@ void virtual_init(void)
 #else
     size = 2 * view_block_size + (1U << (32 - page_shift));
 #endif
-    view_block_start = alloc_virtual_heap( size );
-    assert( view_block_start != MAP_FAILED );
-    view_block_end = view_block_start + view_block_size / sizeof(*view_block_start);
-    free_ranges = (void *)((char *)view_block_start + view_block_size);
-    pages_vprot = (void *)((char *)view_block_start + 2 * view_block_size);
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+    if (!mr_vm_metadata_init())
+#endif
+    {
+        view_block_start = alloc_virtual_heap( size );
+        assert( view_block_start != MAP_FAILED );
+        view_block_end = view_block_start + view_block_size / sizeof(*view_block_start);
+        free_ranges = (void *)((char *)view_block_start + view_block_size);
+        pages_vprot = (void *)((char *)view_block_start + 2 * view_block_size);
+    }
     wine_rb_init( &views_tree, compare_view );
 
     free_ranges[0].base = (void *)0;
@@ -7009,7 +7126,18 @@ TEB *virtual_alloc_first_teb(void)
      * PAGEZERO constraints, so don't force first-TEB allocation below 2GB.
      */
 #if defined(__aarch64__)
-    NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, 0, &total,
+    /* The main image is not known until init_startup_info(), after this block
+     * is allocated.  init_teb() embeds TEB32/PEB32 and writes their addresses
+     * with PtrToUlong().  Keep that block representable by the 32-bit ABI even
+     * when unconstrained allocations prefer the high owned arena.  The old
+     * low reserved-area path and the gate-off behavior remain unchanged. */
+    NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block,
+#if defined(__APPLE__) && defined(_WIN64)
+                             mr_vm_owned ? limit_4g - 1 : 0,
+#else
+                             0,
+#endif
+                             &total,
                              MEM_RESERVE, PAGE_READWRITE );
 #else
     NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, is_win64 ? limit_2g - 1 : 0, &total,

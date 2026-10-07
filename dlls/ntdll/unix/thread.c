@@ -1785,6 +1785,10 @@ void abort_thread( int status )
  */
 void abort_process( int status )
 {
+#if defined(__APPLE__) && defined(__aarch64__) && defined(_WIN64)
+    extern void virtual_vm_arena_summary(void);
+    virtual_vm_arena_summary();
+#endif
     _exit( get_unix_exit_code( status ));
 }
 
