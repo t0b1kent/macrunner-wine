@@ -248,7 +248,7 @@ class HeaderSources(unittest.TestCase):
 class Drivers(unittest.TestCase):
     def test_pinned_inputs(self):
         pinned = full.check_inputs()['files']
-        self.assertEqual(len(pinned), 35)
+        self.assertEqual(len(pinned), 37)
         self.assertIn('repro109deps/port_probe.py', pinned)
         self.assertEqual(pinned['repro109deps/port_probe.py'],
                          full.digest((full.REPO / 'repro109deps/port_probe.py').read_bytes()))
@@ -427,6 +427,9 @@ class Drivers(unittest.TestCase):
         for needle in ('deps_run:', 'deps_sha:', 'actions: read', "inputs.deps_run == ''", "needs.deps.result == 'skipped'",
                        'gh run download "$run_id"'):
             self.assertIn(needle, text)
+        # The source set is prepared by the c12 transport (redirects by digest, pauses, HTTP/1.1, resume), not by the shared tool.
+        self.assertIn('build/repro110wine/prepare_sources.py --profile github-xcode27-arm64', text)
+        self.assertNotIn('python3 -I -B build/repro109deps/preflight_sources.py \\\n            --work', text)
         self.assertGreaterEqual(full.DEPS_MINUTES, 150)
         self.assertIn('timeout-minutes: 240', text)
         # GitHub starts `shell: bash` steps with -e: every step that reads $? must switch it off first.
@@ -526,7 +529,7 @@ class TransitiveMoltenInputs(unittest.TestCase):
             return full.check_inputs()
 
     def test_matching_outer_and_transitive_inputs_pass(self):
-        self.assertEqual(len(self.check_inputs()['files']), 35)
+        self.assertEqual(len(self.check_inputs()['files']), 37)
 
     def test_matching_outer_lock_rejects_each_stale_shared_pin(self):
         for key in ['shared_driver_sha256', 'shared_source_fixes_sha256', 'bootstrap_lock_sha256']:

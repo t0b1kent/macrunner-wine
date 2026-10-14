@@ -45,7 +45,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -I -B build/repro109deps/preflight_sources.py \
+          # Redirects are accepted when the bytes match the pinned digest, server errors are retried after pauses, HTTP/1.1
+          # is forced and a cut connection is continued (build/repro110wine/source_transport.py); the report lists each.
+          python3 -I -B build/repro110wine/prepare_sources.py --profile github-xcode27-arm64 \
             --work "$RUNNER_TEMP/repro110-wine-c12-inputs" --workers 8 --minutes 10 \
             > "$RUNNER_TEMP/repro110-wine-c12-inputs.log" 2>&1
           tar -czf "$RUNNER_TEMP/repro110-wine-c12-inputs.tar.gz" \

@@ -38,7 +38,9 @@
   "repro109deps/published-archives.lock.json": "02b54b9aa586008312ac9166250e7b506c41d4fea6144d515b11e873d2397f6d",
   "repro110wine/deps_test_policy.py": "cf1d0caca807e68e26c3335930f1b74590f0ed3dfad7e4d15ae023011a7455c6",
   "repro110wine/upstream-test-allowlist.lock.json": "b00c382fa41c0b3119f7025d960d5a6a00b34052aa4d22549bd1af8abf3a8b8d",
-  "repro110wine/memwatch.sh": "b5dd9ea0fadf4bd212f35306f097d4bcce9b36d04e8c8f4167784527db5e2067"
+  "repro110wine/memwatch.sh": "b5dd9ea0fadf4bd212f35306f097d4bcce9b36d04e8c8f4167784527db5e2067",
+  "repro110wine/source_transport.py": "eaf14b1beaf15b28540c739507d19341fcad2db5b60915018ac1ff77e424553f",
+  "repro110wine/prepare_sources.py": "b21b0480564589fc36b0a21e7f0ea0298a89b74842d1715b4a2cd4816da05797"
  },
  "compiler": {
   "name": "llvm-mingw",
