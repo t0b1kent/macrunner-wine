@@ -97,6 +97,15 @@ class Transport(unittest.TestCase):
         self.assertNotIn('SECRETTOKEN', saved)
         self.assertNotIn('SECRETTOKEN', (out / 'public-archives/freetype/receipt.json').read_text())
 
+    def test_a_redirect_with_a_zero_length_body_does_not_leak_its_headers_into_a_chunked_final_response(self):
+        # codeload.github.com answers 200 without Content-Length after a 302 that said `Content-Length: 0`.
+        chunked = dict(status=200, headers={'Transfer-Encoding': 'chunked'}, body=BODY)
+        zero = dict(status=302, headers={'Location': 'https://codeload.example.org/a/tar.gz/refs/tags/v1', 'Content-Length': '0'})
+        self.use({START: [zero], 'https://codeload.example.org/a/tar.gz/refs/tags/v1': [chunked]})
+        receipt, _ = self.download()
+        self.assertEqual(receipt['state'], 'PRESENT')
+        self.assertEqual(receipt['attempts'][0]['content_length'], 'EMPTY')
+
     def test_other_bytes_behind_a_redirect_are_refused(self):
         self.use({START: [redirect(SIGNED)], SIGNED: [ok(b'x' * len(BODY))]})
         with self.assertRaisesRegex(ValueError, 'archive checksum or size differs'):

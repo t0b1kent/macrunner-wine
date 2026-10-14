@@ -143,7 +143,10 @@ def _fetch(url, target, limit, timeout_seconds):
                 return fail('curl transport failed before metadata; rc=' + str(child.returncode), True)
             return fail('curl response metadata or redirect destination refused', False)
         parsed = urllib.parse.urlparse(current)
-        result.update(http_status=status, final_host=parsed.hostname, final_path=parsed.path[:200])
+        # Header scalars describe the response just received: a redirect's `Content-Length: 0` must not survive into the
+        # final response, which may be chunked (codeload.github.com sends no length; 38528251057 lost two archives to it).
+        result.update(http_status=status, final_host=parsed.hostname, final_path=parsed.path[:200],
+                      content_length='EMPTY', content_encoding='identity', content_type='EMPTY', content_range='EMPTY')
         _scalars(result, values)
         segments.append(dict(status=status, rc=child.returncode, host=parsed.hostname, resumed=resume,
                              bytes_after=target.stat().st_size if target.is_file() else 0))
