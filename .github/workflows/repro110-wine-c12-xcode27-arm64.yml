@@ -137,7 +137,7 @@ jobs:
           if [ -d "$work/moltenvk/prefix" ]; then tar -czf "$out/moltenvk-prefix.tar.gz" -C "$work/moltenvk/prefix" .; fi
           for archive in "$out"/*.tar.gz; do
             [ -f "$archive" ] || continue
-            shasum -a 256 "$archive" > "$archive.sha256"
+            ( cd "$out" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256" )
           done
           [ -f "$RUNNER_TEMP/memwatch-deps.log" ] && cp "$RUNNER_TEMP/memwatch-deps.log" "$out/memwatch-deps.log"
           exit 0
@@ -196,7 +196,18 @@ jobs:
             run_id="$GITHUB_RUN_ID"; name="repro110-wine-c12-deps-$GITHUB_SHA"
           fi
           gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$dest"
-          ls "$dest/repro110-wine-c12-deps-results" | head -20
+          # What actually arrived, kept for the report: the next refusal must be readable from the artifact alone.
+          {
+            printf '== received from run %s as %s\n' "$run_id" "$name"
+            printf '== top two levels\n'; ( cd "$dest" && find . -maxdepth 2 | sort )
+            printf '== archives and checksum files (bytes, path)\n'
+            ( cd "$dest" && find . -maxdepth 2 -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.txt' \) -exec wc -c {} + )
+            printf '== first field and name inside each checksum file\n'
+            for f in $(find "$dest" -type f -name '*.sha256' | sort); do printf '%s: ' "${f#"$dest"/}"; cat "$f"; done
+            printf '== files per directory\n'
+            find "$dest" -type f | sed 's|/[^/]*$||; s|^'"$dest"'|.|' | sort | uniq -c
+          } > "$RUNNER_TEMP/receive-layout.txt" 2>&1 || true
+          cat "$RUNNER_TEMP/receive-layout.txt"
       - name: Restore the dependency and MoltenVK outputs at their original paths
         shell: bash
         run: |
@@ -205,7 +216,17 @@ jobs:
           src="$RUNNER_TEMP/repro110-wine-c12-deps-artifact/repro110-wine-c12-deps-results"
           work="$RUNNER_TEMP/repro110-wine-c12-work"
           [ ! -e "$work" ]
-          ( cd "$src" && shasum -a 256 -c dependency-prefix.tar.gz.sha256 moltenvk-prefix.tar.gz.sha256 )
+          # The .sha256 files name the archive by the absolute path it had on the machine that wrote it, which does not
+          # exist here (38524899176 stopped on exactly that). Compare the recorded digest with the digest of the file found.
+          for name in dependency-prefix moltenvk-prefix; do
+            for needed in "$src/$name.tar.gz" "$src/$name.tar.gz.sha256"; do
+              [ -f "$needed" ] || { printf 'missing %s\n' "$needed"; cat "$RUNNER_TEMP/receive-layout.txt"; exit 1; }
+            done
+            want="$(awk '{print $1}' "$src/$name.tar.gz.sha256")"
+            got="$(shasum -a 256 "$src/$name.tar.gz" | awk '{print $1}')"
+            { [ -n "$want" ] && [ "$want" = "$got" ]; } || { printf 'sha256 of %s.tar.gz differs: recorded %s, found %s\n' "$name" "$want" "$got"; exit 1; }
+            printf '%s.tar.gz sha256 %s ok\n' "$name" "$got"
+          done
           mkdir -p "$work/deps/prefix" "$work/moltenvk/prefix" "$work/deps/reports" "$work/moltenvk/reports"
           tar -xzf "$src/dependency-prefix.tar.gz" -C "$work/deps/prefix"
           tar -xzf "$src/moltenvk-prefix.tar.gz" -C "$work/moltenvk/prefix"
@@ -245,9 +266,15 @@ jobs:
           if [ -d "$work/wine/install" ]; then tar -czf "$out/wine-dist.tar.gz" -C "$work/wine/install" .; fi
           for archive in "$out"/*.tar.gz; do
             [ -f "$archive" ] || continue
-            shasum -a 256 "$archive" > "$archive.sha256"
+            ( cd "$out" && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256" )
           done
           [ -f "$RUNNER_TEMP/memwatch-wine.log" ] && cp "$RUNNER_TEMP/memwatch-wine.log" "$out/memwatch-wine.log"
+          [ -f "$RUNNER_TEMP/receive-layout.txt" ] && cp "$RUNNER_TEMP/receive-layout.txt" "$out/receive-layout.txt"
+          {
+            printf 'driver rc: %s\n' "$(cat "$RUNNER_TEMP/repro110-wine-c12-rc.txt" 2>/dev/null || echo not-run)"
+            printf 'work directory: %s\n' "$( [ -d "$work" ] && ls "$work" | tr '\n' ' ' || echo absent )"
+            printf 'received layout file: %s\n' "$( [ -f "$RUNNER_TEMP/receive-layout.txt" ] && echo present || echo missing )"
+          } > "$out/stage-status.txt"
           exit 0
       - name: Preserve reports and unsigned component outputs
         if: always()

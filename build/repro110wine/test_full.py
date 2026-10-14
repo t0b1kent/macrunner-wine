@@ -1,5 +1,6 @@
 """Offline controls of actual manifest composition and sequential source drivers."""
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -417,8 +418,10 @@ class Drivers(unittest.TestCase):
         text = (full.REPO.parent / '.github/workflows/repro110-wine-c12-xcode27-arm64.yml').read_text()
         for needle in ('  deps:\n    # The first full run', '  wine:\n    needs: deps', '--stage deps', '--stage wine', '--jobs 2',
                        'nice -n 10 python3', 'build/repro110wine/memwatch.sh', 'name: repro110-wine-c12-deps-${{ github.sha }}',
-                       'shasum -a 256 -c dependency-prefix.tar.gz.sha256 moltenvk-prefix.tar.gz.sha256', 'if: always()'):
+                       'if: always()', 'receive-layout.txt', 'stage-status.txt'):
             self.assertIn(needle, text)
+        # `shasum -c` takes the path written into the .sha256 file, which names the machine that built the archive.
+        self.assertNotIn('shasum -a 256 -c', text)
         self.assertNotIn('--jobs 3', text)
         # An earlier dependency stage can be reused so that a Wine-stage fix is tried without the two-hour library build.
         for needle in ('deps_run:', 'deps_sha:', 'actions: read', "inputs.deps_run == ''", "needs.deps.result == 'skipped'",
@@ -431,6 +434,58 @@ class Drivers(unittest.TestCase):
             if 'build_rc=$?' in block or 'archive=' in block:
                 self.assertIn('set +e', block, block.splitlines()[0])
         self.assertTrue((full.HERE / 'memwatch.sh').is_file())
+
+    def _workflow_step(self, title):
+        text = (full.REPO.parent / '.github/workflows/repro110-wine-c12-xcode27-arm64.yml').read_text()
+        wine_job = text.split('\n  wine:\n')[1]
+        block = [part for part in wine_job.split('      - name: ') if part.startswith(title)][0]
+        body = block.split('        run: |\n', 1)[1]
+        return '\n'.join(line[10:] if line.startswith(' ' * 10) else line for line in body.splitlines()) + '\n'
+
+    def _run_restore(self, mutate=None):
+        import io, subprocess, tarfile
+        step = self._workflow_step('Restore the dependency and MoltenVK outputs')
+        with tempfile.TemporaryDirectory(dir=os.environ['REPRO109_TEST_TMP']) as directory:
+            temp = Path(directory)
+            src = temp / 'repro110-wine-c12-deps-artifact/repro110-wine-c12-deps-results'
+            for sub in ('deps/reports', 'moltenvk/reports'):
+                (src / sub).mkdir(parents=True)
+                (src / sub / 'dependency-manifest.json').write_text('{}')
+            for name in ('dependency', 'moltenvk'):
+                archive = src / (name + '-prefix.tar.gz')
+                with tarfile.open(archive, 'w:gz') as tar:
+                    data = name.encode()
+                    info = tarfile.TarInfo('./lib/marker.txt'); info.size = len(data)
+                    tar.addfile(info, io.BytesIO(data))
+                # Exactly what the first runner wrote: the digest and the absolute path it had on that machine.
+                (src / (archive.name + '.sha256')).write_text(
+                    hashlib.sha256(archive.read_bytes()).hexdigest() + '  /' + 'Users/runner/work/_temp/other/' + archive.name + '\n')
+            (temp / 'receive-layout.txt').write_text('layout fixture\n')
+            if mutate:
+                mutate(src)
+            done = subprocess.run(['bash', '-c', step], env=dict(os.environ, RUNNER_TEMP=str(temp)),
+                                  capture_output=True, text=True)
+            work = temp / 'repro110-wine-c12-work'
+            return done, [(work / 'deps/prefix/lib/marker.txt').is_file(), (work / 'moltenvk/prefix/lib/marker.txt').is_file()]
+
+    def test_restore_accepts_checksum_files_that_name_the_first_runners_path(self):
+        done, restored = self._run_restore()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(restored, [True, True])
+        self.assertIn('dependency-prefix.tar.gz sha256', done.stdout)
+
+    def test_restore_refuses_a_changed_archive_and_names_a_missing_one_with_the_layout(self):
+        def damage(src):
+            with open(src / 'moltenvk-prefix.tar.gz', 'ab') as handle:
+                handle.write(b'x')
+        done, restored = self._run_restore(damage)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('sha256 of moltenvk-prefix.tar.gz differs', done.stdout)
+        done, restored = self._run_restore(lambda src: (src / 'dependency-prefix.tar.gz').unlink())
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn('missing', done.stdout)
+        self.assertIn('dependency-prefix.tar.gz', done.stdout)
+        self.assertIn('layout fixture', done.stdout)
 
     def test_first_failure_stops_later_phases(self):
         lock = full.check_inputs()

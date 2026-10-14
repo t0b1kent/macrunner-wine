@@ -84,9 +84,11 @@ class Xcode27Controls(unittest.TestCase):
             toolchain_preflight=mock.Mock(return_value=(sdk, 'clang', 'clang++')),
             build=mock.Mock(), command=mock.Mock())
         wine, mv = SimpleNamespace(build=mock.Mock()), SimpleNamespace(build=mock.Mock())
+        # The upstream-test policy is the second driver the build loads; it only wraps the dependency driver's commands.
+        policy = SimpleNamespace(install=lambda *args, **kwargs: None, summary=lambda out: dict(policy='fixture', components=[]))
         work = self.root / 'work'
         with mock.patch.object(full, 'cloud_guard'), \
-             mock.patch.object(full, 'load_driver', side_effect=[dep, wine, mv]):
+             mock.patch.object(full, 'load_driver', side_effect=[dep, policy, wine, mv]):
             with self.assertRaisesRegex(ValueError, 'lacks Wine x18 ABI exports'):
                 full.build(work, dict(minutes=1), profile=PROFILE)
         for producer in [dep, wine, mv]:
