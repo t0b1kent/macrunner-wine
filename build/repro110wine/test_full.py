@@ -15,6 +15,7 @@ import build_full as full
 
 DEP = full.load_driver('wine2_test_deps', full.REPO / 'repro109deps/build_deps.py')
 WINE = full.load_driver('wine2_test_wine', full.HERE / 'build_wine.py')
+POLICY = SimpleNamespace(install=lambda *a, **k: None, summary=lambda out: dict(policy='fixture', components=[]))
 MV_LOCK = json.loads((full.REPO / 'repro109moltenvk/moltenvk.lock.json').read_bytes())
 
 
@@ -246,7 +247,7 @@ class HeaderSources(unittest.TestCase):
 class Drivers(unittest.TestCase):
     def test_pinned_inputs(self):
         pinned = full.check_inputs()['files']
-        self.assertEqual(len(pinned), 32)
+        self.assertEqual(len(pinned), 34)
         self.assertIn('repro109deps/port_probe.py', pinned)
         self.assertEqual(pinned['repro109deps/port_probe.py'],
                          full.digest((full.REPO / 'repro109deps/port_probe.py').read_bytes()))
@@ -349,7 +350,7 @@ class Drivers(unittest.TestCase):
             wine = SimpleNamespace(build=wine_build, inputs=lambda: dict(toolchain={}), dependencies=WINE.dependencies,
                                    download_compiler=download)
             molten = SimpleNamespace(build=molten_build, read_lock=lambda: dict(toolchain={}))
-            with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=[dep, wine, molten]):
+            with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=[dep, POLICY, wine, molten]):
                 full.build(root, lock)
             self.assertEqual(calls, ['deps', 'moltenvk', 'compiler', 'wine'])
             result = json.loads((root / 'reports/RESULT.json').read_bytes())
@@ -362,7 +363,7 @@ class Drivers(unittest.TestCase):
             root = Path(directory) / 'fresh'
             dep = SimpleNamespace(build=mock.Mock(side_effect=ValueError('fixture first failure')), read_lock=lambda: dict(toolchain={}))
             wine = SimpleNamespace(build=mock.Mock()); molten = SimpleNamespace(build=mock.Mock())
-            with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=[dep, wine, molten]):
+            with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=[dep, POLICY, wine, molten]):
                 with self.assertRaisesRegex(ValueError, 'fixture first failure'): full.build(root, lock)
             molten.build.assert_not_called(); wine.build.assert_not_called()
             self.assertEqual(json.loads((root / 'reports/RESULT.json').read_bytes())['first_failure']['phase'], 'DEPS10')
@@ -395,7 +396,7 @@ class TransitiveMoltenInputs(unittest.TestCase):
             return full.check_inputs()
 
     def test_matching_outer_and_transitive_inputs_pass(self):
-        self.assertEqual(len(self.check_inputs()['files']), 32)
+        self.assertEqual(len(self.check_inputs()['files']), 34)
 
     def test_matching_outer_lock_rejects_each_stale_shared_pin(self):
         for key in ['shared_driver_sha256', 'shared_source_fixes_sha256', 'bootstrap_lock_sha256']:

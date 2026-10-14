@@ -214,6 +214,8 @@ def build(root, lock, jobs=4, profile='github', source_inputs=None):
     root.mkdir(parents=True)
     out = root / 'reports'; out.mkdir()
     dep = load_driver('repro109_full_deps', REPO / 'repro109deps/build_deps.py')
+    policy = load_driver('repro110_deps_test_policy', HERE / 'deps_test_policy.py')
+    policy.install(dep, HERE / 'upstream-test-allowlist.lock.json')
     wine = load_driver('repro109_full_wine', HERE / 'build_wine.py')
     mv = load_driver('repro109_full_moltenvk', REPO / 'repro109moltenvk/build_moltenvk.py')
     deadline = time.monotonic() + lock['minutes'] * 60
@@ -259,6 +261,10 @@ def build(root, lock, jobs=4, profile='github', source_inputs=None):
         result.update(status='FAILED', first_failure=dict(phase=phase, error=str(error)))
         raise
     finally:
+        try:
+            result['upstream_tests'] = policy.summary(root / 'deps/reports')
+        except Exception as error:  # the verdict on tests is evidence, never a reason to lose the real result
+            result['upstream_tests'] = dict(state='NOT_AVAILABLE', error=str(error)[:300])
         result['install_skipped'] = sum('install skipped' in line.lower()
             for path in root.rglob('*.log') for line in path.read_text(errors='replace').splitlines())
         (out / 'RESULT.json').write_text(json.dumps(result, indent=2) + '\n')

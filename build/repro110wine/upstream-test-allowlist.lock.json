@@ -1,0 +1,5 @@
+{
+  "schema": 1,
+  "purpose": "Upstream tests of a dependency that may fail after the serial recheck without failing the build. Empty: every test must pass, a flaky one is rechecked once.",
+  "allow": []
+}

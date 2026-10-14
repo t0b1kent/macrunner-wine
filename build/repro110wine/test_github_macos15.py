@@ -67,7 +67,8 @@ class GitHubWine15(unittest.TestCase):
                               build=mock.Mock(), command=mock.Mock())
         wine = SimpleNamespace(build=mock.Mock())
         mv = SimpleNamespace(build=mock.Mock())
-        drivers = [dep, wine, mv]
+        policy = SimpleNamespace(install=lambda *a, **k: None, summary=lambda out: dict(policy='fixture', components=[]))
+        drivers = [dep, policy, wine, mv]
         work = self.root / 'work'
         with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=drivers):
             with self.assertRaisesRegex(ValueError, 'lacks Wine'):
