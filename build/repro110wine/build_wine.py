@@ -324,6 +324,19 @@ def install_command(destination):
     return ['make', 'install', 'DESTDIR=' + str(destination)]
 
 
+def fetch_pinned_source(src, repository, revision, log, run):
+    """Check out the pinned Wine revision without its top-level build/ directory.
+
+    The c12 revision tracks the recipes in build/, and the out-of-tree Wine build goes to src/build: the first full runs of
+    both chains (38506830331, 38506833342) died at the mkdir with FileExistsError after almost two hours. The directory
+    stays out of the work tree through a sparse checkout; the commit is untouched and the tree stays clean.
+    """
+    run(['git', 'init', '-q'], log, cwd=src)
+    run(['git', 'sparse-checkout', 'set', '--no-cone', '/*', '!/build/'], log, cwd=src)
+    run(['git', 'fetch', '-q', '--depth=1', repository, revision], log, cwd=src)
+    run(['git', 'checkout', '-q', '--detach', 'FETCH_HEAD'], log, cwd=src)
+
+
 def build(args, lock):
     if not ((_repro_check_18_0 := platform.system()) == (_repro_check_18_1 := 'Darwin') and (_repro_check_18_2 := platform.machine()) == (_repro_check_18_3 := 'arm64')):
         raise AssertionError(_check_message("platform.system() == 'Darwin' and platform.machine() == 'arm64'", {'platform.system()': locals().get('_repro_check_18_0', 'NOT_EVALUATED'), "'Darwin'": locals().get('_repro_check_18_1', 'NOT_EVALUATED'), 'platform.machine()': locals().get('_repro_check_18_2', 'NOT_EVALUATED'), "'arm64'": locals().get('_repro_check_18_3', 'NOT_EVALUATED')}, 'validation failed'))
@@ -350,9 +363,7 @@ def build(args, lock):
     if not ((_repro_check_30_0 := '22.1.5') in (_repro_check_30_1 := text([str(llvm / 'bin/clang'), '--version']))):
         raise AssertionError(_check_message("'22.1.5' in text([str(llvm / 'bin/clang'), '--version'])", {"'22.1.5'": locals().get('_repro_check_30_0', 'NOT_EVALUATED'), "text([str(llvm / 'bin/clang'), '--version'])": locals().get('_repro_check_30_1', 'NOT_EVALUATED')}, 'validation failed'))
     src = root / 'engine/wine'; src.mkdir(parents=True)
-    command(['git', 'init', '-q'], out / 'source.log', cwd=src)
-    command(['git', 'fetch', '-q', '--depth=1', lock['repository'], lock['revision']], out / 'source.log', cwd=src)
-    command(['git', 'checkout', '-q', '--detach', 'FETCH_HEAD'], out / 'source.log', cwd=src)
+    fetch_pinned_source(src, lock['repository'], lock['revision'], out / 'source.log', command)
     if not ((_repro_check_31_0 := text(['git', '-C', str(src), 'rev-parse', 'HEAD'])) == (_repro_check_31_1 := lock['revision'])):
         raise AssertionError(_check_message("text(['git', '-C', str(src), 'rev-parse', 'HEAD']) == lock['revision']", {"text(['git', '-C', str(src), 'rev-parse', 'HEAD'])": locals().get('_repro_check_31_0', 'NOT_EVALUATED'), "lock['revision']": locals().get('_repro_check_31_1', 'NOT_EVALUATED')}, 'validation failed'))
     if not (not (_repro_check_32_0 := text(['git', '-C', str(src), 'status', '--porcelain']))):

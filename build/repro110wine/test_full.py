@@ -420,6 +420,10 @@ class Drivers(unittest.TestCase):
                        'shasum -a 256 -c dependency-prefix.tar.gz.sha256 moltenvk-prefix.tar.gz.sha256', 'if: always()'):
             self.assertIn(needle, text)
         self.assertNotIn('--jobs 3', text)
+        # An earlier dependency stage can be reused so that a Wine-stage fix is tried without the two-hour library build.
+        for needle in ('deps_run:', 'deps_sha:', 'actions: read', "inputs.deps_run == ''", "needs.deps.result == 'skipped'",
+                       'gh run download "$run_id"'):
+            self.assertIn(needle, text)
         self.assertGreaterEqual(full.DEPS_MINUTES, 150)
         self.assertIn('timeout-minutes: 240', text)
         # GitHub starts `shell: bash` steps with -e: every step that reads $? must switch it off first.

@@ -8,9 +8,18 @@ on:
         type: choice
         options: [inputs, full]
         default: inputs
+      deps_run:
+        description: 'optional: run id of an earlier full run whose dependency stage is reused (the deps job is skipped)'
+        type: string
+        default: ''
+      deps_sha:
+        description: 'commit of that earlier run (names its dependency artifact); required with deps_run'
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: repro110-wine-c12-${{ github.ref }}
@@ -58,7 +67,7 @@ jobs:
     # costs one stage, the build runs at a lower priority with two workers so the runner agent keeps its heartbeat, and a
     # sampler writes load, memory pressure and swap into the live log and into the artifact.
     needs: inputs
-    if: ${{ inputs.phase == 'full' }}
+    if: ${{ inputs.phase == 'full' && inputs.deps_run == '' }}
     runs-on: xcode-27
     timeout-minutes: 240
     env:
@@ -145,7 +154,8 @@ jobs:
           retention-days: 30
   wine:
     needs: deps
-    if: ${{ inputs.phase == 'full' }}
+    # With deps_run the dependency stage of an earlier run is reused: the deps job is skipped and this one still runs.
+    if: ${{ always() && inputs.phase == 'full' && (needs.deps.result == 'success' || (inputs.deps_run != '' && needs.deps.result == 'skipped')) }}
     runs-on: xcode-27
     timeout-minutes: 240
     env:
@@ -169,11 +179,24 @@ jobs:
           [ "$(xcrun --show-sdk-version)" = '27.0' ] || { printf 'Pinned SDK 27.0 missing\n'; exit 1; }
       - name: Check source recipe without downloads
         run: python3 -I -B build/repro110wine/build_full.py --check-inputs
-      - name: Receive the dependency stage
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: repro110-wine-c12-deps-${{ github.sha }}
-          path: ${{ runner.temp }}/repro110-wine-c12-deps-artifact
+      - name: Receive the dependency stage (this run's, or the earlier run named by deps_run)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPS_RUN: ${{ inputs.deps_run }}
+          DEPS_SHA: ${{ inputs.deps_sha }}
+        run: |
+          set -euo pipefail
+          dest="$RUNNER_TEMP/repro110-wine-c12-deps-artifact"
+          if [ -n "$DEPS_RUN" ]; then
+            [[ "$DEPS_RUN" =~ ^[0-9]+$ ]] || { printf 'deps_run must be a run id\n'; exit 1; }
+            [[ "$DEPS_SHA" =~ ^[0-9a-f]{40}$ ]] || { printf 'deps_sha must be the 40-character commit of that run\n'; exit 1; }
+            run_id="$DEPS_RUN"; name="repro110-wine-c12-deps-$DEPS_SHA"
+          else
+            run_id="$GITHUB_RUN_ID"; name="repro110-wine-c12-deps-$GITHUB_SHA"
+          fi
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$dest"
+          ls "$dest/repro110-wine-c12-deps-results" | head -20
       - name: Restore the dependency and MoltenVK outputs at their original paths
         shell: bash
         run: |
