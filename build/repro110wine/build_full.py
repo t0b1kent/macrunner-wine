@@ -21,6 +21,9 @@ import time
 from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
+# Budget of the 47 libraries. The first full run needed about 77 minutes with three workers; two workers at a lower
+# priority are slower, so the former 95 minutes would cut the stage off.
+DEPS_MINUTES = 150
 REPO = HERE.parent
 
 
@@ -202,16 +205,26 @@ def compose(prefix, deps_manifest, molten_prefix, molten_manifest, out, dep, win
     return path
 
 
-def build(root, lock, jobs=4, profile='github', source_inputs=None):
+def build(root, lock, jobs=4, profile='github', source_inputs=None, stage='all'):
     cloud_guard(profile)  # Before work creation, source/tool execution or downloads.
-    if source_inputs is not None:
+    require(stage in ('all', 'deps', 'wine'), 'Unknown stage')
+    if source_inputs is not None and stage != 'wine':
         source_inputs = source_inputs.resolve()
         source_check = load_driver('repro109_full_source_check', REPO / 'repro109deps/preflight_sources.py')
         source_check.validate(source_inputs, source_check.dep.read_lock())
     root = root.resolve()
-    require(not root.exists(), 'Fresh cloud work required; no overwrite/retry')
     require(not any(char.isspace() for char in str(root)), 'Work path must not contain whitespace')
-    root.mkdir(parents=True)
+    if stage == 'wine':
+        # Second job of a split run: the dependency and MoltenVK outputs were restored at their original absolute paths
+        # (the prefixes keep interpreter and rpath references to them); nothing else may exist.
+        needed = ['deps/prefix', 'deps/reports/dependency-manifest.json', 'moltenvk/prefix',
+                  'moltenvk/reports/dependency-manifest.json']
+        require(root.is_dir() and all((root / name).exists() for name in needed) and not (root / 'reports').exists()
+                and sorted(p.name for p in root.iterdir()) == ['deps', 'moltenvk'],
+                'Wine stage needs only the restored deps and moltenvk outputs in a fresh work directory')
+    else:
+        require(not root.exists(), 'Fresh cloud work required; no overwrite/retry')
+        root.mkdir(parents=True)
     out = root / 'reports'; out.mkdir()
     dep = load_driver('repro109_full_deps', REPO / 'repro109deps/build_deps.py')
     policy = load_driver('repro110_deps_test_policy', HERE / 'deps_test_policy.py')
@@ -231,32 +244,36 @@ def build(root, lock, jobs=4, profile='github', source_inputs=None):
             selected = apply_profile(dep.read_lock(), profile)
             sdk, _, _ = dep.toolchain_preflight(selected['toolchain'], out)
             result['sdk_exports'] = check_sdk_exports(sdk, out)
-        phase = 'DEPS10'
-        dep.build(SimpleNamespace(work=root / 'deps', jobs=jobs, minutes=95, source_inputs=source_inputs),
-                  apply_profile(dep.read_lock(), profile))
-        phase = 'MOLTENVK2'
-        require(time.monotonic() < deadline, 'Task deadline before MoltenVK')
-        mv.build(SimpleNamespace(work=root / 'moltenvk', jobs=jobs, minutes=60), apply_profile(mv.read_lock(), profile))
-        phase = 'COMPOSITION'
-        prefix = root / 'deps/prefix'
-        manifest = compose(prefix, root / 'deps/reports/dependency-manifest.json', root / 'moltenvk/prefix',
-                           root / 'moltenvk/reports/dependency-manifest.json', out / 'composition', dep, wine)
-        phase = 'COMPILER_DOWNLOAD'
-        compiler = root / 'llvm-mingw.tar.xz'
-        require(time.monotonic() < deadline, 'Task deadline before compiler download')
-        wine.download_compiler(lock['compiler'], compiler, out)
-        phase = 'WINE'
-        wine.command = wine_command
-        wine.build(SimpleNamespace(work=root / 'wine', prefix=prefix, dependencies=manifest,
-                   dependencies_sha256=digest(manifest.read_bytes()), llvm_mingw_archive=compiler, jobs=jobs), apply_profile(wine.inputs(), profile))
-        built = json.loads((root / 'wine/reports/RESULT.json').read_bytes())
-        require(built['status'] == 'FULL_WINE_BUILT_NOT_ACCEPTED' and built['install_skipped'] == 0,
-                'Wine result not a complete source build')
-        if profile == 'github-macos15-arm64':
-            expected = json.loads((HERE / 'github-macos15.lock.json').read_bytes())['expected_standalone_wine']
-            require(all(built[key] == value for key, value in expected.items()),
-                    'Standalone Wine EC counts differ from source-built b43; review reports')
-        result.update(status='FULL_WINE_SOURCE_BUILT_NOT_ACCEPTED', wine=built)
+        if stage != 'wine':
+            phase = 'DEPS10'
+            dep.build(SimpleNamespace(work=root / 'deps', jobs=jobs, minutes=DEPS_MINUTES, source_inputs=source_inputs),
+                      apply_profile(dep.read_lock(), profile))
+            phase = 'MOLTENVK2'
+            require(time.monotonic() < deadline, 'Task deadline before MoltenVK')
+            mv.build(SimpleNamespace(work=root / 'moltenvk', jobs=jobs, minutes=60), apply_profile(mv.read_lock(), profile))
+        if stage == 'deps':
+            result.update(status='DEPS_AND_MOLTENVK_BUILT_NOT_COMPOSED_NOT_WINE', wine_ready=False)
+        else:
+            phase = 'COMPOSITION'
+            prefix = root / 'deps/prefix'
+            manifest = compose(prefix, root / 'deps/reports/dependency-manifest.json', root / 'moltenvk/prefix',
+                               root / 'moltenvk/reports/dependency-manifest.json', out / 'composition', dep, wine)
+            phase = 'COMPILER_DOWNLOAD'
+            compiler = root / 'llvm-mingw.tar.xz'
+            require(time.monotonic() < deadline, 'Task deadline before compiler download')
+            wine.download_compiler(lock['compiler'], compiler, out)
+            phase = 'WINE'
+            wine.command = wine_command
+            wine.build(SimpleNamespace(work=root / 'wine', prefix=prefix, dependencies=manifest,
+                       dependencies_sha256=digest(manifest.read_bytes()), llvm_mingw_archive=compiler, jobs=jobs), apply_profile(wine.inputs(), profile))
+            built = json.loads((root / 'wine/reports/RESULT.json').read_bytes())
+            require(built['status'] == 'FULL_WINE_BUILT_NOT_ACCEPTED' and built['install_skipped'] == 0,
+                    'Wine result not a complete source build')
+            if profile == 'github-macos15-arm64':
+                expected = json.loads((HERE / 'github-macos15.lock.json').read_bytes())['expected_standalone_wine']
+                require(all(built[key] == value for key, value in expected.items()),
+                        'Standalone Wine EC counts differ from source-built b43; review reports')
+            result.update(status='FULL_WINE_SOURCE_BUILT_NOT_ACCEPTED', wine=built)
     except Exception as error:
         result.update(status='FAILED', first_failure=dict(phase=phase, error=str(error)))
         raise
@@ -279,6 +296,8 @@ def main():
     parser.add_argument('--work', type=Path)
     parser.add_argument('--jobs', type=int, default=4)
     parser.add_argument('--source-inputs', type=Path, help='Verified all-component cloud source set')
+    parser.add_argument('--stage', choices=['all', 'deps', 'wine'], default='all',
+                        help='deps: dependencies, MoltenVK and their composition; wine: Wine on restored outputs; all: both')
     parser.add_argument('--profile', choices=['github', 'github-macos15-arm64', 'github-xcode27-arm64', 'xcode-cloud'], default='github-xcode27-arm64')
     args = parser.parse_args()
     lock = check_inputs()
@@ -286,7 +305,7 @@ def main():
         print(json.dumps(dict(status='FULL_WINE_INPUTS_PINNED_NOT_BUILT', files=len(lock['files']))))
     else:
         require(args.work is not None and 1 <= args.jobs <= 8, 'Supply fresh work and 1..8 jobs')
-        build(args.work, lock, args.jobs, args.profile, args.source_inputs)
+        build(args.work, lock, args.jobs, args.profile, args.source_inputs, args.stage)
 
 
 if __name__ == '__main__':

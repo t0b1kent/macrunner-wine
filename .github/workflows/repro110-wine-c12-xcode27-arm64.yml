@@ -52,11 +52,15 @@ jobs:
             ${{ runner.temp }}/repro110-wine-c12-inputs.log
           if-no-files-found: error
           retention-days: 30
-  wine:
+  deps:
+    # The first full run (38500992506) built all 47 libraries and Wine in one step and the runner lost its connection after
+    # 51 minutes in the second attempt (38509305812) with no log and no report. The work is split so that a lost machine
+    # costs one stage, the build runs at a lower priority with two workers so the runner agent keeps its heartbeat, and a
+    # sampler writes load, memory pressure and swap into the live log and into the artifact.
     needs: inputs
     if: ${{ inputs.phase == 'full' }}
     runs-on: xcode-27
-    timeout-minutes: 360
+    timeout-minutes: 240
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
     steps:
@@ -88,23 +92,124 @@ jobs:
           python3 -I -B build/repro109deps/preflight_sources.py
           --extract "${{ runner.temp }}/repro110-wine-c12-prepared/repro110-wine-c12-inputs.tar.gz"
           --work "${{ runner.temp }}/repro110-wine-c12-prepared-inputs"
-      - name: Build all source dependencies and Wine
+      - name: Build all source dependencies and MoltenVK (stage deps)
         shell: bash
         run: |
           set -uo pipefail
-          python3 -I -B build/repro110wine/build_full.py --profile github-xcode27-arm64 \
-            --build --work "$RUNNER_TEMP/repro110-wine-c12-work" --jobs 3 \
+          set +e  # GitHub starts this shell with -e; the exit status is handled below
+          work="$RUNNER_TEMP/repro110-wine-c12-work"
+          bash build/repro110wine/memwatch.sh "$work" 60 "$RUNNER_TEMP/memwatch-deps.log" &
+          watcher=$!
+          nice -n 10 python3 -I -B build/repro110wine/build_full.py --profile github-xcode27-arm64 \
+            --build --stage deps --work "$work" --jobs 2 \
             --source-inputs "$RUNNER_TEMP/repro110-wine-c12-prepared-inputs" \
+            > "$RUNNER_TEMP/repro110-wine-c12-deps-driver.log" 2>&1
+          build_rc=$?
+          kill "$watcher" || true
+          printf '%s\n' "$build_rc" > "$RUNNER_TEMP/repro110-wine-c12-deps-rc.txt"
+          printf 'Dependencies and MoltenVK rc=%s\n' "$build_rc"
+          exit "$build_rc"
+      - name: Collect the dependency reports and prefixes
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          work="$RUNNER_TEMP/repro110-wine-c12-work"
+          out="$RUNNER_TEMP/repro110-wine-c12-deps-results"
+          mkdir -p "$out"
+          for part in reports deps/reports moltenvk/reports; do
+            if [ -d "$work/$part" ]; then
+              mkdir -p "$out/$part"
+              cp -R "$work/$part/." "$out/$part/"
+            fi
+          done
+          if [ -d "$work/deps/prefix" ]; then tar -czf "$out/dependency-prefix.tar.gz" -C "$work/deps/prefix" .; fi
+          if [ -d "$work/moltenvk/prefix" ]; then tar -czf "$out/moltenvk-prefix.tar.gz" -C "$work/moltenvk/prefix" .; fi
+          for archive in "$out"/*.tar.gz; do
+            [ -f "$archive" ] || continue
+            shasum -a 256 "$archive" > "$archive.sha256"
+          done
+          [ -f "$RUNNER_TEMP/memwatch-deps.log" ] && cp "$RUNNER_TEMP/memwatch-deps.log" "$out/memwatch-deps.log"
+          exit 0
+      - name: Preserve the dependency stage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: repro110-wine-c12-deps-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/repro110-wine-c12-deps-results/
+            ${{ runner.temp }}/repro110-wine-c12-deps-driver.log
+            ${{ runner.temp }}/repro110-wine-c12-deps-rc.txt
+          if-no-files-found: error
+          retention-days: 30
+  wine:
+    needs: deps
+    if: ${{ inputs.phase == 'full' }}
+    runs-on: xcode-27
+    timeout-minutes: 240
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+    steps:
+      - name: Checkout component recipe
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Select pinned driver Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Verify pinned Xcode 27.0 and SDK 27.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(xcodebuild -version)
+          [ "$actual" = $'Xcode 27.0\nBuild version 27A266a' ] || { printf 'Pinned Xcode 27.0/27A266a missing\n'; exit 1; }
+          [ "$(xcrun --show-sdk-version)" = '27.0' ] || { printf 'Pinned SDK 27.0 missing\n'; exit 1; }
+      - name: Check source recipe without downloads
+        run: python3 -I -B build/repro110wine/build_full.py --check-inputs
+      - name: Receive the dependency stage
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: repro110-wine-c12-deps-${{ github.sha }}
+          path: ${{ runner.temp }}/repro110-wine-c12-deps-artifact
+      - name: Restore the dependency and MoltenVK outputs at their original paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The prefixes keep absolute references to the work directory they were built in: same path, same layout.
+          src="$RUNNER_TEMP/repro110-wine-c12-deps-artifact/repro110-wine-c12-deps-results"
+          work="$RUNNER_TEMP/repro110-wine-c12-work"
+          [ ! -e "$work" ]
+          ( cd "$src" && shasum -a 256 -c dependency-prefix.tar.gz.sha256 moltenvk-prefix.tar.gz.sha256 )
+          mkdir -p "$work/deps/prefix" "$work/moltenvk/prefix" "$work/deps/reports" "$work/moltenvk/reports"
+          tar -xzf "$src/dependency-prefix.tar.gz" -C "$work/deps/prefix"
+          tar -xzf "$src/moltenvk-prefix.tar.gz" -C "$work/moltenvk/prefix"
+          cp -R "$src/deps/reports/." "$work/deps/reports/"
+          cp -R "$src/moltenvk/reports/." "$work/moltenvk/reports/"
+      - name: Build Wine with the c12 overlay (stage wine)
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e  # GitHub starts this shell with -e; the exit status is handled below
+          work="$RUNNER_TEMP/repro110-wine-c12-work"
+          bash build/repro110wine/memwatch.sh "$work" 60 "$RUNNER_TEMP/memwatch-wine.log" &
+          watcher=$!
+          nice -n 10 python3 -I -B build/repro110wine/build_full.py --profile github-xcode27-arm64 \
+            --build --stage wine --work "$work" --jobs 2 \
             > "$RUNNER_TEMP/repro110-wine-c12-driver.log" 2>&1
           build_rc=$?
+          kill "$watcher" || true
           printf '%s\n' "$build_rc" > "$RUNNER_TEMP/repro110-wine-c12-rc.txt"
-          printf 'Full source Wine build rc=%s; function/section acceptance and stands pending\n' "$build_rc"
+          printf 'Wine stage rc=%s; function/section acceptance and stands pending\n' "$build_rc"
           exit "$build_rc"
       - name: Collect unsigned outputs and complete reports
         if: always()
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          set +e
           work="$RUNNER_TEMP/repro110-wine-c12-work"
           out="$RUNNER_TEMP/repro110-wine-c12-results"
           mkdir -p "$out"
@@ -114,16 +219,13 @@ jobs:
               cp -R "$work/$part/." "$out/$part/"
             fi
           done
-          if [ -d "$work/wine/install" ]; then
-            tar -czf "$out/wine-dist.tar.gz" -C "$work/wine/install" .
-          fi
-          if [ -d "$work/deps/prefix" ]; then
-            tar -czf "$out/dependency-prefix.tar.gz" -C "$work/deps/prefix" .
-          fi
+          if [ -d "$work/wine/install" ]; then tar -czf "$out/wine-dist.tar.gz" -C "$work/wine/install" .; fi
           for archive in "$out"/*.tar.gz; do
             [ -f "$archive" ] || continue
             shasum -a 256 "$archive" > "$archive.sha256"
           done
+          [ -f "$RUNNER_TEMP/memwatch-wine.log" ] && cp "$RUNNER_TEMP/memwatch-wine.log" "$out/memwatch-wine.log"
+          exit 0
       - name: Preserve reports and unsigned component outputs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

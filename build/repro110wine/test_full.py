@@ -247,7 +247,7 @@ class HeaderSources(unittest.TestCase):
 class Drivers(unittest.TestCase):
     def test_pinned_inputs(self):
         pinned = full.check_inputs()['files']
-        self.assertEqual(len(pinned), 34)
+        self.assertEqual(len(pinned), 35)
         self.assertIn('repro109deps/port_probe.py', pinned)
         self.assertEqual(pinned['repro109deps/port_probe.py'],
                          full.digest((full.REPO / 'repro109deps/port_probe.py').read_bytes()))
@@ -357,6 +357,77 @@ class Drivers(unittest.TestCase):
             self.assertEqual(result['status'], 'FULL_WINE_SOURCE_BUILT_NOT_ACCEPTED')
             self.assertEqual(result['stands'], 'NOT_ENABLED')
 
+    def stage_drivers(self, root, calls, lock):
+        def deps_build(args, _lock):
+            calls.append('deps'); prefix, mv, base, molten = fixture(root)
+            for part, receipt in [('deps', base), ('moltenvk', molten)]:
+                p = root / part / 'reports'; p.mkdir()
+                (p / 'dependency-manifest.json').write_text(json.dumps(receipt))
+        def molten_build(args, _lock):
+            calls.append('moltenvk')
+        def download(row, destination, out):
+            calls.append('compiler'); destination.write_bytes(b'fixture')
+        def wine_build(args, _lock):
+            calls.append('wine')
+            p = args.work / 'reports'; p.mkdir(parents=True)
+            (p / 'RESULT.json').write_text(json.dumps(dict(status='FULL_WINE_BUILT_NOT_ACCEPTED', install_skipped=0)))
+        dep = SimpleNamespace(build=deps_build, read_lock=lambda: dict(toolchain={}), command=mock.Mock(),
+                              inventory=DEP.inventory, safe_relative=DEP.safe_relative, file_sha=DEP.file_sha, official=DEP.official)
+        wine = SimpleNamespace(build=wine_build, inputs=lambda: dict(toolchain={}), dependencies=WINE.dependencies,
+                               download_compiler=download)
+        molten = SimpleNamespace(build=molten_build, read_lock=lambda: dict(toolchain={}))
+        return [dep, POLICY, wine, molten]
+
+    def test_deps_stage_stops_before_the_composition_that_copies_into_the_prefix_and_wine_resumes(self):
+        lock = full.check_inputs()
+        with tempfile.TemporaryDirectory(dir=os.environ['REPRO109_TEST_TMP']) as directory:
+            root = Path(directory) / 'fresh'; calls = []
+            with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=self.stage_drivers(root, calls, lock)):
+                full.build(root, lock, stage='deps')
+            self.assertEqual(calls, ['deps', 'moltenvk'])
+            self.assertFalse((root / 'reports/composition').exists())  # compose() copies MoltenVK files INTO deps/prefix
+            first = json.loads((root / 'reports/RESULT.json').read_bytes())
+            self.assertEqual((first['status'], first['wine_ready']), ('DEPS_AND_MOLTENVK_BUILT_NOT_COMPOSED_NOT_WINE', False))
+            # The second job starts on the restored outputs only: no reports, no other directory.
+            shutil.rmtree(root / 'reports')
+            calls.clear()
+            with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=self.stage_drivers(root, calls, lock)):
+                full.build(root, lock, stage='wine')
+            self.assertEqual(calls, ['compiler', 'wine'])
+            self.assertEqual(json.loads((root / 'reports/RESULT.json').read_bytes())['status'], 'FULL_WINE_SOURCE_BUILT_NOT_ACCEPTED')
+
+    def test_wine_stage_refuses_a_work_directory_that_is_not_exactly_the_restored_outputs(self):
+        lock = full.check_inputs()
+        with tempfile.TemporaryDirectory(dir=os.environ['REPRO109_TEST_TMP']) as directory:
+            root = Path(directory) / 'fresh'; calls = []
+            with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=self.stage_drivers(root, calls, lock)):
+                full.build(root, lock, stage='deps')
+            for spoil in (lambda: None, lambda: (shutil.rmtree(root / 'reports'), (root / 'stray').mkdir()),
+                          lambda: (shutil.rmtree(root / 'stray'), shutil.rmtree(root / 'moltenvk/prefix'))):
+                spoil()
+                with mock.patch.object(full, 'cloud_guard'), mock.patch.object(full, 'load_driver', side_effect=self.stage_drivers(root, [], lock)):
+                    with self.assertRaisesRegex(ValueError, 'restored deps and moltenvk'):
+                        full.build(root, lock, stage='wine')
+        with tempfile.TemporaryDirectory(dir=os.environ['REPRO109_TEST_TMP']) as directory:
+            with mock.patch.object(full, 'cloud_guard'):
+                with self.assertRaisesRegex(ValueError, 'Unknown stage'):
+                    full.build(Path(directory) / 'x', lock, stage='other')
+
+    def test_workflow_splits_the_run_into_inputs_deps_and_wine_with_a_sampler_and_two_workers(self):
+        text = (full.REPO.parent / '.github/workflows/repro110-wine-c12-xcode27-arm64.yml').read_text()
+        for needle in ('  deps:\n    # The first full run', '  wine:\n    needs: deps', '--stage deps', '--stage wine', '--jobs 2',
+                       'nice -n 10 python3', 'build/repro110wine/memwatch.sh', 'name: repro110-wine-c12-deps-${{ github.sha }}',
+                       'shasum -a 256 -c dependency-prefix.tar.gz.sha256 moltenvk-prefix.tar.gz.sha256', 'if: always()'):
+            self.assertIn(needle, text)
+        self.assertNotIn('--jobs 3', text)
+        self.assertGreaterEqual(full.DEPS_MINUTES, 150)
+        self.assertIn('timeout-minutes: 240', text)
+        # GitHub starts `shell: bash` steps with -e: every step that reads $? must switch it off first.
+        for block in text.split('      - name: ')[1:]:
+            if 'build_rc=$?' in block or 'archive=' in block:
+                self.assertIn('set +e', block, block.splitlines()[0])
+        self.assertTrue((full.HERE / 'memwatch.sh').is_file())
+
     def test_first_failure_stops_later_phases(self):
         lock = full.check_inputs()
         with tempfile.TemporaryDirectory(dir=os.environ['REPRO109_TEST_TMP']) as directory:
@@ -396,7 +467,7 @@ class TransitiveMoltenInputs(unittest.TestCase):
             return full.check_inputs()
 
     def test_matching_outer_and_transitive_inputs_pass(self):
-        self.assertEqual(len(self.check_inputs()['files']), 34)
+        self.assertEqual(len(self.check_inputs()['files']), 35)
 
     def test_matching_outer_lock_rejects_each_stale_shared_pin(self):
         for key in ['shared_driver_sha256', 'shared_source_fixes_sha256', 'bootstrap_lock_sha256']:
