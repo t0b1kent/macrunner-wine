@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "classification": "SOURCE_RECIPE_NOT_ACCEPTED_NOT_GOLDEN",
+  "runner_label": "xcode-27",
+  "developer_dir": "/Applications/Xcode_27.app/Contents/Developer",
+  "toolchain": {
+    "python": "3.13.7",
+    "xcode": "27.0",
+    "xcode_build": "27A266a",
+    "sdk": "27.0",
+    "apple_clang": "Apple clang version",
+    "deployment_target": "14.0"
+  },
+  "compiler_pin_scope": "Select the exact Xcode bundle/build. Record complete clang and host versions before source downloads; extra clang string assertion awaits the first measured cloud receipt.",
+  "official_runner_document": "https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md",
+  "runner_status": "PREVIEW; queue time and actual toolchain must be measured by the dispatched job",
+  "sdk_x18_exports": "MUST_BE_PRESENT_BEFORE_DOWNLOADS; actual cloud result pending",
+  "expected_standalone_wine": {"ec": 642, "pe64": 757, "hexpthk": 642, "a64xrm": 642},
+  "count_reference": "Retained source-built standalone Wine b43; packaged engine counts are checked separately.",
+  "release_reference": {"version": "1.0.9", "engine": "0227", "acceptance": "FUNCTION_SECTION_AND_STANDS_PENDING"},
+  "signing": "OWNER_ONLY",
+  "games": "NOT_ENABLED"
+}
