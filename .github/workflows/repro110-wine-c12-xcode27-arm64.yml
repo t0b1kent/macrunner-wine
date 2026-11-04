@@ -16,6 +16,14 @@ on:
         description: 'commit of that earlier run (names its dependency artifact); required with deps_run'
         type: string
         default: ''
+      source_run:
+        description: 'optional: successful public input run with the same sealed source pins; every extracted byte is rechecked'
+        type: string
+        default: ''
+      source_sha:
+        description: 'exact commit of source_run; required together with source_run'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -74,7 +82,28 @@ jobs:
         with:
           python-version: '3.13.7'
           architecture: arm64
+      - name: Recheck a complete sealed public source input artifact
+        if: ${{ inputs.source_run != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]] || exit 1
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          actual=$(gh run view "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --json status,conclusion,headSha --jq '.status + " " + .conclusion + " " + .headSha')
+          [ "$actual" = "completed success $SOURCE_SHA" ] || { printf 'Source run identity or success differs\n'; exit 1; }
+          received="$RUNNER_TEMP/release110-received-inputs"
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" \
+            --name "repro110-wine-c12-inputs-$SOURCE_SHA" --dir "$received"
+          nice -n 20 python3 -I -B build/repro110wine/prepare_sources.py --profile github-xcode27-arm64 \
+            --extract "$received/repro110-wine-c12-inputs.tar.gz" \
+            --work "$RUNNER_TEMP/repro110-wine-c12-inputs"
+          cp "$received/repro110-wine-c12-inputs.tar.gz" "$RUNNER_TEMP/repro110-wine-c12-inputs.tar.gz"
       - name: Acquire and verify all 47 source components without building
+        if: ${{ inputs.source_run == '' }}
         shell: bash
         run: |
           set -euo pipefail
