@@ -1,0 +1,808 @@
+{
+  "schema": 1,
+  "release": "1.1.0",
+  "base": "c12 overlay followed by the pinned 1.0.9 keyboard delta",
+  "patch": "late/release110-c32r.patch",
+  "patch_identity": {
+    "bytes": 3301083,
+    "sha256": "16669d346354fa32e24b0a456f4a86fc17561f42ff457e90822bd81245887a3c"
+  },
+  "files": [
+    {
+      "path": "configure",
+      "before": {
+        "bytes": 759900,
+        "sha256": "78e5e999dff563fe55694f9860bd2705b7394b98afe07c52ef5a1fc9e90c790a"
+      },
+      "after": {
+        "bytes": 759832,
+        "sha256": "6970a00cf555d33b5fbb8e536f76154682a3090def684aed8f5106765c80d757"
+      }
+    },
+    {
+      "path": "configure.ac",
+      "before": {
+        "bytes": 153658,
+        "sha256": "281a2938389901771fffca77e02f1c85f66409fdaf17c6ce51f52bfe8a749922"
+      },
+      "after": {
+        "bytes": 153984,
+        "sha256": "e1b1dcb3505bcfedc9f7ae84ab291f2717dfd3d50c45b6f4a2461323fc1e66dc"
+      }
+    },
+    {
+      "path": "dlls/kernel32/kernel32.spec",
+      "before": {
+        "bytes": 88263,
+        "sha256": "8780016603b4702b640d0b596bb2488679cc0f722e200929abae939937171481"
+      },
+      "after": {
+        "bytes": 88316,
+        "sha256": "ad2c1af8e313c485268e8d4e614f797101a046a583375d858b77b73ebdd9f719"
+      }
+    },
+    {
+      "path": "dlls/kernel32/tests/process.c",
+      "before": {
+        "bytes": 245073,
+        "sha256": "a3a8bf4330fa9a5cbc3c765b947e6335d7f2b4a1691161a54ee82e099a8be6e2"
+      },
+      "after": {
+        "bytes": 245074,
+        "sha256": "6fa0de703bdd749c33318ee654faf6c5fbd0c57c8cb9a34c21f5e77e64125ffa"
+      }
+    },
+    {
+      "path": "dlls/kernelbase/kernelbase.h",
+      "before": {
+        "bytes": 2342,
+        "sha256": "8f7eea7e1c6042ab2a6e337102e63a5c453b992e6ece04d063b0a70f83e06918"
+      },
+      "after": {
+        "bytes": 2292,
+        "sha256": "acec238591a3deb105e580c23c3129f199d858e9ac361ff2be13adaa172334f3"
+      }
+    },
+    {
+      "path": "dlls/kernelbase/kernelbase.spec",
+      "before": {
+        "bytes": 78408,
+        "sha256": "ffe121ffa91f3d9dd3e616c5691afaa54a856e21e288997ef31ee02cacd5c92a"
+      },
+      "after": {
+        "bytes": 78453,
+        "sha256": "137cb5cdd35abd9ad03a75173a52c656f89e8e7035cccb79333a3a20f48a39d5"
+      }
+    },
+    {
+      "path": "dlls/kernelbase/main.c",
+      "before": {
+        "bytes": 20298,
+        "sha256": "7864426c6e75f092eedb65533acc3ca7ac90cf69f7471d2d0ee5bffa9feaa926"
+      },
+      "after": {
+        "bytes": 20256,
+        "sha256": "642fcc30eab5c870c838cc74dec4da00837960c6d31f790a25678de7ff3d39c8"
+      }
+    },
+    {
+      "path": "dlls/kernelbase/memory.c",
+      "before": {
+        "bytes": 62563,
+        "sha256": "ce018114a1f4d4f030d9eb03de275968286cf0031121cc4cf5f61c7e3b5414d0"
+      },
+      "after": {
+        "bytes": 62586,
+        "sha256": "41dae6b73b4a636d2a5648915e7fde28b063d899dff8dd7566f2dfa0a94ca526"
+      }
+    },
+    {
+      "path": "dlls/kernelbase/process.c",
+      "before": {
+        "bytes": 93448,
+        "sha256": "852dabd09ac216e61946d67c25ddcbca8cd10bc719229493d3c2ba2502221e88"
+      },
+      "after": {
+        "bytes": 94430,
+        "sha256": "a61b03f8b2f58f1cfdc6f0a9680576e07dc1ee1aa3de7f3ac8ea2b0277c9faea"
+      }
+    },
+    {
+      "path": "dlls/kernelbase/sync.c",
+      "before": {
+        "bytes": 70499,
+        "sha256": "3b62e1b4fae1df99f4c3d0cf7c86d74042be9e09ff057ff704c8ba7d0aa71246"
+      },
+      "after": {
+        "bytes": 65391,
+        "sha256": "d7eff86033f96b8fdc03df8ddeddc37124793027996a544b88fe429ad0688789"
+      }
+    },
+    {
+      "path": "dlls/msvcrt/except.c",
+      "before": {
+        "bytes": 44420,
+        "sha256": "5fd93a21dbe326b4cda65a261d2505c1e8e2885465c5d2e231443289a8e3e495"
+      },
+      "after": {
+        "bytes": 44649,
+        "sha256": "2f41d2ae65604c92924f799f16bf6b3ded077015e0f251a7d9e715e944158253"
+      }
+    },
+    {
+      "path": "dlls/ntdll/Makefile.in",
+      "before": {
+        "bytes": 1803,
+        "sha256": "73bc6df2137fae63eb854c2ae99b113ea6f577a2185e4fbd8840c0951c6e98a5"
+      },
+      "after": {
+        "bytes": 1734,
+        "sha256": "a9ac7aeb096d05a23f6f154cc54ce19b0256bd8702648aea91bca1dd2b5a46b0"
+      }
+    },
+    {
+      "path": "dlls/ntdll/loader.c",
+      "before": {
+        "bytes": 578524,
+        "sha256": "da2c627c00b69d20c50732472543152a1f99d77ecbf81163efcef75759bb36b6"
+      },
+      "after": {
+        "bytes": 294438,
+        "sha256": "fdab2a590306d06cfc4bf704a869edfedbd97b8fd52d0d1bed0119068807e6ed"
+      }
+    },
+    {
+      "path": "dlls/ntdll/ntdll.spec",
+      "before": {
+        "bytes": 87736,
+        "sha256": "c8bdef50fff557d6f0219441eb668626e49050af00812791b413f0e0e06e242e"
+      },
+      "after": {
+        "bytes": 87809,
+        "sha256": "41f9b6da0d7452602926a41952762f4f0a02c33fd871172983274a07c0e16a1b"
+      }
+    },
+    {
+      "path": "dlls/ntdll/signal_arm64.c",
+      "before": {
+        "bytes": 208635,
+        "sha256": "cde189fc148e7bbd67d1c952cef0e8111e50feb67e204de0050dbf77b2503221"
+      },
+      "after": {
+        "bytes": 208060,
+        "sha256": "0687771f5f7b61fb1df7c0709fc5c4ebdb5896267176b2ee2293afadbfdf6e63"
+      }
+    },
+    {
+      "path": "dlls/ntdll/signal_arm64ec.c",
+      "before": {
+        "bytes": 157977,
+        "sha256": "b15e8f8ceff4c2e98f6994c55e8b0cd0be36bba064248583a5ac3919ac217c3c"
+      },
+      "after": {
+        "bytes": 157034,
+        "sha256": "d5f19cdf2068c0ccc9a90f260e25a9191b8e70443f648f9f21af4e3868124ac9"
+      }
+    },
+    {
+      "path": "dlls/ntdll/signal_x86_64.c",
+      "before": {
+        "bytes": 51260,
+        "sha256": "28ce761c5e25f10de98ea150e84f99df59469822a41769753194e52b9ce9e19c"
+      },
+      "after": {
+        "bytes": 50877,
+        "sha256": "88b077571f143a117d04cd89a824cf9be870e4367fd34265e2e785c7b63908cb"
+      }
+    },
+    {
+      "path": "dlls/ntdll/sync.c",
+      "before": {
+        "bytes": 81027,
+        "sha256": "0adf9e14ad9066d9661683e13b279e5d0d2fced922eb955d81969dc9d489da08"
+      },
+      "after": {
+        "bytes": 55963,
+        "sha256": "3a9fd700b86474213b44ef1ed070e201629d8c0b220cb50b6a03642b1e147d61"
+      }
+    },
+    {
+      "path": "dlls/ntdll/tests/exception.c",
+      "before": {
+        "bytes": 558757,
+        "sha256": "2178245c51d1937e60562bc94265946592a0abcdf7e7180d0bde00cac36e4962"
+      },
+      "after": {
+        "bytes": 562851,
+        "sha256": "db8c41c2b48679b38eb0e51afc5fecf55fcc418bccb0b763f9ad92cc3f36d2de"
+      }
+    },
+    {
+      "path": "dlls/ntdll/tests/virtual.c",
+      "before": {
+        "bytes": 172268,
+        "sha256": "f8d0c2d53d362a79ce6a73f4b807ac0525d785c10fed1804072aa3cda404ee26"
+      },
+      "after": {
+        "bytes": 173292,
+        "sha256": "66faddc886ef2c0cad6debc22f194f469d0afc263713cb51c0b650bdf021f38f"
+      }
+    },
+    {
+      "path": "dlls/ntdll/thread.c",
+      "before": {
+        "bytes": 25943,
+        "sha256": "2f2f778fd4c3bb59d73d2b02e9dd2ed94d05826d7e89e221290d58ab47232022"
+      },
+      "after": {
+        "bytes": 30239,
+        "sha256": "d09fb3715740ffa7f4a015586da432935b07e89f0715ba3e60b0b8fe66381fbb"
+      }
+    },
+    {
+      "path": "dlls/ntdll/time.c",
+      "before": {
+        "bytes": 15446,
+        "sha256": "5b9ab9e9507a68eaa50b543aa51b9b9ca411184e0be68bf660f885b46964e2de"
+      },
+      "after": {
+        "bytes": 17756,
+        "sha256": "0cdb672a8ba1546870825c280d9642d83a90c3a61cd02ddc88dbf57ef7c29a9f"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/debug.c",
+      "before": {
+        "bytes": 20058,
+        "sha256": "5eba2de4604e3958513b4b15123a27b5bcc586e0266b7048beaf8319c003b8d9"
+      },
+      "after": {
+        "bytes": 23035,
+        "sha256": "f5e51ab3ec4a87fa00fa630a308f952ae97a2d07e02eafcfbf0c49489cf69200"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/file.c",
+      "before": {
+        "bytes": 292416,
+        "sha256": "a7a560582e09e900f917dfa51f684e214a14e417b27c5179bb3590599c18778d"
+      },
+      "after": {
+        "bytes": 293840,
+        "sha256": "4098c88e49445c1842a4db04bceb42b2725c3a8a97b3a7fe562f83bf935fadcf"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/hb_probe.c",
+      "before": null,
+      "after": {
+        "bytes": 23056,
+        "sha256": "66149e70af9ce6809f03411de76972eac3a3f3dc57aab640f2b60249d3c97f31"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/hb_removed_compat.h",
+      "before": null,
+      "after": {
+        "bytes": 1132,
+        "sha256": "aa5506afc165806fba4e1ba6488d6096a1c8c5364717aa2163ced25699d88f26"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/loader.c",
+      "before": {
+        "bytes": 154621,
+        "sha256": "642b617ae8eba7e0c67c9d2e247183153cd622df82e99298c86f5822e055d3e6"
+      },
+      "after": {
+        "bytes": 139865,
+        "sha256": "196511aef53044d170c3676b1a727638908384a462239934e220234adf10b358"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/macrunner_event_pool.inc",
+      "before": null,
+      "after": {
+        "bytes": 12260,
+        "sha256": "9a04c44766f6545d5fd7da5a9c69d0b4b05be64161a906b14f63a2403e2c397c"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/macrunner_hb.c",
+      "before": {
+        "bytes": 2212772,
+        "sha256": "576af61f053ceae5fef22c91883f1e29e46655072f4578edac4f224d624e79a9"
+      },
+      "after": {
+        "bytes": 159629,
+        "sha256": "c754c19bc62fc3945acd91d5e806884eed38a31b36e39403c69fa8b1ecc85bb5"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/macrunner_vm_arena.h",
+      "before": {
+        "bytes": 14919,
+        "sha256": "511bf028edc7cf7c2c019631a3ba3051b112c4178a19ded900a829ac1e92dc7b"
+      },
+      "after": {
+        "bytes": 35567,
+        "sha256": "ff60bd0f2b5ac8fb07bda94668089964f5f4c35e3a0652ced9022d12f7b9c1f3"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/macrunner_wait_stats.inc",
+      "before": null,
+      "after": {
+        "bytes": 39943,
+        "sha256": "d29985a4e14296d10aad351554a8e68982ef0963ad3ce4b8f3c3727ae23cce4a"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/msync.c",
+      "before": {
+        "bytes": 48976,
+        "sha256": "7219610786513f156fc672c055309776068a192fb6cfc173a8da9b808b0feb79"
+      },
+      "after": {
+        "bytes": 50992,
+        "sha256": "5f7de9d7f1c10c361996421c15584b73cbf0051b9781bfa059ae180d16ab3c05"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/process.c",
+      "before": {
+        "bytes": 100608,
+        "sha256": "a6f0e70130cec1fd7d933b30443ccf83b0e2b6175db932482f53ed78c12c380d"
+      },
+      "after": {
+        "bytes": 100358,
+        "sha256": "fb2d9aad85982916de4f0d9a880644b569ae7ee39846c9988652e8dbb23bf889"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/registry.c",
+      "before": {
+        "bytes": 30649,
+        "sha256": "3f7364fae2eecfeff7d2f1e62217393d06560da133d7b71f24e9fbdf5e385cab"
+      },
+      "after": {
+        "bytes": 31069,
+        "sha256": "c2486ce8d7d1536b85e0966091414c37f07547c135c1ffaf4a5ceef0983e0545"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/security.c",
+      "before": {
+        "bytes": 39543,
+        "sha256": "b5d9eecd34d620c992675ae88b4bc5ba8981bb0b70327d0139605f0f569b611c"
+      },
+      "after": {
+        "bytes": 40104,
+        "sha256": "d457b3b8658defc1d75a4eb54056e7558a113ffbd992156fb77623d3aafea1dd"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/server.c",
+      "before": {
+        "bytes": 81283,
+        "sha256": "627cd64c16f154f7fb0fb90c439850a8a5a2a64ad349355a2b3898e4541b95e1"
+      },
+      "after": {
+        "bytes": 83198,
+        "sha256": "694d0c5d238c6f55b736b54921ecf6af4b99813a0242d176fb0aae0193ca33c8"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/signal_arm64.c",
+      "before": {
+        "bytes": 729005,
+        "sha256": "a50c046b83bc63ef68d0266631b6276a2cd818cf9e7cddf06b6002fc5f55a520"
+      },
+      "after": {
+        "bytes": 437081,
+        "sha256": "93f837ceb70d9ad6fb847b5b743895ec946b2845b32442c593a4f1de5de71a19"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/sync.c",
+      "before": {
+        "bytes": 157946,
+        "sha256": "bea7e02958d9e8543273962dd97e5182ee8c069a29bcaab47e05899bace40f65"
+      },
+      "after": {
+        "bytes": 175471,
+        "sha256": "2b31db29a7a23e7eba2bf69f28837801ac9687deb49d530dd66aa21527c60eab"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/syscall.c",
+      "before": null,
+      "after": {
+        "bytes": 11277,
+        "sha256": "7aeb92996e9ac19e1ba07a26d5c2b37bdb58c99ec20e8de9496b9fae0a143ea4"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/system.c",
+      "before": {
+        "bytes": 176364,
+        "sha256": "d945bda28446c8a8abae129b9d34bbf06d3d12439b5e31999a2041abe89bd623"
+      },
+      "after": {
+        "bytes": 175016,
+        "sha256": "a2a471df4b74c54388e2bd0696b8acb57d0517a374313d6529a080208cfa4fad"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/thread.c",
+      "before": {
+        "bytes": 128617,
+        "sha256": "c9cbfb201c9f01e20d3555b66d6ff1285c270163a8f6444bc6eb1d671384514a"
+      },
+      "after": {
+        "bytes": 124133,
+        "sha256": "25143f0b2dc62fd4d012616ba8f327a106a157346445f44fbc35f6b2e392399a"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/unix_private.h",
+      "before": {
+        "bytes": 42428,
+        "sha256": "24eed9b48ac73e58bbef8aba030cdafe3870df8e3a9f5e6f668b3ea44f5b718e"
+      },
+      "after": {
+        "bytes": 41484,
+        "sha256": "382e02b43fc002893a29070907e2360c571b81ee69b25847a1b93a82587cc794"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/virtual.c",
+      "before": {
+        "bytes": 532552,
+        "sha256": "297d0d17e26a4ad98c6136149bf0e28e3569450220c1acbb02e9091b54d393de"
+      },
+      "after": {
+        "bytes": 521865,
+        "sha256": "a0824a2b4d8ffb3ac4d72fbfde522f56934e4937b18e722dc856aa2b5eb96036"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unixlib.h",
+      "before": {
+        "bytes": 4696,
+        "sha256": "5a316ee14c3664d9fb7990c85bd8583f7a0f49e2bfad03ddc1a7de5f59d9de8d"
+      },
+      "after": {
+        "bytes": 7382,
+        "sha256": "777e090eb26a6b16d879faceb8a5ef9845b5b691342f305809b367fee6989431"
+      }
+    },
+    {
+      "path": "dlls/win32u/Makefile.in",
+      "before": {
+        "bytes": 1552,
+        "sha256": "1021c9d91a32565dedcf619f70c203196b961d31f751daf76005fa54e1bd0033"
+      },
+      "after": {
+        "bytes": 1513,
+        "sha256": "001f45b3e9f698cdc77bf10191973e11934ab068cbdc1ae83d2b32768a85e7d5"
+      }
+    },
+    {
+      "path": "dlls/win32u/bitblt.c",
+      "before": {
+        "bytes": 50169,
+        "sha256": "57864bb69ded86bb24b3668091fcc1d3002af191841e5ba1d0ca12a15ca370bb"
+      },
+      "after": {
+        "bytes": 49983,
+        "sha256": "9696f99e93fe3ac87390dded8b80ccf1ec14f4d42418409b4c539463143d0e23"
+      }
+    },
+    {
+      "path": "dlls/win32u/cursoricon.c",
+      "before": {
+        "bytes": 23417,
+        "sha256": "117ec7ec940c11eda43d894da89d88e0bc8a364e61e806833fd07bbcf424b122"
+      },
+      "after": {
+        "bytes": 23635,
+        "sha256": "d41f9b38def0f0d0985099380ffdb395337c1bf3b54c886d2cd20b1abc18ad6d"
+      }
+    },
+    {
+      "path": "dlls/win32u/dce.c",
+      "before": {
+        "bytes": 87473,
+        "sha256": "daa71dc17d9a60433e67ff6963469c776b46d8e1dc744bec7193d14e7be788c3"
+      },
+      "after": {
+        "bytes": 87538,
+        "sha256": "fa0fc1453a2cd3ec3e6c9d535526ae51789cac0d5022f6d6bd570610a3acc6ad"
+      }
+    },
+    {
+      "path": "dlls/win32u/dib.c",
+      "before": {
+        "bytes": 75194,
+        "sha256": "52450e53da2b75cff1b406347487dc2267dbb9f200f87d2c20ac34d135c0eb95"
+      },
+      "after": {
+        "bytes": 75121,
+        "sha256": "5c1c52e1bea4b0478f58ffbae5fbcb06981144c524da349b88df276b3eadeeb8"
+      }
+    },
+    {
+      "path": "dlls/win32u/font.c",
+      "before": {
+        "bytes": 245972,
+        "sha256": "7d27df95ae4364418618fa7a1fc15f408036a3e0972abd2ef4039235cbcd5bda"
+      },
+      "after": {
+        "bytes": 246112,
+        "sha256": "3db29214a3deb6e34ed2d2d32772391519ed97b2f9a57ba67128a86a96a835de"
+      }
+    },
+    {
+      "path": "dlls/win32u/input.c",
+      "before": {
+        "bytes": 99676,
+        "sha256": "b99dfe3615e16a8878b191232d99b005b4021a284d36906a821ea20edb1028e3"
+      },
+      "after": {
+        "bytes": 100230,
+        "sha256": "df0b0125c65424491a405ca7ca8ef89bc590b9035f3cad3c236d317735595978"
+      }
+    },
+    {
+      "path": "dlls/win32u/macrunner_w32_stats.h",
+      "before": null,
+      "after": {
+        "bytes": 1795,
+        "sha256": "8209871ccaa54b574a89210f8442da20e7d3e15ba3e96d138ca2b03716c753d8"
+      }
+    },
+    {
+      "path": "dlls/win32u/message.c",
+      "before": {
+        "bytes": 186029,
+        "sha256": "d0d668cde55cc682d42ccddab1437a3f757ca8978b06782bae9683a6f85822b7"
+      },
+      "after": {
+        "bytes": 193168,
+        "sha256": "93dcd0f46d1675dd932738fa62abcfbbd1b1e6ac45cedb602535c9851bc09877"
+      }
+    },
+    {
+      "path": "dlls/win32u/ntgdi_private.h",
+      "before": {
+        "bytes": 26349,
+        "sha256": "9dbec09c0f7e03f1204b6877af257c1635561dadbc86086da42f6cfae648ecae"
+      },
+      "after": {
+        "bytes": 26020,
+        "sha256": "80da330d7f88ac27b29f9980e8a285558b7a534e0bcb1cfbd0e49926a6d45d67"
+      }
+    },
+    {
+      "path": "dlls/win32u/syscall.c",
+      "before": {
+        "bytes": 4094,
+        "sha256": "2eee3efb1b932a596aa8a1bf7177ab8076b203d8782cfe34d1307518a58f9d55"
+      },
+      "after": {
+        "bytes": 7428,
+        "sha256": "38eab71e5788920d4866f645effd91836ccc02fdd8416cc88dbe85178f82b09b"
+      }
+    },
+    {
+      "path": "dlls/win32u/window.c",
+      "before": {
+        "bytes": 229456,
+        "sha256": "364152cb94c785f17f0bd31b38debe3080440da99a4c76d1e43e01a4525eea4e"
+      },
+      "after": {
+        "bytes": 229561,
+        "sha256": "2f0be0bf28c8ab415a7a32095e4e5b5bbc3bf52fc8585ea00550dfe8cc6a0b3c"
+      }
+    },
+    {
+      "path": "dlls/winemac.drv/cocoa_app.m",
+      "before": {
+        "bytes": 134109,
+        "sha256": "638fb958fe6d69f2f8f58c530a20c92fa3d3b992fa669b7f18d8e8a48da6a220"
+      },
+      "after": {
+        "bytes": 137409,
+        "sha256": "2e1cedfb2b18e685962867aa3953cb65246d37121ed95038fe5bde2ee6bf5a61"
+      }
+    },
+    {
+      "path": "dlls/winemac.drv/cocoa_window.m",
+      "before": {
+        "bytes": 160943,
+        "sha256": "6df450f188230ac39d29ffe808c60313c1f08c8266616040de38e1d56b5be7a8"
+      },
+      "after": {
+        "bytes": 162038,
+        "sha256": "0cd6eef94d7bd075fb54337273097ba35385285215929bc46145a834b17781bc"
+      }
+    },
+    {
+      "path": "dlls/winemac.drv/d3dmetal_objc.m",
+      "before": {
+        "bytes": 2759,
+        "sha256": "ff15a5e285e7a10ec608e7e2c2a0002a14dde8c65ba0e265b7f1392c136f9f78"
+      },
+      "after": {
+        "bytes": 3509,
+        "sha256": "a922949286f73bc5906ae530a8588e5c23f92cad6349b826858de4cc014b6277"
+      }
+    },
+    {
+      "path": "dlls/winemac.drv/event.c",
+      "before": {
+        "bytes": 33534,
+        "sha256": "c628130e10184a8b35455f18a4082c5feb4bb28225fb6f5982aca5e622bee7b3"
+      },
+      "after": {
+        "bytes": 34741,
+        "sha256": "5c970e8b986b40c5f71acfec3206bc5d01acff92f4f285369f9792f962aff262"
+      }
+    },
+    {
+      "path": "dlls/wow64/system.c",
+      "before": {
+        "bytes": 40140,
+        "sha256": "b8f0b9515c003b9380c9fcfccf11ffa7a3f95c8f3481320ccb42a9aaddb177fc"
+      },
+      "after": {
+        "bytes": 40248,
+        "sha256": "c770ea639da87c9a9531df99150f7edafdb7a4f1774a1de52ff25d9621659021"
+      }
+    },
+    {
+      "path": "include/config.h.in",
+      "before": {
+        "bytes": 25561,
+        "sha256": "59b3aaee9e4d9d967cd3b68744ebc5cda6ff4b70b9328936fd7b043ca68e824e"
+      },
+      "after": {
+        "bytes": 25659,
+        "sha256": "4bc384d6dc8f5e19c6c95e05f86ebe6105eb7ffd8e007e29f940419675da5bba"
+      }
+    },
+    {
+      "path": "include/hb_probe.h",
+      "before": {
+        "bytes": 1724,
+        "sha256": "ebbc3ba4a387182a216594d69e425fe11533824cf3a2337c079f648a9541b37f"
+      },
+      "after": {
+        "bytes": 21951,
+        "sha256": "dc60f859fca33e008a7a981b64acce4c9bc1933e16f4a07b7b6c92db4a0ca97d"
+      }
+    },
+    {
+      "path": "include/ntgdi.h",
+      "before": {
+        "bytes": 31723,
+        "sha256": "73ca9aba53ad8e7c3feee947b1e35c35a914c6c859311d0e82afd622b017e9f4"
+      },
+      "after": {
+        "bytes": 31196,
+        "sha256": "8c71b09921d9b7225ec1b82577f0481c0550fa5a0abbe00fbbefbed71952d1a3"
+      }
+    },
+    {
+      "path": "include/processthreadsapi.h",
+      "before": {
+        "bytes": 2135,
+        "sha256": "9c5bb91133c85413b49d977c9946a47391c9b85120b3df31a57e4457bb48fb25"
+      },
+      "after": {
+        "bytes": 2373,
+        "sha256": "81023557bf076370d34ead52ce11d4734a4c92cfb564c47c86b193ca5ddc2192"
+      }
+    },
+    {
+      "path": "include/winbase.h",
+      "before": {
+        "bytes": 136184,
+        "sha256": "6669a98373ab2305f1d567cc537255e27906581a690ddae2b052a1e8fe683496"
+      },
+      "after": {
+        "bytes": 136027,
+        "sha256": "07819ff8ba43309ac9f15cca160ecc3f7a043d01f9af538f6c7af5a027370d21"
+      }
+    },
+    {
+      "path": "include/wine/server_protocol.h",
+      "before": {
+        "bytes": 161898,
+        "sha256": "37e0dc5d309ecc8a68e8bf8f12fc09d0fc3c07993eff8ca88f34e91443d1508f"
+      },
+      "after": {
+        "bytes": 161299,
+        "sha256": "8ab1ebf30ae055a99413dd1b1633eead178517777988d89b3e6a5f0f944a46ef"
+      }
+    },
+    {
+      "path": "server/object.h",
+      "before": {
+        "bytes": 16429,
+        "sha256": "4eeb93c65b13544bde8d4635f0fdd0df71b072be2b990e07394b0547fdc21904"
+      },
+      "after": {
+        "bytes": 16334,
+        "sha256": "3cee551ea5c337f8c9923a69f24afb074e68d9234810b931c90af67b710c29e8"
+      }
+    },
+    {
+      "path": "server/protocol.def",
+      "before": {
+        "bytes": 148479,
+        "sha256": "80f78c82269a141fbee42835ff74b2abd8a1524808eee867d878c04d3216c599"
+      },
+      "after": {
+        "bytes": 148020,
+        "sha256": "0e13f259524f87553902561afcac30e0408c8bae37a28f805c25fe28a611a956"
+      }
+    },
+    {
+      "path": "server/registry.c",
+      "before": {
+        "bytes": 76792,
+        "sha256": "98866370a1d45f07b51743ecd0eee95d34e23ae48f114b90ac003feb36c753d5"
+      },
+      "after": {
+        "bytes": 77210,
+        "sha256": "084d2ceb55ca225d88c3b90fff0fb83d23e54ad79cc57d9d1fc4d8e533f1d487"
+      }
+    },
+    {
+      "path": "server/request.c",
+      "before": {
+        "bytes": 29587,
+        "sha256": "03a79babb3e448b4a69b99d90da45e92d961eaa371de7a0c707e294812f57bb4"
+      },
+      "after": {
+        "bytes": 36369,
+        "sha256": "409c36bb9af859c9ed69152d696cee85ba29bbd89033938c5d5e99476e53eeec"
+      }
+    },
+    {
+      "path": "server/request_trace.h",
+      "before": {
+        "bytes": 167488,
+        "sha256": "60fe8c36f53af27ba8d4a430972f5a35bb91a4cfc80a48d8fea911de1e6708ad"
+      },
+      "after": {
+        "bytes": 167556,
+        "sha256": "8b561f36b4e47a175a44ae21bd69e8d1b5bfd8c5180d6826ea509e77a9fea6bd"
+      }
+    },
+    {
+      "path": "server/thread.c",
+      "before": {
+        "bytes": 84453,
+        "sha256": "1df3787379dd95ec93b878abff859c9acb95ab6265660b21cc051068d58ca631"
+      },
+      "after": {
+        "bytes": 84506,
+        "sha256": "5fa32fe7e71eff546234742c9745482468325832c54ece42ac12ca59f7301f08"
+      }
+    },
+    {
+      "path": "server/trace.c",
+      "before": {
+        "bytes": 59028,
+        "sha256": "d7604b44399be55e480a772f1d7f2a7f401dbb0c00e96ea8614d3777853db2a0"
+      },
+      "after": {
+        "bytes": 59394,
+        "sha256": "ec3fc1c5afb73694b958b6ad97ac4d6ad644ffff735c3922680204517183c0b9"
+      }
+    }
+  ]
+}
