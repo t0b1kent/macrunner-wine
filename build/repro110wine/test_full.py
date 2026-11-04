@@ -419,13 +419,16 @@ class Drivers(unittest.TestCase):
 
     def test_workflow_splits_the_run_into_inputs_deps_and_wine_with_a_sampler_and_two_workers(self):
         text = (full.REPO.parent / '.github/workflows/repro110-wine-c12-xcode27-arm64.yml').read_text()
-        for needle in ('  deps:\n    # The first full run', '  wine:\n    needs: deps', '--stage deps', '--stage wine', '--jobs 2',
-                       'nice -n 10 python3', 'build/repro110wine/memwatch.sh', 'name: repro110-wine-c12-deps-${{ github.sha }}',
+        for needle in ('  deps:\n    # The first full run', '  wine:\n    needs: [deps, inputs, preflight]', '--stage deps', '--stage wine', '--jobs 2',
+                       'nice -n 20 python3', 'build/repro110wine/memwatch.sh', 'name: repro110-wine-c12-deps-${{ github.sha }}',
                        'if: always()', 'receive-layout.txt', 'stage-status.txt'):
             self.assertIn(needle, text)
         # `shasum -c` takes the path written into the .sha256 file, which names the machine that built the archive.
         self.assertNotIn('shasum -a 256 -c', text)
         self.assertNotIn('--jobs 3', text)
+        for needle in ('fail-fast: false', 'stage: [recipe, source]',
+                       "needs.inputs.result == 'success'", "needs.preflight.result == 'success'"):
+            self.assertIn(needle, text)
         # An earlier dependency stage can be reused so that a Wine-stage fix is tried without the two-hour library build.
         for needle in ('deps_run:', 'deps_sha:', 'actions: read', "inputs.deps_run == ''", "needs.deps.result == 'skipped'",
                        'gh run download "$run_id"'):
