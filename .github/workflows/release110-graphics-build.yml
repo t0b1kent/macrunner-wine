@@ -10,7 +10,7 @@ on:
       variant:
         description: All variants or the independently selected ARM64EC producer
         type: choice
-        options: [all, ec]
+        options: [all, ec, native]
         default: all
 permissions:
   contents: read
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON(inputs.variant == 'ec' && '["ec"]' || '["x64","ec","native"]') }}
+        variant: ${{ fromJSON(inputs.variant == 'ec' && '["ec"]' || inputs.variant == 'native' && '["native"]' || '["x64","ec","native"]') }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
       PYTHONDONTWRITEBYTECODE: '1'
@@ -108,6 +108,12 @@ jobs:
           nice -n 20 tar -czf "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz" \
             -C "$RUNNER_TEMP/release110-graphics-build/outputs" .
           shasum -a 256 "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz" > "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz.sha256"
+      - name: Retain native object inputs for the existing DXMT stand relink
+        if: success() && inputs.stage == 'compile' && matrix.variant == 'native'
+        run: |
+          nice -n 20 tar -czf "$RUNNER_TEMP/graphics-native-build.tar.gz" \
+            -C "$RUNNER_TEMP/release110-graphics-build" build
+          shasum -a 256 "$RUNNER_TEMP/graphics-native-build.tar.gz" > "$RUNNER_TEMP/graphics-native-build.tar.gz.sha256"
       - name: Preserve reports and source-built outputs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
