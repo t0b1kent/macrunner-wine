@@ -7939,11 +7939,10 @@
      test_exec_memory_writes();
 --- a/dlls/ntdll/thread.c
 +++ b/dlls/ntdll/thread.c
-@@ -103,20 +103,93 @@
+@@ -103,14 +103,60 @@
           nb_debug_options ? debug_options[0].name : "(net)", debug_options[0].flags );
  }
  
--/* add a string to the output buffer */
 +/* MacRunner WOW64-CB (25.10.2026) — THE PER-THREAD DEBUG BUFFER IS SHARED BY THREE WRITERS.
 + *
 + * In a WOW64 process the i386 ntdll (NtCurrentTeb32() + 1), the 64-bit ntdll ((TEB32 *)(teb + 0x2000) + 1, see
@@ -7986,131 +7985,40 @@
 +    return macrunner_dbg_nest_fix > 0;
 +}
 +
-+static int flush_output( struct debug_info *info, size_t len )
-+{
-+    int ret = __wine_dbg_write( info->output, len );
-+
-+    if (ret > 0)
-+    {
+ static int flush_output( struct debug_info *info, size_t len )
+ {
+     int ret = __wine_dbg_write( info->output, len );
+ 
+     if (ret > 0)
+     {
+-        info->out_pos -= ret;
+-        memmove( info->output, info->output + ret, info->out_pos );
 +        unsigned int done = ret;
 +
 +        /* WOW64-CB: a nested writer may have flushed underneath us during the write. */
 +        if (done > info->out_pos && macrunner_dbg_nest_fix_on()) done = info->out_pos;
 +        info->out_pos -= done;
 +        memmove( info->output, info->output + done, info->out_pos );
-+    }
-+    return ret == len ? 0 : -1;
-+}
-+
-+/* Write long strings directly, retaining a byte to mark partial lines. */
- static int append_output( struct debug_info *info, const char *str, size_t len )
- {
-+    size_t total = len, count;
-+    int ret;
-+
+     }
+     return ret == len ? 0 : -1;
+ }
+@@ -121,6 +167,8 @@
+     size_t total = len, count;
+     int ret;
+ 
 +    /* WOW64-CB: an out_pos beyond the buffer can only come from a nested writer; it is an empty buffer. */
 +    if (info->out_pos >= sizeof(info->output) && macrunner_dbg_nest_fix_on()) info->out_pos = 0;
      if (len >= sizeof(info->output) - info->out_pos)
      {
--        __wine_dbg_write( info->output, info->out_pos );
--        info->out_pos = 0;
--        ERR_(thread)( "debug buffer overflow:\n" );
--        __wine_dbg_write( str, len );
--        RtlRaiseStatus( STATUS_BUFFER_OVERFLOW );
-+        if (flush_output( info, info->out_pos ) < 0) return -1;
-+        if (len >= sizeof(info->output))
-+        {
-+            ret = __wine_dbg_write( str, len - 1 );
-+            if (ret != len - 1)
-+            {
-+                if (ret < 0) ret = 0;
-+                count = min( len - ret, sizeof(info->output) );
-+                memcpy( info->output, str + ret, count );
-+                info->out_pos = count;
-+                return -1;
-+            }
-+            str += len - 1;
-+            len = 1;
-+        }
-     }
-     memcpy( info->output + info->out_pos, str, len );
-     info->out_pos += len;
--    return len;
-+    return total;
- }
- 
- /***********************************************************************
-@@ -176,7 +249,8 @@
- {
-     static const char * const classes[] = { "fixme", "err", "warn", "trace" };
-     struct debug_info *info = get_info();
--    char *pos = info->output;
-+    char prefix[80];
-+    int ret = 0, len;
- 
-     if (!(__wine_dbg_get_channel_flags( channel ) & (1 << cls))) return -1;
- 
-@@ -186,15 +260,28 @@
-     if (TRACE_ON(timestamp))
-     {
-         ULONG ticks = NtGetTickCount();
--        pos += sprintf( pos, "%3lu.%03lu:", ticks / 1000, ticks % 1000 );
--    }
--    if (TRACE_ON(pid)) pos += sprintf( pos, "%04lx:", GetCurrentProcessId() );
--    pos += sprintf( pos, "%04lx:", GetCurrentThreadId() );
-+        len = snprintf( prefix, sizeof(prefix), "%3lu.%03lu:", ticks / 1000, ticks % 1000 );
-+        if (append_output( info, prefix, len ) < 0) return -1;
-+        ret += len;
-+    }
-+    if (TRACE_ON(pid))
-+    {
-+        len = snprintf( prefix, sizeof(prefix), "%04lx:", GetCurrentProcessId() );
-+        if (append_output( info, prefix, len ) < 0) return -1;
-+        ret += len;
-+    }
-+    len = snprintf( prefix, sizeof(prefix), "%04lx:", GetCurrentThreadId() );
-+    if (append_output( info, prefix, len ) < 0) return -1;
-+    ret += len;
-     if (function && cls < ARRAY_SIZE( classes ))
--        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%s:%s:%s ",
--                         classes[cls], channel->name, function );
--    info->out_pos = pos - info->output;
--    return info->out_pos;
-+    {
-+        len = snprintf( prefix, sizeof(prefix), "%s:%.15s:", classes[cls], channel->name );
-+        if (append_output( info, prefix, len ) < 0 ||
-+            append_output( info, function, strlen(function) ) < 0 ||
-+            append_output( info, " ", 1 ) < 0) return -1;
-+        ret += len + strlen(function) + 1;
-+    }
-+    return ret;
- }
- 
- /***********************************************************************
-@@ -216,14 +303,19 @@
+         if (flush_output( info, info->out_pos ) < 0) return -1;
+@@ -255,6 +303,7 @@
      const char *end = strrchr( str, '\n' );
      int ret = 0;
  
 +    if (macrunner_dbg_nest_fix < 0) macrunner_dbg_nest_fix_init();   /* WOW64-CB: take the key in a sane state */
      if (end)
      {
--        ret += append_output( info, str, end + 1 - str );
--        __wine_dbg_write( info->output, info->out_pos );
--        info->out_pos = 0;
-+        if ((ret = append_output( info, str, end + 1 - str )) < 0) return -1;
-+        if (flush_output( info, info->out_pos ) < 0) return -1;
-         str = end + 1;
-     }
--    if (*str) ret += append_output( info, str, strlen( str ));
-+    if (*str)
-+    {
-+        int tail = append_output( info, str, strlen( str ));
-+        if (tail < 0) return -1;
-+        ret += tail;
-+    }
-     return ret;
- }
- 
+         if ((ret = append_output( info, str, end + 1 - str )) < 0) return -1;
 --- a/dlls/ntdll/time.c
 +++ b/dlls/ntdll/time.c
 @@ -377,11 +377,55 @@
@@ -8171,37 +8079,10 @@
  }
 --- a/dlls/ntdll/unix/debug.c
 +++ b/dlls/ntdll/unix/debug.c
-@@ -25,6 +25,7 @@
- #include "config.h"
- 
- #include <assert.h>
-+#include <errno.h>
- #include <fcntl.h>
- #include <stdarg.h>
- #include <stdio.h>
-@@ -76,18 +77,85 @@
- #endif
+@@ -95,14 +95,30 @@
+     return done;
  }
  
--/* add a string to the output buffer */
-+/* A unixcall must not report success after a short write or EINTR.  On a
-+ * permanent sink error return the delivered prefix, so the caller can retain
-+ * the remaining bytes.  Do not log here: this is the logging transport. */
-+static int write_output( const char *str, size_t len )
-+{
-+    size_t done = 0;
-+    ssize_t ret;
-+
-+    while (done < len)
-+    {
-+        ret = write( 2, str + done, len - done );
-+        if (ret > 0) done += ret;
-+        else if (ret < 0 && errno == EINTR) continue;
-+        else return done ? done : -1;
-+    }
-+    return done;
-+}
-+
 +/* MacRunner WOW64-CB (25.10.2026): the same shared-buffer guard as dlls/ntdll/thread.c (the unix side is the
 + * third writer of TEB + 0x3000).  Key MACRUNNER_WOW64_CB_EXC_FIX, read once when ntdll.so is loaded. */
 +static int macrunner_dbg_nest_fix;
@@ -8214,149 +8095,32 @@
 +
 +static inline int macrunner_dbg_nest_fix_on(void) { return macrunner_dbg_nest_fix; }
 +
-+static int flush_output( struct debug_info *info, size_t len )
-+{
-+    int ret = write_output( info->output, len );
-+
-+    if (ret > 0)
-+    {
+ static int flush_output( struct debug_info *info, size_t len )
+ {
+     int ret = write_output( info->output, len );
+ 
+     if (ret > 0)
+     {
+-        info->out_pos -= ret;
+-        memmove( info->output, info->output + ret, info->out_pos );
 +        unsigned int done = ret;
 +
 +        /* WOW64-CB: a nested writer may have flushed underneath us during the write. */
 +        if (done > info->out_pos && macrunner_dbg_nest_fix_on()) done = info->out_pos;
 +        info->out_pos -= done;
 +        memmove( info->output, info->output + done, info->out_pos );
-+    }
-+    return ret == len ? 0 : -1;
-+}
-+
-+/* Flush the accumulated prefix before writing a long string directly. Keep
-+ * its last byte pending so a continued line still suppresses a second header,
-+ * without changing the shared 0x800-byte TEB layout. */
- static int append_output( struct debug_info *info, const char *str, size_t len )
- {
-+    size_t total = len, count;
-+    int ret;
-+
+     }
+     return ret == len ? 0 : -1;
+ }
+@@ -115,6 +131,8 @@
+     size_t total = len, count;
+     int ret;
+ 
 +    /* WOW64-CB: an out_pos beyond the buffer can only come from a nested writer; it is an empty buffer. */
 +    if (info->out_pos >= sizeof(info->output) && macrunner_dbg_nest_fix_on()) info->out_pos = 0;
      if (len >= sizeof(info->output) - info->out_pos)
      {
--       fprintf( stderr, "wine_dbg_output: debugstr buffer overflow (contents: '%s')\n", info->output );
--       info->out_pos = 0;
--       abort();
-+        if (flush_output( info, info->out_pos ) < 0) return -1;
-+        if (len >= sizeof(info->output))
-+        {
-+            ret = write_output( str, len - 1 );
-+            if (ret != len - 1)
-+            {
-+                /* Preserve the bounded unwritten prefix; report sink failure
-+                 * rather than claiming the whole string was delivered. */
-+                if (ret < 0) ret = 0;
-+                count = min( len - ret, sizeof(info->output) );
-+                memcpy( info->output, str + ret, count );
-+                info->out_pos = count;
-+                return -1;
-+            }
-+            str += len - 1;
-+            len = 1;
-+        }
-     }
-     memcpy( info->output + info->out_pos, str, len );
-     info->out_pos += len;
--    return len;
-+    return total;
- }
- 
- /* add a new debug option at the end of the option list */
-@@ -311,7 +379,7 @@
-             }
-         }
-     }
--    return write( 2, params->str, params->len );
-+    return write_output( params->str, params->len );
- }
- 
- #ifdef _WIN64
-@@ -335,7 +403,7 @@
-      * без гостевой памяти по базе. */
-     void *host = macrunner_hb_wow64_guest32_host_ptr( params32->str );
- 
--    return write( 2, host ? host : ULongToPtr(params32->str), params32->len );
-+    return write_output( host ? host : ULongToPtr(params32->str), params32->len );
- }
- #endif
- 
-@@ -350,12 +418,16 @@
- 
-     if (end)
-     {
--        ret += append_output( info, str, end + 1 - str );
--        write( 2, info->output, info->out_pos );
--        info->out_pos = 0;
-+        if ((ret = append_output( info, str, end + 1 - str )) < 0) return -1;
-+        if (flush_output( info, info->out_pos ) < 0) return -1;
-         str = end + 1;
-     }
--    if (*str) ret += append_output( info, str, strlen( str ));
-+    if (*str)
-+    {
-+        int tail = append_output( info, str, strlen( str ));
-+        if (tail < 0) return -1;
-+        ret += tail;
-+    }
-     return ret;
- }
- 
-@@ -367,7 +439,8 @@
- {
-     static const char * const classes[] = { "fixme", "err", "warn", "trace" };
-     struct debug_info *info = get_info();
--    char *pos = info->output;
-+    char prefix[80];
-+    int ret = 0, len;
- 
-     if (!(__wine_dbg_get_channel_flags( channel ) & (1 << cls))) return -1;
- 
-@@ -379,16 +452,29 @@
-         if (TRACE_ON(timestamp))
-         {
-             UINT ticks = NtGetTickCount();
--            pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%3u.%03u:", ticks / 1000, ticks % 1000 );
--        }
--        if (TRACE_ON(pid)) pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", GetCurrentProcessId() );
--        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%04x:", GetCurrentThreadId() );
-+            len = snprintf( prefix, sizeof(prefix), "%3u.%03u:", ticks / 1000, ticks % 1000 );
-+            if (append_output( info, prefix, len ) < 0) return -1;
-+            ret += len;
-+        }
-+        if (TRACE_ON(pid))
-+        {
-+            len = snprintf( prefix, sizeof(prefix), "%04x:", GetCurrentProcessId() );
-+            if (append_output( info, prefix, len ) < 0) return -1;
-+            ret += len;
-+        }
-+        len = snprintf( prefix, sizeof(prefix), "%04x:", GetCurrentThreadId() );
-+        if (append_output( info, prefix, len ) < 0) return -1;
-+        ret += len;
-     }
-     if (function && cls < ARRAY_SIZE( classes ))
--        pos += snprintf( pos, sizeof(info->output) - (pos - info->output), "%s:%s:%s ",
--                         classes[cls], channel->name, function );
--    info->out_pos = pos - info->output;
--    return info->out_pos;
-+    {
-+        len = snprintf( prefix, sizeof(prefix), "%s:%.15s:", classes[cls], channel->name );
-+        if (append_output( info, prefix, len ) < 0 ||
-+            append_output( info, function, strlen(function) ) < 0 ||
-+            append_output( info, " ", 1 ) < 0) return -1;
-+        ret += len + strlen(function) + 1;
-+    }
-+    return ret;
- }
- 
- /***********************************************************************
+         if (flush_output( info, info->out_pos ) < 0) return -1;
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -6368,10 +6368,18 @@
