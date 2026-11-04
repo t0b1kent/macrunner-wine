@@ -1,0 +1,123 @@
+name: MacRunner 1.1.0 LLVM15 from pinned DXMT sources
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [inputs, full]
+        default: inputs
+      dxmt_revision:
+        description: Immutable public DXMT source recipe revision
+        type: string
+        required: true
+        default: 10e7648f6b45d2120bada6f0827b911ce0a65fb1
+permissions:
+  contents: read
+concurrency:
+  group: release110-llvm15-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  inputs:
+    if: inputs.phase == 'inputs'
+    runs-on: xcode-27
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [recipe, source, toolchain]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Validate immutable public source pin
+        env:
+          DXMT_REVISION: ${{ inputs.dxmt_revision }}
+        run: |
+          python3 -c 'import os,re; assert re.fullmatch("[a-f0-9]{40}", os.environ["DXMT_REVISION"]), "full DXMT commit required"'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/dxmt
+          ref: ${{ inputs.dxmt_revision }}
+          path: dxmt
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/macrunner-wine
+          ref: cb9d08f9a429385338aaa61ba8a3127009d635d4
+          path: macrunner-wine
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Check one independent source producer step
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MACRUNNER_WINE_RECIPE_ROOT="$GITHUB_WORKSPACE/macrunner-wine/build"
+          export MACRUNNER_DXMT_SOURCE_REPOSITORY="$GITHUB_WORKSPACE/dxmt"
+          export REPRO109_TEST_TMP="$RUNNER_TEMP/llvm15-tests"
+          export REPRO109_TEST_ROOT="$RUNNER_TEMP/llvm15-tests/owned-fixtures"
+          mkdir -p "$REPRO109_TEST_TMP"
+          cd dxmt
+          if [ '${{ matrix.stage }}' = recipe ]; then
+            for module in test_llvm_inputs test_llvm_prefix test_wine_layout test_profile27; do
+              python3 -I -B -m unittest discover -s build/repro109dxmt -p "$module.py"
+            done
+          fi
+          python3 -I -B build/repro110gfx/llvm15.py --stage '${{ matrix.stage }}' --work "$RUNNER_TEMP/llvm15-input-${{ matrix.stage }}"
+  llvm15:
+    if: inputs.phase == 'full'
+    runs-on: xcode-27
+    timeout-minutes: 350
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Validate immutable public source pin
+        env:
+          DXMT_REVISION: ${{ inputs.dxmt_revision }}
+        run: |
+          python3 -c 'import os,re; assert re.fullmatch("[a-f0-9]{40}", os.environ["DXMT_REVISION"]), "full DXMT commit required"'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/dxmt
+          ref: ${{ inputs.dxmt_revision }}
+          path: dxmt
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/macrunner-wine
+          ref: cb9d08f9a429385338aaa61ba8a3127009d635d4
+          path: macrunner-wine
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Build the pinned LLVM15 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MACRUNNER_WINE_RECIPE_ROOT="$GITHUB_WORKSPACE/macrunner-wine/build"
+          export MACRUNNER_DXMT_SOURCE_REPOSITORY="$GITHUB_WORKSPACE/dxmt"
+          cd dxmt
+          nice -n 20 python3 -I -B build/repro110gfx/llvm15.py --stage build --work "$RUNNER_TEMP/release110-llvm15"
+      - name: Archive the source-built prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          nice -n 20 tar -czf "$RUNNER_TEMP/release110-llvm15/llvm15-prefix.tar.gz" -C "$RUNNER_TEMP/release110-llvm15/prefix" .
+          shasum -a 256 "$RUNNER_TEMP/release110-llvm15/llvm15-prefix.tar.gz"
+      - name: Keep complete reports and source-built archive
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release110-llvm15-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/release110-llvm15/reports
+            ${{ runner.temp }}/release110-llvm15/*.tar.gz
+          if-no-files-found: warn
+          retention-days: 90
