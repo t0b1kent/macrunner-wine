@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: t0b1kent/dxmt
-          ref: 68fa5c134a628ab447ff22454689cfe3ef0e0585
+          ref: 9b44c5e07e04ceaa78adf3e2f34c4e58bb9b0e8d
           path: dxmt
           fetch-depth: 0
           persist-credentials: false
