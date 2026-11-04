@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 import stat
 import subprocess
 import sys
+import time
 import zipfile
 
 REPO = 't0b1kent/macrunner-wine'
@@ -29,6 +30,29 @@ def sha(path):
 
 def api(endpoint):
     return json.loads(subprocess.check_output(['gh', 'api', 'repos/' + REPO + endpoint], timeout=120))
+
+
+def download_artifact(artifact, archive, expected_sha, reports):
+    if archive.exists() or archive.is_symlink():
+        raise ValueError('Fresh artifact archive path required')
+    for attempt in range(1, 4):
+        candidate = archive.with_name(archive.name + '.attempt-' + str(attempt))
+        with candidate.open('xb') as stream:
+            child = subprocess.run(['gh', 'api', 'repos/' + REPO + '/actions/artifacts/' + str(artifact) + '/zip'],
+                                   stdout=stream, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=900)
+        diagnostic = child.stderr or b''
+        (reports / (archive.stem + '-download-' + str(attempt) + '.log')).write_bytes(diagnostic)
+        if child.returncode == 0:
+            if sha(candidate) != expected_sha:
+                raise ValueError('Artifact bytes differ')
+            candidate.rename(archive)
+            return
+        transient = any(value in diagnostic.lower() for value in
+                        [b'http 429', b'http 500', b'http 502', b'http 503', b'http 504',
+                         b'unexpected eof', b'connection reset', b'tls handshake timeout'])
+        if not transient or attempt == 3:
+            raise ValueError('Artifact download failed; complete attempt and diagnostic retained')
+        time.sleep(attempt * 2)
 
 
 def unpack_zip(archive, destination):
@@ -79,11 +103,7 @@ def restore(args):
                 raise ValueError(name + ' artifact identity differs')
             (reports / (name + '-artifact.json')).write_text(json.dumps(metadata, indent=2) + '\n')
             archive = root / (name + '.zip')
-            with archive.open('xb') as stream:
-                subprocess.run(['gh', 'api', 'repos/' + REPO + '/actions/artifacts/' + str(pin['artifact']) + '/zip'],
-                               stdout=stream, stdin=subprocess.DEVNULL, check=True, timeout=900)
-            if sha(archive) != pin['sha256']:
-                raise ValueError(name + ' artifact bytes differ')
+            download_artifact(pin['artifact'], archive, pin['sha256'], reports)
             unpacked = root / name
             unpack_zip(archive, unpacked)
             result['inputs'][name] = dict(pin, zip_bytes=archive.stat().st_size)

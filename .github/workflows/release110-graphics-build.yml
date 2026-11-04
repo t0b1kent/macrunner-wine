@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: t0b1kent/dxmt
-          ref: e0c2c331b3bb10f6597836e606b8e125b1eb7c4e
+          ref: 68fa5c134a628ab447ff22454689cfe3ef0e0585
           path: dxmt
           fetch-depth: 0
           persist-credentials: false
@@ -57,6 +57,8 @@ jobs:
           architecture: arm64
       - name: Test input archive restoration
         run: python3 -I -B -m unittest discover -s build/release110 -p test_graphics_inputs.py
+      - name: Test the isolated graphics entry point and absent tools
+        run: REPRO109_TEST_TMP="$RUNNER_TEMP" python3 -I -B -m unittest discover -s dxmt/build/repro110gfx -p test_inputs.py
       - name: Restore exact successful source-build outputs
         env:
           GH_TOKEN: ${{ github.token }}
