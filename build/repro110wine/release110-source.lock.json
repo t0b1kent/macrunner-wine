@@ -4,8 +4,8 @@
   "base": "c12 overlay followed by the pinned 1.0.9 keyboard delta",
   "patch": "late/release110-c32r.patch",
   "patch_identity": {
-    "bytes": 3301083,
-    "sha256": "16669d346354fa32e24b0a456f4a86fc17561f42ff457e90822bd81245887a3c"
+    "bytes": 3302140,
+    "sha256": "0faad5889e230c99be05c0137cde9573caf002588579f279c2d0ac307f67f10a"
   },
   "files": [
     {
@@ -15,8 +15,8 @@
         "sha256": "78e5e999dff563fe55694f9860bd2705b7394b98afe07c52ef5a1fc9e90c790a"
       },
       "after": {
-        "bytes": 759832,
-        "sha256": "6970a00cf555d33b5fbb8e536f76154682a3090def684aed8f5106765c80d757"
+        "bytes": 761313,
+        "sha256": "2e1294efc4b076295411dabb6805478392e007ed30352ab969d35a837be362b8"
       }
     },
     {
@@ -804,5 +804,10 @@
         "sha256": "ec3fc1c5afb73694b958b6ad97ac4d6ad644ffff735c3922680204517183c0b9"
       }
     }
-  ]
+  ],
+  "generated_configure": {
+    "generator": "GNU Autoconf 2.73",
+    "input": "configure.ac plus unchanged aclocal.m4 and VERSION",
+    "reason": "Make the cc1 async-exception feature check effective in clean source builds"
+  }
 }

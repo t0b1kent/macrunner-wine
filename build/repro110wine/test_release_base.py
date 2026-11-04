@@ -14,6 +14,13 @@ sys.path.insert(0, str(HERE))
 import build_wine as wine
 
 class PublicBase(unittest.TestCase):
+    def test_cc1_async_exception_fix_reaches_generated_configure(self):
+        lock = wine.release_source.inputs()
+        patch = (HERE / lock['patch']).read_text()
+        self.assertIn('+CFLAGS="$CFLAGS -nostdlib -nodefaultlibs -Xclang -fasync-exceptions"', patch)
+        self.assertIn('+  as_fn_append ${wine_arch}_EXTRACFLAGS " -Xclang -fasync-exceptions"', patch)
+        self.assertEqual(lock['generated_configure']['generator'], 'GNU Autoconf 2.73')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='public-base-', dir=os.environ['REPRO109_TEST_TMP'])
         self.addCleanup(self.temp.cleanup)
