@@ -4,8 +4,8 @@
   "base": "Wine b812a090e2ca58c3902008929facd71f15fc3fc4; verified 36-file c12 overlay; pinned keyboard delta",
   "patch": "late/release110-c32r.patch",
   "patch_identity": {
-    "bytes": 3293729,
-    "sha256": "0bd7b7e76a8908f04ec564fe345342bbdaeb1b7223503f3a7132e8d83bb4c44b"
+    "bytes": 3293749,
+    "sha256": "31389cc31736ff0fccc8c15a93072a2707b8076c26b96c82b39576823b302949"
   },
   "files": [
     {
@@ -158,8 +158,8 @@
         "sha256": "c8bdef50fff557d6f0219441eb668626e49050af00812791b413f0e0e06e242e"
       },
       "after": {
-        "bytes": 87809,
-        "sha256": "41f9b6da0d7452602926a41952762f4f0a02c33fd871172983274a07c0e16a1b"
+        "bytes": 87829,
+        "sha256": "a7b90356097244f2d9e0a9dbfcb720ed3383cd5fe3315913154302463879a421"
       }
     },
     {

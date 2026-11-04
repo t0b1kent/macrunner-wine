@@ -6221,7 +6221,7 @@
 +# QPC lane 02.11.2026: user-mode fast paths (MACRUNNER_QPC_FAST, MACRUNNER_WAITADDR_DIRECT), filled by the unix side at load.
 +@ extern -private macrunner_ntdll_fast
 +# SYNC lane 03.11.2026: counters of the RtlWaitOnAddress poll (MACRUNNER_SYNC_SPIN + MACRUNNER_SYNC_STATS), read by the unix side.
-+@ extern -private macrunner_sync_spin_stats
++@ extern -private -arch=arm64,arm64ec macrunner_sync_spin_stats
  # ПАКЕТ-2 08.09.2026: тот же селектор владельца CPU, что у пакетов 1 и 3, отдан
  # wow64.dll. Второй селектор заводить нельзя — берётся ЭТОТ, по имени, через
  # RtlFindExportedRoutineByName (так wow64 уже берёт LdrSystemDllInitBlock и BTCpu*).
