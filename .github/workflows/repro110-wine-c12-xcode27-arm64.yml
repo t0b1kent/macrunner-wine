@@ -1,4 +1,4 @@
-name: REPRO-110 Wine for c12 from pinned sources
+name: MacRunner 1.1.0 c32r Wine from pinned sources
 
 on:
   workflow_dispatch:
@@ -26,6 +26,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    runs-on: xcode-27
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [recipe, source]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Independent source recipe cell
+        shell: bash
+        env:
+          STAGE: ${{ matrix.stage }}
+        run: |
+          set -euo pipefail
+          export REPRO109_TEST_TMP="$RUNNER_TEMP/release110-tests"
+          mkdir -p "$REPRO109_TEST_TMP"
+          if [ "$STAGE" = source ]; then
+            python3 -I -B build/repro110wine/build_wine.py --check-inputs
+            python3 -I -B build/repro110wine/build_full.py --check-inputs
+          else
+            printf '%s\n' 'NOT_ENABLED: legacy Xcode Cloud wrapper tests; wrapper is not shipped in this GitHub recipe'
+            for file in build/repro110wine/test_*.py; do
+              [ "$(basename "$file")" != test_xcode_wrapper.py ] || continue
+              python3 -I -B -m unittest discover -s build/repro110wine -p "$(basename "$file")"
+            done
+          fi
   inputs:
     runs-on: xcode-27
     timeout-minutes: 15
@@ -68,7 +101,7 @@ jobs:
     # 51 minutes in the second attempt (38509305812) with no log and no report. The work is split so that a lost machine
     # costs one stage, the build runs at a lower priority with two workers so the runner agent keeps its heartbeat, and a
     # sampler writes load, memory pressure and swap into the live log and into the artifact.
-    needs: inputs
+    needs: [inputs, preflight]
     if: ${{ inputs.phase == 'full' && inputs.deps_run == '' }}
     runs-on: xcode-27
     timeout-minutes: 240
@@ -111,7 +144,7 @@ jobs:
           work="$RUNNER_TEMP/repro110-wine-c12-work"
           bash build/repro110wine/memwatch.sh "$work" 60 "$RUNNER_TEMP/memwatch-deps.log" &
           watcher=$!
-          nice -n 10 python3 -I -B build/repro110wine/build_full.py --profile github-xcode27-arm64 \
+          nice -n 20 python3 -I -B build/repro110wine/build_full.py --profile github-xcode27-arm64 \
             --build --stage deps --work "$work" --jobs 2 \
             --source-inputs "$RUNNER_TEMP/repro110-wine-c12-prepared-inputs" \
             > "$RUNNER_TEMP/repro110-wine-c12-deps-driver.log" 2>&1
@@ -155,9 +188,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   wine:
-    needs: deps
+    needs: [deps, inputs, preflight]
     # With deps_run the dependency stage of an earlier run is reused: the deps job is skipped and this one still runs.
-    if: ${{ always() && inputs.phase == 'full' && (needs.deps.result == 'success' || (inputs.deps_run != '' && needs.deps.result == 'skipped')) }}
+    if: ${{ always() && inputs.phase == 'full' && needs.inputs.result == 'success' && needs.preflight.result == 'success' && (needs.deps.result == 'success' || (inputs.deps_run != '' && needs.deps.result == 'skipped')) }}
     runs-on: xcode-27
     timeout-minutes: 240
     env:
@@ -242,7 +275,7 @@ jobs:
           work="$RUNNER_TEMP/repro110-wine-c12-work"
           bash build/repro110wine/memwatch.sh "$work" 60 "$RUNNER_TEMP/memwatch-wine.log" &
           watcher=$!
-          nice -n 10 python3 -I -B build/repro110wine/build_full.py --profile github-xcode27-arm64 \
+          nice -n 20 python3 -I -B build/repro110wine/build_full.py --profile github-xcode27-arm64 \
             --build --stage wine --work "$work" --jobs 2 \
             > "$RUNNER_TEMP/repro110-wine-c12-driver.log" 2>&1
           build_rc=$?

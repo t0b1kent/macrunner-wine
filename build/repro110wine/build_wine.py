@@ -30,6 +30,9 @@ COMPILER_URL = ('https://github.com/mstorsjo/llvm-mingw/releases/download/202605
 late_spec = importlib.util.spec_from_file_location('repro109_wine_late_source', RECIPE / 'late_source.py')
 late_source = importlib.util.module_from_spec(late_spec)
 late_spec.loader.exec_module(late_source)
+release_spec = importlib.util.spec_from_file_location('release110_source', RECIPE / 'release110_source.py')
+release_source = importlib.util.module_from_spec(release_spec)
+release_spec.loader.exec_module(release_source)
 
 
 def _check_message(expected, actual, note=''):
@@ -77,6 +80,7 @@ def inputs():
         data = (RECIPE / 'source' / relative(row['path'])).read_bytes()
         if not ((_repro_check_4_0 := len(data)) == (_repro_check_4_1 := row['bytes']) and (_repro_check_4_2 := sha(data)) == (_repro_check_4_3 := row['sha256'])):
             raise AssertionError(_check_message("len(data) == row['bytes'] and sha(data) == row['sha256']", {'len(data)': locals().get('_repro_check_4_0', 'NOT_EVALUATED'), "row['bytes']": locals().get('_repro_check_4_1', 'NOT_EVALUATED'), 'sha(data)': locals().get('_repro_check_4_2', 'NOT_EVALUATED'), "row['sha256']": locals().get('_repro_check_4_3', 'NOT_EVALUATED')}, row['path']))
+    release_source.inputs()
     late = late_source.inputs()
     if late['wine_revision'] != lock['revision']:
         raise ValueError('Wine base and required keyboard source revision differ')
@@ -383,6 +387,7 @@ def build(args, lock):
         if not ((_repro_check_35_0 := sha(path.read_bytes())) == (_repro_check_35_1 := row['sha256'])):
             raise AssertionError(_check_message("sha(path.read_bytes()) == row['sha256']", {'sha(path.read_bytes())': locals().get('_repro_check_35_0', 'NOT_EVALUATED'), "row['sha256']": locals().get('_repro_check_35_1', 'NOT_EVALUATED')}, 'validation failed'))
     keyboard_source = late_source.apply(src, out, command)
+    release110_source = release_source.apply(src, out, command)
     loader_game_mode = prepare_loader_game_mode(src, out)
     header_sources = check_header_sources(src, lock, out, baseline=base_headers)
     hb = root / 'engine/hyperbridge'
@@ -449,6 +454,7 @@ def build(args, lock):
                   install_skipped=skipped, references='D_FUNCTION_SECTION_COMPARISON_PENDING', stands='NOT_RUN',
                    signing=0, notarization=0, publication=0,
                    header_sources_report='header-sources.json', checked_headers=len(header_sources['required_headers']))
+    result['release110_source'] = release110_source
     result['loader_game_mode_source_report'] = 'loader-game-mode-source.json'
     result['loader_game_mode_output'] = 'D_EMBEDDED_PLIST_AND_BUNDLE_COMPARISON_PENDING'
     (out / 'RESULT.json').write_text(json.dumps(result, indent=2) + '\n')
