@@ -1,0 +1,113 @@
+name: MacRunner 1.1.0 selected graphics source compilation
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Existing graphics producer stage
+        type: choice
+        options: [compile, configure]
+        default: compile
+permissions:
+  contents: read
+  actions: read
+jobs:
+  graphics:
+    runs-on: xcode-27
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [x64, ec, native]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/macrunner-wine
+          ref: 0db5d3a80e302315a1dc37e8f6e1bba551310430
+          path: wine
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/dxmt
+          ref: e0c2c331b3bb10f6597836e606b8e125b1eb7c4e
+          path: dxmt
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: misyltoad/mingw-directx-headers
+          ref: 9df86f2341616ef1888ae59919feaa6d4fad693d
+          path: directx-headers
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: madler/zlib
+          ref: 51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf
+          path: zlib
+          sparse-checkout: contrib/puff
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Test input archive restoration
+        run: python3 -I -B -m unittest discover -s build/release110 -p test_graphics_inputs.py
+      - name: Restore exact successful source-build outputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          nice -n 20 python3 -I -B build/release110/graphics_inputs.py \
+            --wine "$GITHUB_WORKSPACE/wine" --dxmt "$GITHUB_WORKSPACE/dxmt" \
+            --work "$RUNNER_TEMP/release110-graphics-inputs"
+      - name: Select the Metal Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release110-graphics-inputs/reports/metal.log"
+          if ! xcrun -sdk macosx metal --version > "$out" 2>&1; then
+            nice -n 20 xcodebuild -downloadComponent MetalToolchain >> "$out" 2>&1
+          fi
+          xcrun -sdk macosx metal --version >> "$out" 2>&1
+      - name: Compile the selected graphics variant
+        env:
+          GRAPHICS_STAGE: ${{ inputs.stage }}
+          GRAPHICS_VARIANT: ${{ matrix.variant }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          nice -n 20 python3 -I -B - <<'PY'
+          import json, os, pathlib, subprocess
+          temp = pathlib.Path(os.environ['RUNNER_TEMP'])
+          paths = json.loads((temp / 'release110-graphics-inputs/reports/RESULT.json').read_text())['paths']
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          command = ['python3', '-I', '-B', str(root / 'dxmt/build/repro110gfx/build.py'),
+                     '--variant', os.environ['GRAPHICS_VARIANT'], '--stage', os.environ['GRAPHICS_STAGE'],
+                     '--headers', str(root / 'directx-headers'), '--zlib', str(root / 'zlib'),
+                     '--work', str(temp / 'release110-graphics-build')]
+          for name in ['wine', 'compiler', 'llvm', 'meson', 'ninja']:
+              command += ['--' + name, paths[name]]
+          env = dict(os.environ, PKG_CONFIG_PATH=paths['deps'] + '/lib/pkgconfig')
+          raise SystemExit(subprocess.run(command, env=env, stdin=subprocess.DEVNULL).returncode)
+          PY
+      - name: Archive compiled outputs
+        if: success() && inputs.stage == 'compile'
+        run: |
+          nice -n 20 tar -czf "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz" \
+            -C "$RUNNER_TEMP/release110-graphics-build/outputs" .
+          shasum -a 256 "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz" > "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz.sha256"
+      - name: Preserve reports and source-built outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release110-graphics-${{ matrix.variant }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/release110-graphics-inputs/reports
+            ${{ runner.temp }}/release110-graphics-build/reports
+            ${{ runner.temp }}/graphics-*.tar.gz*
+          if-no-files-found: warn
+          retention-days: 90
