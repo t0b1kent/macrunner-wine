@@ -1,0 +1,97 @@
+name: MacRunner 1.1.0 selected graphics source inputs
+on:
+  workflow_dispatch:
+    inputs:
+      dxmt_revision:
+        description: Immutable public DXMT recipe and selected source snapshot
+        type: string
+        required: true
+        default: e0c2c331b3bb10f6597836e606b8e125b1eb7c4e
+permissions:
+  contents: read
+jobs:
+  inputs:
+    runs-on: xcode-27
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        axis: [recipe, source-c17, source-native, metal]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Validate immutable public source pin
+        env:
+          DXMT_REVISION: ${{ inputs.dxmt_revision }}
+        run: |
+          python3 -c 'import os,re; assert re.fullmatch("[a-f0-9]{40}", os.environ["DXMT_REVISION"]), "full DXMT commit required"'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/dxmt
+          ref: ${{ inputs.dxmt_revision }}
+          path: dxmt
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: startsWith(matrix.axis, 'source-')
+        with:
+          repository: misyltoad/mingw-directx-headers
+          ref: 9df86f2341616ef1888ae59919feaa6d4fad693d
+          path: directx-headers
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: startsWith(matrix.axis, 'source-')
+        with:
+          repository: madler/zlib
+          ref: 51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf
+          path: zlib
+          sparse-checkout: contrib/puff
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Run one independent graphics input cell
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release110-graphics-inputs"
+          mkdir -p "$out"
+          printf 'STARTED\n' > "$out/state.txt"
+          trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "FAILED rc=%s\n" "$rc" > "$out/state.txt"; fi' EXIT
+          case '${{ matrix.axis }}' in
+            recipe)
+              export REPRO109_TEST_TMP="$RUNNER_TEMP/release110-graphics-fixtures"
+              mkdir -p "$REPRO109_TEST_TMP"
+              nice -n 20 python3 -I -B -m unittest discover -s dxmt/build/repro110gfx -p test_inputs.py > "$out/recipe.log" 2>&1
+              ;;
+            source-*)
+              variant='${{ matrix.axis }}'
+              variant="${variant#source-}"
+              nice -n 20 python3 -I -B dxmt/build/repro110gfx/prepare_source.py \
+                --variant "$variant" --headers "$GITHUB_WORKSPACE/directx-headers" \
+                --zlib "$GITHUB_WORKSPACE/zlib" --out "$RUNNER_TEMP/exact-graphics-source" > "$out/source.json" 2>&1
+              ;;
+            metal)
+              # The accepted source producer requires the separately delivered Metal Toolchain.
+              set +e
+              xcodebuild -version > "$out/metal-toolchain.log" 2>&1
+              xcrun -sdk macosx metal --version >> "$out/metal-toolchain.log" 2>&1
+              if ! xcrun -sdk macosx metal --version > /dev/null 2>&1; then
+                nice -n 20 xcodebuild -downloadComponent MetalToolchain >> "$out/metal-toolchain.log" 2>&1
+              fi
+              xcrun -sdk macosx metal --version >> "$out/metal-toolchain.log" 2>&1 || exit 1
+              ;;
+          esac
+          set -e
+          shasum -a 256 dxmt/build/repro110gfx/source.lock.json > "$out/source-lock.sha256"
+          printf 'PASS\n' > "$out/state.txt"
+      - name: Preserve complete bounded input reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release110-graphics-input-${{ matrix.axis }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release110-graphics-inputs
+          if-no-files-found: warn
+          retention-days: 30
