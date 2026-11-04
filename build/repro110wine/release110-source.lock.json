@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "release": "1.1.0",
-  "base": "c12 overlay followed by the pinned 1.0.9 keyboard delta",
+  "base": "Wine b812a090e2ca58c3902008929facd71f15fc3fc4; verified 36-file c12 overlay; pinned keyboard delta",
   "patch": "late/release110-c32r.patch",
   "patch_identity": {
-    "bytes": 3302140,
-    "sha256": "0faad5889e230c99be05c0137cde9573caf002588579f279c2d0ac307f67f10a"
+    "bytes": 3293729,
+    "sha256": "0bd7b7e76a8908f04ec564fe345342bbdaeb1b7223503f3a7132e8d83bb4c44b"
   },
   "files": [
     {
@@ -231,8 +231,8 @@
     {
       "path": "dlls/ntdll/thread.c",
       "before": {
-        "bytes": 25943,
-        "sha256": "2f2f778fd4c3bb59d73d2b02e9dd2ed94d05826d7e89e221290d58ab47232022"
+        "bytes": 27127,
+        "sha256": "7928d67515028ee1ecf6d87a8521a008c010527e64efd35f8e6fe86cc9856766"
       },
       "after": {
         "bytes": 30239,
@@ -253,8 +253,8 @@
     {
       "path": "dlls/ntdll/unix/debug.c",
       "before": {
-        "bytes": 20058,
-        "sha256": "5eba2de4604e3958513b4b15123a27b5bcc586e0266b7048beaf8319c003b8d9"
+        "bytes": 22090,
+        "sha256": "ba12d791620edd7513cc625f678774a62f67635c0ade3a8e86fbc56bafb32b8b"
       },
       "after": {
         "bytes": 23035,
