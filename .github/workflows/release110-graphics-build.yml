@@ -7,6 +7,11 @@ on:
         type: choice
         options: [compile, configure]
         default: compile
+      variant:
+        description: All variants or the independently selected ARM64EC producer
+        type: choice
+        options: [all, ec]
+        default: all
 permissions:
   contents: read
   actions: read
@@ -17,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [x64, ec, native]
+        variant: ${{ fromJSON(inputs.variant == 'ec' && '["ec"]' || '["x64","ec","native"]') }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
       PYTHONDONTWRITEBYTECODE: '1'
@@ -34,7 +39,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: t0b1kent/dxmt
-          ref: 9b44c5e07e04ceaa78adf3e2f34c4e58bb9b0e8d
+          ref: 0b3220b0595bec75332dd3340c0d4bec68d6e935
           path: dxmt
           fetch-depth: 0
           persist-credentials: false
@@ -93,6 +98,7 @@ jobs:
                      '--work', str(temp / 'release110-graphics-build')]
           for name in ['wine', 'compiler', 'llvm', 'meson', 'ninja']:
               command += ['--' + name, paths[name]]
+          command += ['--ec-checker', str(root / 'wine/build/repro110wine/check-arm64ec-dist.py')]
           env = dict(os.environ, PKG_CONFIG_PATH=paths['deps'] + '/lib/pkgconfig')
           raise SystemExit(subprocess.run(command, env=env, stdin=subprocess.DEVNULL).returncode)
           PY
