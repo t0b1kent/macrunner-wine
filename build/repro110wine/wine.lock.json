@@ -3420,8 +3420,9 @@
   "xcode_build": "17F113",
   "sdk": "26.5",
   "apple_clang": "clang-2100.1.1.101",
-  "llvm_mingw": "20260505",
-  "llvm_mingw_sha256": "050379de888f0c843787819dadf183df3693330a5724643919e9121f16355295"
+  "llvm_mingw": "20260908",
+  "llvm_mingw_sha256": "d1dc5d1ecf3a3ced5ed5544c72f1acd0c8e84eb3024d520ecc6b143eec62a149",
+  "llvm_mingw_size": 124244100
  },
  "archs": [
   "aarch64",

@@ -1,55 +1,52 @@
-# Wine из закреплённых исходников для состава c9
+# Building the MacRunner Wine runtime on GitHub
 
-Рецепт: Wine `ce9f9ed6177d57a43f6fd1e9c8d9be87224eb08a`,
-отдельный патч клавиатуры 0097 и преобразование исходного plist загрузчика
-с тремя принятыми ключами Game Mode. Готовые модули выпуска, локальные
-каталоги и Homebrew библиотеки не являются входами сборки.
-Исторические исходники в `fixtures/release108-base` нужны только offline
-проверкам; облачная сборка получает Wine по закреплённой ревизии Git.
+The `repro110wine` recipe builds the c32r runtime from the pinned Wine revision,
+the ordered c12 overlays and the sealed cumulative release patch. Published
+runtime modules, local installations and Homebrew libraries are not build inputs.
+The recipe checks every required base file and overlay before applying changes.
 
-Из чистого клона `t0b1kent/macrunner-wine` с этим рецептом:
+Use `.github/workflows/repro110-wine-c12-xcode27-arm64.yml` in a clean checkout of
+`t0b1kent/macrunner-wine`. Start with `phase=inputs`, review its complete input
+receipt, then select `phase=full`. Optional `deps_run`/`deps_sha` and
+`source_run`/`source_sha` pairs reuse an explicitly selected public artifact;
+the driver rechecks its contents against the current locks. Read the current
+workflow inputs before dispatching a run.
 
-1. Сначала запустите `.github/workflows/repro109-wine-c9-matrix-xcode27-arm64.yml`:
-   отдельные задания sdk, deps10, moltenvk2 и compiler, fail-fast:false.
-   Полную `.github/workflows/repro109-wine-c9-xcode27-arm64.yml` запускайте
-   только после зелёной матрицы через
-   GitHub Actions → Run workflow. Требуются только read permissions;
-   подпись, нотаризация и отправка в выпуски отсутствуют.
-2. Образ `xcode-27`: Python 3.13.7 arm64, Xcode 27.0/27A266a, SDK 27.0;
-   DEVELOPER_DIR=/Applications/Xcode_27.app/Contents/Developer.
-   Образ предварительный; фактическое время очереди нужно измерить.
-   Сначала выполняет `python3 -I -B build/repro109wine/build_full.py --check-inputs`.
-3. Сборка выполняется командой:
-   `python3 -I -B build/repro109wine/build_full.py --profile github-xcode27-arm64 --build --work "$RUNNER_TEMP/repro109-wine-c9-work" --jobs 3`.
-   Каталог должен отсутствовать до запуска. Общее ограничение драйвера 330 минут,
-   GitHub job — 360 минут. Перезапуск с прежним каталогом отвергается.
-4. Заберите artifact `repro109-wine-c9-<commit>`: архив Wine,
-   исходно собранные зависимости и MoltenVK, SHA256 архивов, полные отчёты,
-   первый отказ и код завершения. Частичный архив после отказа не является PASS.
+The pinned cloud profile uses the `xcode-27` ARM64 runner, Python 3.13.7,
+Xcode 27.0/27A266a and SDK 27.0. SDK preflight checks both x18 ABI exports before
+downloads. There is no SDK fallback. The full driver uses a fresh work directory,
+two build jobs and a 330-minute deadline, bounded by the 360-minute workflow job.
 
-До скачивания стороннего исходника проверяются выбранный Xcode/SDK/компилятор
-и обе функции x18 ABI в SDK. Прежняя облачная SDK 26.2 дала 0/0 экспортов;
-профиль 27.0 требует их наличия до скачиваний. При отсутствии
-задача завершится на `SDK_PREFLIGHT`, с нулём скачиваний и компиляций.
-Профиль измеряет полный clang version из закреплённого Xcode до скачиваний;
-дополнительная проверка точной строки clang пока NOT_ENABLED. Первый облачный
-отчёт нужен, чтобы закрепить её. Автоматического выбора другого SDK нет.
+## ARM64EC compiler requirement
 
-Затем существующие драйверы собирают зависимости deps14, официальный MoltenVK
-1.4.1 со всеми шестью закреплёнными External и полный Wine для
-`aarch64,arm64ec,x86_64,i386`. Источники и архивы закреплены SHA256 / Git revision;
-выгрузка и исполнение стороннего происходят только внутри облачной задачи.
-LLVM-MinGW 20260505 используется как закреплённый инструмент компиляции.
-Он пока поставляется официальным готовым архивом, а не собирается этим рецептом.
+The build tool is the official llvm-mingw **20260908**, containing LLVM 23.1.1.
+Its archive is pinned in both Wine locks to SHA256
+`d1dc5d1ecf3a3ced5ed5544c72f1acd0c8e84eb3024d520ecc6b143eec62a149`
+and 124244100 bytes. This upstream compiler archive is a build dependency;
+the recipe does not claim to build the cross compiler from source.
 
-Сборка идёт из нового out-of-tree `engine/wine/build`, затем выполняет
-`check-build-srcdir.sh` и `check-arm64ec-dist.py` над своим install.
-Ожидается standalone Wine: EC 642/757, `.hexpthk` 642, `.a64xrm` 642,
-как в исходно собранном b43. Число r2 643/759 относится к собранному пакету;
-оно не заменяет standalone счёт. `install skipped` запрещён в результате PASS.
+LLVM 22.1.5 emitted ARM64EC variadic exit thunks that placed the x4/x5 descriptor
+on the x64 stack instead of copying its payload. An SCM call could consequently
+deliver `0x10` as an output pointer and fault inside RPC context unmarshalling.
+[LLVM PR 190933](https://github.com/llvm/llvm-project/pull/190933) fixes this ABI
+boundary. The compiler update applies to all four Wine targets and all generated
+variadic call sites. Do not restore the 20260505 compiler pin.
 
-FEX64 r5+c9 `94bc17c974eba1633c1f15fe227a883a765e1fd5` и FEX32 r5
-собираются отдельным закреплённым workflow hyperbridge. Wine не берёт готовый
-переводчик как вход. Объединение выходов, ABI-проверка c9, функция/секция против
-опубликованного 1.0.9/engine-0227, стенды и полное BUILD.md приложения остаются PENDING.
-Эта задача даёт SOURCE_BUILT_NOT_ACCEPTED, а не принятую версию 1.0.9.
+The compile driver verifies the archive hash and link graph before extraction,
+requires all ten compiler/linker entry points to stay inside its root and records
+the selected binary hashes. Inert transport tests cover redirects, missing tools
+and escaping links, including the extraction path used by Apple Python.
+
+## Outputs and acceptance
+
+The workflow builds source dependencies, pinned MoltenVK and Wine targets
+`aarch64`, `arm64ec`, `x86_64` and `i386`. It retains build logs, producer receipts,
+source manifests, archive hashes and the first failure. `check-build-srcdir.sh`
+and `check-arm64ec-dist.py` validate the selected build and install trees.
+An `install skipped` result cannot be accepted as a complete runtime.
+
+Source-built FEX and graphics components are produced by their separate pinned
+workflows. Release composition must select actual successful artifact IDs,
+commit hashes and digests. A successful Wine build is not release acceptance:
+the complete signed package still needs the native and graphics gates, isolated
+functional game checks, updater verification and curator-run notarization.
