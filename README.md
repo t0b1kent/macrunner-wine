@@ -1,5 +1,11 @@
 # MacRunner Wine
 
+## MacRunner 1.1.0 · November 5, 2026
+
+[MacRunner 1.1.0, build 119](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.0) includes Wine memory-allocation defaults, faster QueryPerformanceCounter, asynchronous exception handling in verified PE modules (including IsBad*), and the Retina mouse/cursor/filter integration. [English release notes](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.0-EN.md) · [Что нового по-русски](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.0-RU.md).
+
+The application was built locally under a one-time exception approved by the owner. Clean GitHub source-build integration continues on [`release/1.1.0-c32r`](https://github.com/t0b1kent/macrunner-wine/tree/release/1.1.0-c32r); convergence with the released bytes is not yet verified. Retina is a per-game toggle. EmulateModeset, shader-cache migration and faster bottle updates are planned for 1.1.1.
+
 Public Wine source for [MacRunner releases](https://github.com/t0b1kent/macrunner-app/releases),
 based on CodeWeavers CrossOver 26.1.0 / Wine 11.0. MacRunner integrates native
 macOS Wine with [HyperBridge](https://github.com/t0b1kent/hyperbridge).
