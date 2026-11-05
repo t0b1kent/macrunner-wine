@@ -100,6 +100,38 @@ def check_release_sources(source, lock):
     return dict(state='PRESENT', files=len(rows), overlay_files=len(lock['overlay']), sources=rows)
 
 
+def prepare_loader_bundle_runtime(source, reports):
+    """Resolve ntdll beside the engine when a signed app contains the loader.
+
+    Keep the installed Wine and build-tree paths intact. The regular executable
+    in the restricted-entitlement app cannot be an external or internal symlink.
+    """
+    target = source / 'loader/main.c'
+    if target.is_symlink() or not target.is_file():
+        raise ValueError('Wine loader source must be an ordinary file')
+    before = target.read_bytes()
+    if len(before) != 14482 or sha(before) != 'd7311114f1d5b28b588570e74aeb79944b41958ad739b1dd1c4bfa81a1f23643':
+        raise ValueError('Pinned public Wine loader runtime source drift')
+    anchor = b'    if ((p = remove_tail( dir, "/loader" )))\n'
+    addition = (b'#ifdef __APPLE__\n'
+                b'    /* The provisioned loader is a regular executable in the signed helper. */\n'
+                b'    if ((p = remove_tail( dir, "/wine-loader/MacRunner Wine Loader.app/Contents/MacOS" )))\n'
+                b'        path = build_path( p, "engine/wine/lib/wine/aarch64-unix/ntdll.so" );\n'
+                b'    else\n'
+                b'#endif\n')
+    if before.count(anchor) != 1:
+        raise ValueError('Wine loader runtime anchor differs')
+    after = before.replace(anchor, addition + anchor)
+    target.write_bytes(after)
+    record = dict(status='BUNDLED_LOADER_RUNTIME_SOURCE_PREPARED_NOT_LINKED',
+                  path='loader/main.c', before_sha256=sha(before), after_sha256=sha(after),
+                  before_bytes=len(before), after_bytes=len(after),
+                  retained_layouts=['installed-wine', 'wine-build-tree'],
+                  new_layout='signed-helper-and-sibling-engine', runtime='NOT_EXECUTED')
+    (reports / 'loader-bundle-runtime-source.json').write_text(json.dumps(record, indent=2) + '\n')
+    return record
+
+
 def prepare_loader_game_mode(source, reports):
     """Put the accepted Game Mode keys in Wine's embedded plist before linking.
 
@@ -389,6 +421,7 @@ def build(args, lock):
     keyboard_source = late_source.apply(src, out, command)
     release110_source = release_source.apply(src, out, command)
     loader_game_mode = prepare_loader_game_mode(src, out)
+    loader_bundle_runtime = prepare_loader_bundle_runtime(src, out)
     header_sources = check_header_sources(src, lock, out, baseline=base_headers)
     hb = root / 'engine/hyperbridge'
     for part in ['include', 'src']:
@@ -431,6 +464,7 @@ def build(args, lock):
     (out / 'build-inputs.json').write_text(json.dumps(dict(base_revision=lock['revision'],
         keyboard109_source=keyboard_source,
         loader_game_mode_source=loader_game_mode,
+        loader_bundle_runtime_source=loader_bundle_runtime,
         source_lock_sha256=sha((RECIPE / 'wine.lock.json').read_bytes()), dependencies_sha256=args.dependencies_sha256,
         llvm_mingw_archive_sha256=tool['llvm_mingw_sha256'],
         configure_argv=argv, install_argv=install_command(install),
@@ -456,6 +490,7 @@ def build(args, lock):
                    header_sources_report='header-sources.json', checked_headers=len(header_sources['required_headers']))
     result['release110_source'] = release110_source
     result['loader_game_mode_source_report'] = 'loader-game-mode-source.json'
+    result['loader_bundle_runtime_source_report'] = 'loader-bundle-runtime-source.json'
     result['loader_game_mode_output'] = 'D_EMBEDDED_PLIST_AND_BUNDLE_COMPARISON_PENDING'
     (out / 'RESULT.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result))
