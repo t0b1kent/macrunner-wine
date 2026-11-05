@@ -80,11 +80,25 @@ class CompilerTransport(unittest.TestCase):
         selected = json.loads((recipe / 'wine.lock.json').read_text())['toolchain']
         self.assertEqual(selected['llvm_mingw'], '20260908')
         self.assertEqual(wine.COMPILER_ROOT, 'llvm-mingw-20260908-ucrt-macos-universal')
+        self.assertEqual(wine.COMPILER_VERSION, '23.1.1')
         self.assertEqual(full['compiler']['url'], wine.COMPILER_URL)
         self.assertEqual(full['compiler']['size'], 124244100)
         self.assertEqual(full['compiler']['sha256'],
                          'd1dc5d1ecf3a3ced5ed5544c72f1acd0c8e84eb3024d520ecc6b143eec62a149')
         self.assertEqual(selected['llvm_mingw_sha256'], full['compiler']['sha256'])
+
+    def test_fixed_clang_and_linker_versions_are_accepted(self):
+        for tool, label in [('clang', 'clang version'), ('ld.lld', 'LLD')]:
+            with self.subTest(tool=tool):
+                value = label + ' 23.1.1 (upstream revision)\nTarget: arm64-apple-darwin'
+                self.assertEqual(wine.check_compiler_version(value, tool), value)
+
+    def test_old_and_prefix_collision_compiler_versions_are_rejected(self):
+        for tool, label in [('clang', 'clang version'), ('ld.lld', 'LLD')]:
+            for version in ['22.1.5', '23.1.10', '123.1.1']:
+                with self.subTest(tool=tool, version=version):
+                    with self.assertRaisesRegex(ValueError, 'Pinned compiler version differs'):
+                        wine.check_compiler_version(label + ' ' + version, tool)
 
     def test_compiler_size_drift_rejected_by_full_composer(self):
         selected = full.HERE / 'full.lock.json'
