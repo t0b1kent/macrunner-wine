@@ -71,12 +71,12 @@ def run_stage(args, lock):
             llvm = wine.prepare_compiler(compiler, root / 'toolchain', lock['compiler']['sha256'], out)
             deadline = time.monotonic() + 300
             versions = {}
-            for tool, expected in [('clang', '22.1.5'), ('ld.lld', '22.1.5')]:
+            for tool in ['clang', 'ld.lld']:
                 log = out / (tool + '-version.log')
                 dep.command([str(llvm / 'bin' / tool), '--version'], root, None,
                             log, out, 'compiler:' + tool, deadline, timeout=30)
                 value = log.read_text()
-                full.require(expected in value, 'Pinned compiler version differs: ' + tool)
+                wine.check_compiler_version(value, tool)
                 versions[tool] = value
             result['producer'] = dict(archive_sha256=dep.file_sha(compiler),
                                       versions=versions, layout_report='compiler-archive.json')

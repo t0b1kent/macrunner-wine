@@ -26,6 +26,7 @@ sys.path.insert(0, str(RECIPE.parent / 'repro109deps'))
 import build_deps as dependency_driver
 
 COMPILER_ROOT = 'llvm-mingw-20260908-ucrt-macos-universal'
+COMPILER_VERSION = '23.1.1'
 # LLVM 23.1.1 includes llvm/llvm-project#190933: ARM64EC variadic exit
 # thunks copy the x4/x5 payload rather than exposing its descriptor to x64.
 COMPILER_URL = ('https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/'
@@ -45,6 +46,13 @@ def _check_message(expected, actual, note=''):
         return repr(value)[:600]
     return str(note) + '; expected=' + expected + '; actual=' + repr(
         {key: bounded(value) for key, value in actual.items()})
+
+
+def check_compiler_version(value, tool):
+    label = {'clang': 'clang version', 'ld.lld': 'LLD'}[tool]
+    if not re.match(re.escape(label) + ' ' + re.escape(COMPILER_VERSION) + r'(?:\s|$)', value):
+        raise ValueError('Pinned compiler version differs: ' + tool)
+    return value
 
 
 def sha(data):
@@ -399,8 +407,9 @@ def build(args, lock):
             raise AssertionError(_check_message("version in text([str(prefix / 'bin' / tool_name), '--version'])", {'version': locals().get('_repro_check_26_0', 'NOT_EVALUATED'), "text([str(prefix / 'bin' / tool_name), '--version'])": locals().get('_repro_check_26_1', 'NOT_EVALUATED')}, tool_name))
     compiler_archive = args.llvm_mingw_archive.resolve()
     llvm = prepare_compiler(compiler_archive, root / 'toolchain', tool['llvm_mingw_sha256'], out)
-    if not ((_repro_check_30_0 := '22.1.5') in (_repro_check_30_1 := text([str(llvm / 'bin/clang'), '--version']))):
-        raise AssertionError(_check_message("'22.1.5' in text([str(llvm / 'bin/clang'), '--version'])", {"'22.1.5'": locals().get('_repro_check_30_0', 'NOT_EVALUATED'), "text([str(llvm / 'bin/clang'), '--version'])": locals().get('_repro_check_30_1', 'NOT_EVALUATED')}, 'validation failed'))
+    compiler_version = text([str(llvm / 'bin/clang'), '--version'])
+    (out / 'compiler-version.log').write_text(compiler_version + '\n')
+    check_compiler_version(compiler_version, 'clang')
     src = root / 'engine/wine'; src.mkdir(parents=True)
     fetch_pinned_source(src, lock['repository'], lock['revision'], out / 'source.log', command)
     if not ((_repro_check_31_0 := text(['git', '-C', str(src), 'rev-parse', 'HEAD'])) == (_repro_check_31_1 := lock['revision'])):
