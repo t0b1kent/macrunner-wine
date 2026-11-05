@@ -52,9 +52,16 @@ def check_inputs():
         require(digest((REPO / name).read_bytes()) == expected, 'Pinned driver/lock drift: ' + name)
     wine = json.loads((HERE / 'wine.lock.json').read_bytes())
     require(lock['compiler']['sha256'] == wine['toolchain']['llvm_mingw_sha256'], 'Compiler locks differ')
-    fex = json.loads((REPO / 'repro109/fex64.lock.json').read_bytes())
-    require(lock['compiler'] == dict(name='llvm-mingw', url=fex['llvm_mingw_url'],
-            sha256=fex['llvm_mingw_sha256'], size=fex['llvm_mingw_size']), 'Compiler publisher/size pins differ')
+    # Wine's ARM64EC variadic ABI requires a newer compiler than the historical
+    # FEX recipe. Keep the complete publisher/hash/size check against Wine's own
+    # sealed compiler pin; FEX does not define the compiler policy for Wine.
+    tool = wine['toolchain']
+    version = tool['llvm_mingw']
+    compiler_url = ('https://github.com/mstorsjo/llvm-mingw/releases/download/'
+                    f'{version}/llvm-mingw-{version}-ucrt-macos-universal.tar.xz')
+    require(lock['compiler'] == dict(name='llvm-mingw', url=compiler_url,
+            sha256=tool['llvm_mingw_sha256'], size=tool['llvm_mingw_size']),
+            'Compiler publisher/size pins differ')
     # The outer lock can match while MoltenVK still pins an older shared recipe.
     # Validate with the actual consumer before expensive dependency compilation.
     moltenvk = load_driver('repro109_full_moltenvk_inputs', REPO / 'repro109moltenvk/build_moltenvk.py')

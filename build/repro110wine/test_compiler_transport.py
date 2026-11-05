@@ -13,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_wine as wine
+import build_full as full
 import private_curl
 
 
@@ -30,7 +31,7 @@ class CompilerTransport(unittest.TestCase):
         self.redirect = None
 
     def make_archive(self, *, escape=False, missing=None):
-        top = 'llvm-mingw-20260505-ucrt-macos-universal/bin/'
+        top = wine.COMPILER_ROOT + '/bin/'
         data = b'OWNED INERT COMPILER FIXTURE; NOT EXECUTABLE'
         with tarfile.open(self.body, 'w:xz') as stream:
             for name in ['clang', 'ld.lld']:
@@ -72,6 +73,31 @@ class CompilerTransport(unittest.TestCase):
     def unpack(self, target=None):
         target = self.body if target is None else target
         return wine.prepare_compiler(target, self.root / 'toolchain', self.row['sha256'], self.out)
+
+    def test_production_compiler_has_fixed_arm64ec_variadic_abi(self):
+        recipe = Path(wine.__file__).resolve().parent
+        full = json.loads((recipe / 'full.lock.json').read_text())
+        selected = json.loads((recipe / 'wine.lock.json').read_text())['toolchain']
+        self.assertEqual(selected['llvm_mingw'], '20260908')
+        self.assertEqual(wine.COMPILER_ROOT, 'llvm-mingw-20260908-ucrt-macos-universal')
+        self.assertEqual(full['compiler']['url'], wine.COMPILER_URL)
+        self.assertEqual(full['compiler']['size'], 124244100)
+        self.assertEqual(full['compiler']['sha256'],
+                         'd1dc5d1ecf3a3ced5ed5544c72f1acd0c8e84eb3024d520ecc6b143eec62a149')
+        self.assertEqual(selected['llvm_mingw_sha256'], full['compiler']['sha256'])
+
+    def test_compiler_size_drift_rejected_by_full_composer(self):
+        selected = full.HERE / 'full.lock.json'
+        original = Path.read_bytes
+        altered = json.loads(original(selected))
+        altered['compiler']['size'] += 1
+
+        def read_bytes(path):
+            return json.dumps(altered).encode() if path == selected else original(path)
+
+        with mock.patch.object(Path, 'read_bytes', autospec=True, side_effect=read_bytes):
+            with self.assertRaisesRegex(ValueError, 'Compiler publisher/size pins differ'):
+                full.check_inputs()
 
     def test_real_download_redirect_and_unpack_with_inert_tools(self):
         self.redirect = 'https://release-assets.githubusercontent.com/owned-compiler'

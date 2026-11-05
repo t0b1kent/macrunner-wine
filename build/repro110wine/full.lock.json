@@ -9,8 +9,8 @@
     "repro109deps/source_fixes.py": "cf406e73da199481f76f6478da507285cc11fd1259d2e1df081cd15908b8ed43",
     "repro109moltenvk/build_moltenvk.py": "d9c2770dbe034dfb0bb84d02395402e40471a831bc2df9d7b63130e2d176e317",
     "repro109moltenvk/moltenvk.lock.json": "720e0ce9f5dbb30bec0304ad863c34df98e5feb63cd6aa17adc76d829934fc7b",
-    "repro110wine/build_wine.py": "151ae644a921c0deef1316f56561fa428238623014f682352ac434f9cc577785",
-    "repro110wine/wine.lock.json": "296a4e1ffd7b47152b388179701865e61c81f39510a29bce16e5939a47ad5a7e",
+    "repro110wine/build_wine.py": "81d8b8b1b982b3f859288fbf08adb8c962a56e34232f37c24e2cf9754eb55807",
+    "repro110wine/wine.lock.json": "5dbaa09d4529089ef32ccacb3a4a8fb73c60db2e0e56a23bfd7e353a9e839396",
     "repro110wine/check-build-srcdir.sh": "ac378727521764ad407f4276443b3411a5cf31c4a3f0fe4b13b54a57407299e4",
     "repro110wine/check-arm64ec-dist.py": "b9a00a75e80341717ea39aad6d85d93b1e72c9e5ece63bd87bd14c540cafbad9",
     "repro109/public_archive.py": "a54776c6143b17ea336e16a9ce9f43262b5b5eaec669e26524e5eedf6b92f3bb",
@@ -24,7 +24,7 @@
     "repro110wine/keyboard109.lock.json": "b4bceac3e1d4cbb2a078010166693aba830c05748f09865a42c6535485b58ec4",
     "repro110wine/late_source.py": "8145eaf5e90a68e9675e4e69b36cf4ab1a7cec054f1103a21d96dec5b1eefcef",
     "repro110wine/late/0097-winemac-keyboard-ascii.patch": "0d5ea043c78fd408cb85d6688a98df28600ba929eb7d22cc92ab201dafe39a12",
-    "repro110wine/build_full.py": "b99071bb8abcbafac6bcbae4157ef14557b0a9ec8671e1b9333a4eb541d2e81a",
+    "repro110wine/build_full.py": "12a7d9d160eb62e5b0a801b696afc2b8bcecae01778b58cd09aba32141cd8172",
     "repro110wine/github-xcode27.lock.json": "18a3db51d5f3f601b59e6226186ce6011d0e94b75d29b2dbe38a3d1ef60f22a9",
     "repro110wine/matrix.py": "38c4a5efd09476b65ddcb9dc167eba1ae2858bf9d409b611f17de4a5c881bafb",
     "repro110wine/github-macos15.lock.json": "eb29cff86b28659b42ee404887510874f42ce239c6d65ed84473fdc101171bcf",
@@ -47,8 +47,8 @@
   },
   "compiler": {
     "name": "llvm-mingw",
-    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260505/llvm-mingw-20260505-ucrt-macos-universal.tar.xz",
-    "sha256": "050379de888f0c843787819dadf183df3693330a5724643919e9121f16355295",
-    "size": 121913248
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/llvm-mingw-20260908-ucrt-macos-universal.tar.xz",
+    "sha256": "d1dc5d1ecf3a3ced5ed5544c72f1acd0c8e84eb3024d520ecc6b143eec62a149",
+    "size": 124244100
   }
 }

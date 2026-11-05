@@ -25,8 +25,11 @@ import public_archive
 sys.path.insert(0, str(RECIPE.parent / 'repro109deps'))
 import build_deps as dependency_driver
 
-COMPILER_URL = ('https://github.com/mstorsjo/llvm-mingw/releases/download/20260505/'
-                'llvm-mingw-20260505-ucrt-macos-universal.tar.xz')
+COMPILER_ROOT = 'llvm-mingw-20260908-ucrt-macos-universal'
+# LLVM 23.1.1 includes llvm/llvm-project#190933: ARM64EC variadic exit
+# thunks copy the x4/x5 payload rather than exposing its descriptor to x64.
+COMPILER_URL = ('https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/'
+                'llvm-mingw-20260908-ucrt-macos-universal.tar.xz')
 late_spec = importlib.util.spec_from_file_location('repro109_wine_late_source', RECIPE / 'late_source.py')
 late_source = importlib.util.module_from_spec(late_spec)
 late_spec.loader.exec_module(late_source)
@@ -314,7 +317,7 @@ def prepare_compiler(archive, destination, expected_sha256, out):
             stream.extractall(destination, members=members, filter='data')
         else:
             stream.extractall(destination, members=members)
-    llvm = destination / 'llvm-mingw-20260505-ucrt-macos-universal'
+    llvm = destination / COMPILER_ROOT
     if not llvm.is_dir() or llvm.is_symlink():
         raise ValueError('Compiler archive root differs')
     required = ['clang', 'ld.lld'] + [f'{arch}-w64-mingw32-{suffix}'
