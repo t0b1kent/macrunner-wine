@@ -1,11 +1,11 @@
 # Reuse this registered workflow path for both sealed graphics source families.
-name: MacRunner 1.1.1 graphics source inputs
-run-name: c33r ${{ inputs.component }} source inputs at ${{ inputs.source_revision }}
+name: MacRunner 1.1.1 graphics source stages
+run-name: c33r ${{ inputs.component }} ${{ inputs.stage }} at ${{ inputs.source_revision }}
 on:
   workflow_dispatch:
     inputs:
       component:
-        description: Graphics source family to reconstruct without compiling
+        description: Graphics source family
         type: choice
         options: [dxmt, indiana]
         default: dxmt
@@ -13,12 +13,17 @@ on:
         description: Full immutable DXMT commit, or application commit for Indiana
         type: string
         required: true
+      stage:
+        description: Compile is currently implemented for Indiana only
+        type: choice
+        options: [source, compile]
+        default: source
 permissions:
   contents: read
   actions: read
 jobs:
   dxmt:
-    if: inputs.component == 'dxmt'
+    if: inputs.component == 'dxmt' && inputs.stage == 'source'
     runs-on: xcode-27
     timeout-minutes: 20
     strategy:
@@ -98,7 +103,7 @@ jobs:
   indiana:
     if: inputs.component == 'indiana'
     runs-on: xcode-27
-    timeout-minutes: 25
+    timeout-minutes: 160
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
       PYTHONDONTWRITEBYTECODE: '1'
@@ -116,10 +121,29 @@ jobs:
         with:
           python-version: '3.13.7'
           architecture: arm64
+      - name: Checkout the existing immutable artifact transport
+        if: inputs.stage == 'compile'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/macrunner-wine
+          ref: 26b6b197851a289767dbce6c8dcd25eb8223641e
+          path: transport
+          sparse-checkout: build/release110/graphics_inputs.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Checkout the existing immutable archive reader
+        if: inputs.stage == 'compile'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/dxmt
+          ref: 4c895842245065af15c82bd56757d3bae97b1d8e
+          path: dxmt
+          persist-credentials: false
       - name: Test the inert source selector controls
         run: |
           REPRO109_TEST_TMP="$RUNNER_TEMP" python3 -I -B -m unittest discover \
             -s app/build/repro110app -p test_indiana.py
+          python3 -I -B -m unittest discover -s build/release110 -p test_indiana_inputs.py
       - name: Acquire only the five pinned public source archives
         env:
           SOURCE_REVISION: ${{ inputs.source_revision }}
@@ -160,19 +184,40 @@ jobs:
           (work / 'PROVENANCE.json').write_text(json.dumps(record, indent=2) + '\n')
           print(json.dumps(record))
           PY
-      - name: Reconstruct the real sealed source trees without compiling
+      - name: Restore CMake and Ninja from the successful source-built dependency job
+        if: inputs.stage == 'compile'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          nice -n 20 python3 -I -B app/build/repro110app/build_indiana.py --stage source \
-            --archives "$RUNNER_TEMP/c33r-indiana-inputs/archives" \
-            --work "$RUNNER_TEMP/c33r-indiana-source"
+          python3 -I -B build/release110/indiana_inputs.py \
+            --transport "$GITHUB_WORKSPACE/transport/build/release110/graphics_inputs.py" \
+            --dxmt "$GITHUB_WORKSPACE/dxmt" --work "$RUNNER_TEMP/c33r-indiana-tools"
+      - name: Reconstruct or compile the sealed Indiana source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--stage '${{ inputs.stage }}' --archives "$RUNNER_TEMP/c33r-indiana-inputs/archives"
+                --work "$RUNNER_TEMP/c33r-indiana-source")
+          if [ '${{ inputs.stage }}' = compile ]; then
+            prefix="$RUNNER_TEMP/repro110-wine-c12-work/deps/prefix"
+            args+=(--cmake "$prefix/bin/cmake" --ninja "$prefix/bin/ninja")
+          fi
+          nice -n 20 python3 -I -B app/build/repro110app/build_indiana.py "${args[@]}"
+      - name: Preserve the compiled component with executable modes
+        if: inputs.stage == 'compile'
+        run: |
+          tar -czf "$RUNNER_TEMP/c33r-indiana-component.tar.gz" -C "$RUNNER_TEMP/c33r-indiana-source/outputs" .
+          shasum -a 256 "$RUNNER_TEMP/c33r-indiana-component.tar.gz" > "$RUNNER_TEMP/c33r-indiana-component.tar.gz.sha256"
       - name: Preserve source verification and bounded download receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release111-indiana-source-${{ inputs.source_revision }}
+          name: release111-indiana-${{ inputs.stage }}-${{ inputs.source_revision }}
           path: |
             ${{ runner.temp }}/c33r-indiana-inputs/PROVENANCE.json
             ${{ runner.temp }}/c33r-indiana-inputs/download-reports/public-archives/*/receipt.json
-            ${{ runner.temp }}/c33r-indiana-source/reports/RESULT.json
+            ${{ runner.temp }}/c33r-indiana-source/reports
+            ${{ runner.temp }}/c33r-indiana-tools/reports
+            ${{ runner.temp }}/c33r-indiana-component.tar.gz*
           if-no-files-found: warn
           retention-days: 90
