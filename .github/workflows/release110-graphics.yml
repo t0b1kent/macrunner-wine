@@ -1,0 +1,178 @@
+# Reuse this registered workflow path for both sealed graphics source families.
+name: MacRunner 1.1.1 graphics source inputs
+run-name: c33r ${{ inputs.component }} source inputs at ${{ inputs.source_revision }}
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Graphics source family to reconstruct without compiling
+        type: choice
+        options: [dxmt, indiana]
+        default: dxmt
+      source_revision:
+        description: Full immutable DXMT commit, or application commit for Indiana
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  dxmt:
+    if: inputs.component == 'dxmt'
+    runs-on: xcode-27
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        cell: [recipe, c17, native, hbdx9, metal]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/dxmt
+          ref: ${{ inputs.source_revision }}
+          path: dxmt
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: misyltoad/mingw-directx-headers
+          ref: 9df86f2341616ef1888ae59919feaa6d4fad693d
+          path: directx-headers
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: madler/zlib
+          ref: 51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf
+          path: zlib
+          sparse-checkout: contrib/puff
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Verify the selected graphics source cell
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_CELL: ${{ matrix.cell }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C dxmt rev-parse HEAD)" = "$SOURCE_REVISION"
+          reports="$RUNNER_TEMP/c33r-graphics-source-reports"
+          mkdir -p "$reports"
+          case "$SOURCE_CELL" in
+            recipe)
+              REPRO109_TEST_TMP="$RUNNER_TEMP" python3 -I -B -m unittest discover \
+                -s dxmt/build/repro110gfx -p test_inputs.py > "$reports/recipe.log" 2>&1
+              ;;
+            metal)
+              if ! xcrun -sdk macosx metal --version > "$reports/metal.log" 2>&1; then
+                nice -n 20 xcodebuild -downloadComponent MetalToolchain >> "$reports/metal.log" 2>&1
+              fi
+              xcrun -sdk macosx metal --version >> "$reports/metal.log" 2>&1
+              ;;
+            c17|native|hbdx9)
+              nice -n 20 python3 -I -B dxmt/build/repro110gfx/prepare_source.py \
+                --variant "$SOURCE_CELL" --headers "$GITHUB_WORKSPACE/directx-headers" \
+                --zlib "$GITHUB_WORKSPACE/zlib" --out "$RUNNER_TEMP/c33r-graphics-source" \
+                > "$reports/SOURCE-RESULT.json"
+              ;;
+            *) exit 2 ;;
+          esac
+      - name: Preserve source verification reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release111-dxmt-source-${{ matrix.cell }}-${{ inputs.source_revision }}
+          path: ${{ runner.temp }}/c33r-graphics-source-reports
+          if-no-files-found: warn
+          retention-days: 90
+  indiana:
+    if: inputs.component == 'indiana'
+    runs-on: xcode-27
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/macrunner-app
+          ref: ${{ inputs.source_revision }}
+          path: app
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Test the inert source selector controls
+        run: |
+          REPRO109_TEST_TMP="$RUNNER_TEMP" python3 -I -B -m unittest discover \
+            -s app/build/repro110app -p test_indiana.py
+      - name: Acquire only the five pinned public source archives
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          python3 -I -B - <<'PY'
+          from functools import partial
+          import hashlib, json, os, pathlib, re, subprocess, sys
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          source = root / 'app'
+          revision = os.environ['SOURCE_REVISION']
+          if not re.fullmatch('[0-9a-f]{40}', revision):
+              raise SystemExit('An immutable application commit is required')
+          actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+          if actual != revision:
+              raise SystemExit('Application checkout differs')
+          recipe = source / 'build/repro110app'
+          lock_path = recipe / 'moltenvk-indiana.lock.json'
+          lock = json.loads(lock_path.read_bytes())
+          sys.path.insert(0, str(root / 'build/repro109'))
+          import public_archive
+          from private_curl import source_transfer
+          work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'c33r-indiana-inputs'
+          archives = work / 'archives'; archives.mkdir(parents=True)
+          reports = work / 'download-reports'; reports.mkdir()
+          transfer = partial(source_transfer, allowed_hosts=['github.com', 'codeload.github.com',
+              'release-assets.githubusercontent.com', 'objects.githubusercontent.com'])
+          rows = [dict(lock['sources']['macrunner'], name='indiana'), *lock['sources']['pinned']]
+          verified = []
+          for row in rows:
+              request = dict(name=row['name'].lower(), url=row['url'], size=row['bytes'], sha256=row['sha256'])
+              destination = archives / (row['name'] + '.tar.gz')
+              receipt = public_archive.download(request, destination, reports, transfer=transfer)
+              verified.append(dict(name=row['name'], bytes=destination.stat().st_size,
+                  sha256=hashlib.file_digest(destination.open('rb'), 'sha256').hexdigest()))
+          record = dict(source_revision=revision, host_revision=os.environ['GITHUB_SHA'],
+                        lock_sha256=hashlib.file_digest(lock_path.open('rb'), 'sha256').hexdigest(),
+                        verified_archives=verified, signing='NOT_PERFORMED', compilation='NOT_PERFORMED')
+          (work / 'PROVENANCE.json').write_text(json.dumps(record, indent=2) + '\n')
+          print(json.dumps(record))
+          PY
+      - name: Reconstruct the real sealed source trees without compiling
+        run: |
+          nice -n 20 python3 -I -B app/build/repro110app/build_indiana.py --stage source \
+            --archives "$RUNNER_TEMP/c33r-indiana-inputs/archives" \
+            --work "$RUNNER_TEMP/c33r-indiana-source"
+      - name: Preserve source verification and bounded download receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release111-indiana-source-${{ inputs.source_revision }}
+          path: |
+            ${{ runner.temp }}/c33r-indiana-inputs/PROVENANCE.json
+            ${{ runner.temp }}/c33r-indiana-inputs/download-reports/public-archives/*/receipt.json
+            ${{ runner.temp }}/c33r-indiana-source/reports/RESULT.json
+          if-no-files-found: warn
+          retention-days: 90
