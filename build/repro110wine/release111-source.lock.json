@@ -1,0 +1,829 @@
+{
+  "schema": 1,
+  "release": "1.1.1",
+  "candidate": "c33r",
+  "engine_sha256": "2dff66a24b9f63ce395e9824b32b3512be618e4f6db11b10318f344e63171e35",
+  "base_revision": "b812a090e2ca58c3902008929facd71f15fc3fc4",
+  "after": "release110-c32r",
+  "patch": "late/release111-c33r.patch",
+  "patch_identity": {
+    "bytes": 2872218,
+    "sha256": "41ef75cfee1a8ba58829c085884604bc463d31f8b79bfe848157bdc2bb07eabd"
+  },
+  "files": [
+    {
+      "path": "dlls/dsound/Makefile.in",
+      "before": {
+        "bytes": 277,
+        "sha256": "58e56260ae53ef077f38bbfbc3935697845397f4f42918b469e2df3803592f95"
+      },
+      "after": {
+        "bytes": 356,
+        "sha256": "bcdcbab4e8303f3d4f147a78f40930573c412303b1e0c9b729a0568d23834d64"
+      }
+    },
+    {
+      "path": "dlls/dsound/buffer.c",
+      "before": {
+        "bytes": 40255,
+        "sha256": "fdc9d39b5d4fedca2fa70b99e44a845f18bf7d7cc37b8c2b3740043175d6a929"
+      },
+      "after": {
+        "bytes": 40712,
+        "sha256": "324a69044bdb66eeff851dbf35c996ade8116207142f3ee3555391e733b19558"
+      }
+    },
+    {
+      "path": "dlls/dsound/dsn_lock.h",
+      "before": null,
+      "after": {
+        "bytes": 1812,
+        "sha256": "4a878f3055744816c7f0b90e8e767fa4b7ea71b63e3e7d3c28ce2e3efcaa86a9"
+      }
+    },
+    {
+      "path": "dlls/dsound/dsound.c",
+      "before": {
+        "bytes": 38701,
+        "sha256": "75db79900168215c87a6a7bddb3eb43cbea8ba2e3a2ab579ed084b61bdfcd9e2"
+      },
+      "after": {
+        "bytes": 38780,
+        "sha256": "5d084d231ef2251665a6e82d112913dcd0db2eaeb3268626e4a19ca122da18b1"
+      }
+    },
+    {
+      "path": "dlls/dsound/dsound_private.h",
+      "before": {
+        "bytes": 10496,
+        "sha256": "0c41b2392a6b054f42d7f8656736b7f1008e203a8415415dc2f45cd8d7a78bd3"
+      },
+      "after": {
+        "bytes": 10774,
+        "sha256": "708ce0206a9d8b824f36a886c511f29a92bf632cc3b3b910f75ec7e33d91a93e"
+      }
+    },
+    {
+      "path": "dlls/dsound/mixer.c",
+      "before": {
+        "bytes": 24526,
+        "sha256": "b17f2a6094044c6a90589a71a8bffff55e0c638c2d95949e46805ce7e1afc15a"
+      },
+      "after": {
+        "bytes": 24859,
+        "sha256": "c2743b82c1f851654ed969ea19fb5e56370debae9524bf3c424a85d052882e7b"
+      }
+    },
+    {
+      "path": "dlls/dsound/native.c",
+      "before": null,
+      "after": {
+        "bytes": 60241,
+        "sha256": "a8b49b47571e9ebe005965742179eea5e75052a05688ba0b01ca988556048a02"
+      }
+    },
+    {
+      "path": "dlls/dsound/primary.c",
+      "before": {
+        "bytes": 35622,
+        "sha256": "bb4c78aeb68417e9b98d554920d97d32893a57a0f1ca44f8388ddd1d504c68aa"
+      },
+      "after": {
+        "bytes": 35798,
+        "sha256": "2f0a93038c0912c7167735c3fa56d43bdb683bf03cad77d3497ffcd452aff5b9"
+      }
+    },
+    {
+      "path": "dlls/dsound/sound3d.c",
+      "before": {
+        "bytes": 36354,
+        "sha256": "ed9e8fb5ecb6e20efee1935676152de8e8f16609ae785b62d314f76242f827b6"
+      },
+      "after": {
+        "bytes": 36433,
+        "sha256": "f4821e1354849120a0732b1e6c0d9a961a7b3e7d74b59fb58a4b1f419fe53569"
+      }
+    },
+    {
+      "path": "dlls/dsound/unixlib.c",
+      "before": null,
+      "after": {
+        "bytes": 51417,
+        "sha256": "6381c44540422b99ca95c99ce12beff194805fdf1d8b7a6b04961180abd5a0ab"
+      }
+    },
+    {
+      "path": "dlls/dsound/unixlib.h",
+      "before": null,
+      "after": {
+        "bytes": 11109,
+        "sha256": "3379ae40a99b2f796142bbe1b3640bb9ab17bff3fd9de75adace1aa3f52e3a89"
+      }
+    },
+    {
+      "path": "dlls/kernel32/kernel32.spec",
+      "before": {
+        "bytes": 88316,
+        "sha256": "ad2c1af8e313c485268e8d4e614f797101a046a583375d858b77b73ebdd9f719"
+      },
+      "after": {
+        "bytes": 88604,
+        "sha256": "0c3700d5ada0065cb5612fbe99874463a89e25d45edf85afeecc7137f63d3a2e"
+      }
+    },
+    {
+      "path": "dlls/kernel32/thread.c",
+      "before": {
+        "bytes": 5247,
+        "sha256": "535fb73b944d7a64afa2faa8ff611ad2eac3309696783a852c364e5fb11e3701"
+      },
+      "after": {
+        "bytes": 8895,
+        "sha256": "023a0bdbf6a0b2a5e6f1724efded2c0c704b8d5ab18d6d51034154bd385e263d"
+      }
+    },
+    {
+      "path": "dlls/mmdevapi/client.c",
+      "before": {
+        "bytes": 52296,
+        "sha256": "791c2d19c0d979a24036f6210994fc5d825c73070f45fa20b04bac8949e8a6d1"
+      },
+      "after": {
+        "bytes": 53172,
+        "sha256": "16b3b596635208936c36d09e34dcaaa743c1c0fb6c2620c84cadca1efdc9b813"
+      }
+    },
+    {
+      "path": "dlls/mmdevapi/mmdevapi.spec",
+      "before": {
+        "bytes": 647,
+        "sha256": "ae4a635995de43aa4efaa8a06ab2037860473b15732db1ea3d41fbafe496e131"
+      },
+      "after": {
+        "bytes": 739,
+        "sha256": "475862f5138c3c1aa5bb638cbfb96f6ddffcd1fe88852598c4a9975da3793f46"
+      }
+    },
+    {
+      "path": "dlls/ntdll/ntdll.spec",
+      "before": {
+        "bytes": 87829,
+        "sha256": "a7b90356097244f2d9e0a9dbfcb720ed3383cd5fe3315913154302463879a421"
+      },
+      "after": {
+        "bytes": 87809,
+        "sha256": "41f9b6da0d7452602926a41952762f4f0a02c33fd871172983274a07c0e16a1b"
+      }
+    },
+    {
+      "path": "dlls/ntdll/signal_arm64.c",
+      "before": {
+        "bytes": 208060,
+        "sha256": "0687771f5f7b61fb1df7c0709fc5c4ebdb5896267176b2ee2293afadbfdf6e63"
+      },
+      "after": {
+        "bytes": 210468,
+        "sha256": "3222f85e8b251ef6ad6a1f9f035f17d862c9bc05761805ea15b3da55c8c7c54b"
+      }
+    },
+    {
+      "path": "dlls/ntdll/sync.c",
+      "before": {
+        "bytes": 55963,
+        "sha256": "3a9fd700b86474213b44ef1ed070e201629d8c0b220cb50b6a03642b1e147d61"
+      },
+      "after": {
+        "bytes": 60292,
+        "sha256": "cf2ce0a1704cb6df1b3cf187e186e2c4ff704b4797f134fe3302a50e30ddf03d"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/direct-resume.h",
+      "before": {
+        "bytes": 4219,
+        "sha256": "0d495c512d94c259030b21da9c2a8706d0972529a043cc83906819d5d081452a"
+      },
+      "after": {
+        "bytes": 4484,
+        "sha256": "5defa951eaef42aa0609854bc5c4496e9f037cb5c635138cb0a8f3873f005c59"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/loader.c",
+      "before": {
+        "bytes": 139865,
+        "sha256": "196511aef53044d170c3676b1a727638908384a462239934e220234adf10b358"
+      },
+      "after": {
+        "bytes": 143989,
+        "sha256": "e6fdb475c9e833d91de468a490755481372fcfe1f3503ced88859286f9f88d97"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/macrunner_vm_arena.h",
+      "before": {
+        "bytes": 35567,
+        "sha256": "ff60bd0f2b5ac8fb07bda94668089964f5f4c35e3a0652ced9022d12f7b9c1f3"
+      },
+      "after": {
+        "bytes": 35672,
+        "sha256": "471946cbc87f56e880adfb9ca27911f078f15abbe70613f509e88f59f275653c"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/msync.c",
+      "before": {
+        "bytes": 50992,
+        "sha256": "5f7de9d7f1c10c361996421c15584b73cbf0051b9781bfa059ae180d16ab3c05"
+      },
+      "after": {
+        "bytes": 51189,
+        "sha256": "2224477a3a35266f62f61dc1629fc2af322262e68156941ec7ce603882b8786a"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/process.c",
+      "before": {
+        "bytes": 100358,
+        "sha256": "fb2d9aad85982916de4f0d9a880644b569ae7ee39846c9988652e8dbb23bf889"
+      },
+      "after": {
+        "bytes": 101451,
+        "sha256": "29b7f0c2724b785e97e447f62ac99ba59f0c794a9ec256de240b8c173de6379a"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/server.c",
+      "before": {
+        "bytes": 83198,
+        "sha256": "694d0c5d238c6f55b736b54921ecf6af4b99813a0242d176fb0aae0193ca33c8"
+      },
+      "after": {
+        "bytes": 83474,
+        "sha256": "0708897a77da7922d10186342b03f5a0e921efa4db2a2d697198ee6f0552e714"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/signal_arm64.c",
+      "before": {
+        "bytes": 437081,
+        "sha256": "93f837ceb70d9ad6fb847b5b743895ec946b2845b32442c593a4f1de5de71a19"
+      },
+      "after": {
+        "bytes": 440696,
+        "sha256": "e2dfc1f1faba3a81fcdfcae1bd27f4009d166a5d803d011cc640883cd95a5ac2"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/sync.c",
+      "before": {
+        "bytes": 175471,
+        "sha256": "2b31db29a7a23e7eba2bf69f28837801ac9687deb49d530dd66aa21527c60eab"
+      },
+      "after": {
+        "bytes": 175632,
+        "sha256": "9fa01bfbd148331f841fc42b791b98b24dbded4fedee1b8b012a35a4f6095fbe"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/thread.c",
+      "before": {
+        "bytes": 124133,
+        "sha256": "25143f0b2dc62fd4d012616ba8f327a106a157346445f44fbc35f6b2e392399a"
+      },
+      "after": {
+        "bytes": 126784,
+        "sha256": "c9af71767cff4135a7eae093d5e7927223e8284f1c0560f2e785467937c6c5ae"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/unix_private.h",
+      "before": {
+        "bytes": 41484,
+        "sha256": "382e02b43fc002893a29070907e2360c571b81ee69b25847a1b93a82587cc794"
+      },
+      "after": {
+        "bytes": 42178,
+        "sha256": "7b4a14c957e5463a9c4405255062d17337199c47b183a96adce8fdbe8ae02d4c"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/virtual.c",
+      "before": {
+        "bytes": 521865,
+        "sha256": "a0824a2b4d8ffb3ac4d72fbfde522f56934e4937b18e722dc856aa2b5eb96036"
+      },
+      "after": {
+        "bytes": 530640,
+        "sha256": "9874b9f39103631832e7657d87b80ffadccf6dbddcb2c3ed0a0f5d49acc7fb94"
+      }
+    },
+    {
+      "path": "dlls/win32u/message.c",
+      "before": {
+        "bytes": 193168,
+        "sha256": "93dcd0f46d1675dd932738fa62abcfbbd1b1e6ac45cedb602535c9851bc09877"
+      },
+      "after": {
+        "bytes": 193703,
+        "sha256": "21417b98709632a0bd6821dfd092da80805d1f73422537cd216d7d07a5b0d26d"
+      }
+    },
+    {
+      "path": "dlls/win32u/win32u_private.h",
+      "before": {
+        "bytes": 21808,
+        "sha256": "d74ae56ebf8d5087f1f9e0943d4c656cd71c0da70643b6d09b69925aa2c4c084"
+      },
+      "after": {
+        "bytes": 21940,
+        "sha256": "633082f79dd760682e77348918146aca424d13ef53ff959ce7ac146c419d7396"
+      }
+    },
+    {
+      "path": "dlls/win32u/window.c",
+      "before": {
+        "bytes": 229561,
+        "sha256": "2f0be0bf28c8ab415a7a32095e4e5b5bbc3bf52fc8585ea00550dfe8cc6a0b3c"
+      },
+      "after": {
+        "bytes": 229615,
+        "sha256": "a1d219db4e775ded368069167ddeff557dff3ef9ff199af28c765162de3ec2f6"
+      }
+    },
+    {
+      "path": "dlls/win32u/winstation.c",
+      "before": {
+        "bytes": 42415,
+        "sha256": "e91c60333e3bea721dea10f0cc4258cf86bd19a1e65f7912398082f718bc4927"
+      },
+      "after": {
+        "bytes": 43770,
+        "sha256": "4c2ef1721d3c081c563ab6295427328507a49803352c110c81ae2401dc86f0b4"
+      }
+    },
+    {
+      "path": "dlls/winecoreaudio.drv/coreaudio.c",
+      "before": {
+        "bytes": 72656,
+        "sha256": "635347dcfc86800ed64737c6487a808836240e7846c6af699493e7a683d3f42c"
+      },
+      "after": {
+        "bytes": 76014,
+        "sha256": "b332c34f0aa074ca5d89ae2431c102f1a16bf626d43d34c1ed4e1fe66e804110"
+      }
+    },
+    {
+      "path": "dlls/winemac.drv/cocoa_app.m",
+      "before": {
+        "bytes": 137409,
+        "sha256": "2e1cedfb2b18e685962867aa3953cb65246d37121ed95038fe5bde2ee6bf5a61"
+      },
+      "after": {
+        "bytes": 139608,
+        "sha256": "15a5cd2c4a6cba2e1a416db06a455d443f4547b4dc7925a1a1790fa1489664c8"
+      }
+    },
+    {
+      "path": "dlls/wow64/syscall.c",
+      "before": {
+        "bytes": 201224,
+        "sha256": "7d300a1fcf6efde3cbd37ab7a1d626a8733811bdf6fb6901715bf7269d69a964"
+      },
+      "after": {
+        "bytes": 215317,
+        "sha256": "622884bbe63ca875d34907ee49e39b96429dbfb89be7d07d5cc87a697b4d9070"
+      }
+    },
+    {
+      "path": "include/d3d11shader.h",
+      "before": {
+        "bytes": 13849,
+        "sha256": "32b68040bcff9da9540424fbd2f38bd96bca62e49427baa04d792d9e3fc7e8c7"
+      },
+      "after": {
+        "bytes": 14063,
+        "sha256": "784101da4e006630b900b67931aea0e0dae73086003a8f95988028d7d28571e5"
+      }
+    },
+    {
+      "path": "libs/vkd3d/AUTHORS",
+      "before": {
+        "bytes": 657,
+        "sha256": "bdb8193da040d5748b991c9edf53d44895c21e1b6e6069a4c2268e700b442f97"
+      },
+      "after": {
+        "bytes": 699,
+        "sha256": "0ce4d5c704e7c3261735a39e6ce8879cc4806c97953e5de61d99b48180b29243"
+      }
+    },
+    {
+      "path": "libs/vkd3d/COPYING",
+      "before": {
+        "bytes": 786,
+        "sha256": "ba2942ea4fef8b3f674577cf100a2d44c44f237a6d9514067a776f6979dad1c5"
+      },
+      "after": {
+        "bytes": 786,
+        "sha256": "1f69abfaeee0131bba28ad72d87683a223743d8c9ee1da113fde10cb082f3c91"
+      }
+    },
+    {
+      "path": "libs/vkd3d/config.h",
+      "before": {
+        "bytes": 158,
+        "sha256": "adf78a46b1f29e769e706433149df97b226f1cb73b4a570ac69e0cf2211d9086"
+      },
+      "after": {
+        "bytes": 181,
+        "sha256": "5fd1c2d055eb18dd2a2efbaec9536de11a0531d196faeb7ce97396a261dfaa7b"
+      }
+    },
+    {
+      "path": "libs/vkd3d/include/private/vkd3d_common.h",
+      "before": {
+        "bytes": 20903,
+        "sha256": "37fba8030efbaf6a8535c5c4a69def5cb2b6314b20dbce9617ce22b594e5005e"
+      },
+      "after": {
+        "bytes": 25211,
+        "sha256": "f1e726ab3836b0514eee86e1dcadd047635e9dcdd373d13156a8ccb283b1c9b9"
+      }
+    },
+    {
+      "path": "libs/vkd3d/include/private/vkd3d_shader_utils.h",
+      "before": {
+        "bytes": 1859,
+        "sha256": "e7d3a3e0b29ee27386661eedb04255568a67fc4303f16b657a11b2aab981023d"
+      },
+      "after": {
+        "bytes": 3095,
+        "sha256": "7bb1eaf8bf6ac95fda151e51d9e972e60fbafc2ee103be7e7ef950c6c48f1163"
+      }
+    },
+    {
+      "path": "libs/vkd3d/include/vkd3d.h",
+      "before": {
+        "bytes": 20370,
+        "sha256": "1d0ab9968212a89d43329e7ca1db43a85e2e1e153ef45a9a946c1d53847ee9bd"
+      },
+      "after": {
+        "bytes": 20452,
+        "sha256": "2ff00319e5ec2dc06f9d271a8f9871865afc5b29938e603b123230ca6cb30f0c"
+      }
+    },
+    {
+      "path": "libs/vkd3d/include/vkd3d_shader.h",
+      "before": {
+        "bytes": 133391,
+        "sha256": "937d96d6e919fe1d046fcc3db282cd7309879711dc47c7281d1dabcc7376e6f6"
+      },
+      "after": {
+        "bytes": 137398,
+        "sha256": "27bb621f86f2d4b2bd0aa1efe169c88551dc3a0f2914196617d74acc3798c89c"
+      }
+    },
+    {
+      "path": "libs/vkd3d/include/vkd3d_utils.h",
+      "before": {
+        "bytes": 6518,
+        "sha256": "18d64514a8552907489b50dc3528285b5eec4185fea7b6ed003ae3d14fbd1d79"
+      },
+      "after": {
+        "bytes": 8321,
+        "sha256": "a39e76db582be1011f004642a1c70bbae7837c95427956cd0ad464c7712d42c9"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-common/debug.c",
+      "before": {
+        "bytes": 9744,
+        "sha256": "a8261b4da47126c12f4935a270d3345836cee1ca3f9c3f7402024baee0d43331"
+      },
+      "after": {
+        "bytes": 12957,
+        "sha256": "205c251723176fedbf5b571efd1e4693c12056b861ee28aa8e6feafd021ff7d3"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/d3d_asm.c",
+      "before": {
+        "bytes": 89668,
+        "sha256": "31e5d4c4280ccb8bc985d78f8031b1b13f89c6ac8a8b97d0a2d35c999e8c3572"
+      },
+      "after": {
+        "bytes": 93438,
+        "sha256": "fb88f6396ee9b8ea24b094200ac7014147fd77f6f5a1800184450405c5d9c2f1"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/d3dbc.c",
+      "before": {
+        "bytes": 89484,
+        "sha256": "8ed9f14c39b503a3fa990290d60f79421a34a159a77193a44b8370399916e0a9"
+      },
+      "after": {
+        "bytes": 101087,
+        "sha256": "13105ac4f7cbdcb6d67179e5d827cd5674c90fb1a96444b0e1c32cb6197410d0"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/dxbc.c",
+      "before": {
+        "bytes": 66379,
+        "sha256": "7655acaec7aa37684682d0a928ca86f4d897065dd55b6c5bc81be1668251af28"
+      },
+      "after": {
+        "bytes": 65116,
+        "sha256": "27ca9b8425fe6521600b7ccbb4de2891e3da278ab8ec6ff7482656efe32f5469"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/dxil.c",
+      "before": {
+        "bytes": 402352,
+        "sha256": "78213e4838a2459c562e1f56d85ac0024c45131c0bf4296ade5379c110256220"
+      },
+      "after": {
+        "bytes": 420422,
+        "sha256": "9b577e8525660cce1a431650501869c1894bf2b2cb60b76d96fb3741c4995028"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/fx.c",
+      "before": {
+        "bytes": 197600,
+        "sha256": "bcc43c0fefbd87e91ee0c728252e7655bd135b9e6e7a151daa269aa5f34a90a9"
+      },
+      "after": {
+        "bytes": 213955,
+        "sha256": "12765a9dd1569aa1c6f1b7e5b01a4ff8759ac1edea8b6b7400933d5ff5ec13b5"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/glsl.c",
+      "before": {
+        "bytes": 96936,
+        "sha256": "b2bd6f83efe15fb2eb4a90c25e84764e0faa04166d8d932b94b564af5487bcb7"
+      },
+      "after": {
+        "bytes": 115115,
+        "sha256": "5f81c3dcd74415bba2562551b785a1b4646e6ad709c05e68154cb91bc39b69a1"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/hlsl.c",
+      "before": {
+        "bytes": 178232,
+        "sha256": "5ee9de694195c069ed82fc6f0a471a652efe9ebf9f64b62062c4df8e03c1ecf0"
+      },
+      "after": {
+        "bytes": 182525,
+        "sha256": "22909d1996e7b32ecf5a04d1b9882bcd9d63abca3b02ae8f76cd300b68f722b0"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/hlsl.h",
+      "before": {
+        "bytes": 76040,
+        "sha256": "a173b352f5b4c00d2de2fb8292a2a95fbbb1678eb8ec07847a54c3047e414887"
+      },
+      "after": {
+        "bytes": 77792,
+        "sha256": "a7923b58f4789cc6b04e619daf85cbcc2f3460659ca320b2f283f1feb7fc8211"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/hlsl.l",
+      "before": {
+        "bytes": 19396,
+        "sha256": "35015c0dcba5901de7ad5dee129bd07946522e212b52d908fa049b1d09483798"
+      },
+      "after": {
+        "bytes": 19688,
+        "sha256": "3850824807ff696f724b3c0595504a5b48c250861b10b62eec38791813dddf13"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/hlsl.y",
+      "before": {
+        "bytes": 339911,
+        "sha256": "b88f4a34a9e93f36e8c84e25bfd3a6268241df03b6a820cc3b261a8d19d09b50"
+      },
+      "after": {
+        "bytes": 345751,
+        "sha256": "03bf308f1cb129015624e9a8dfe3c75dd5828d73aec36227e842b2cf2e205301"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c",
+      "before": {
+        "bytes": 558415,
+        "sha256": "eac2ab90028c91a50ae43dd8b23c0bd6eb25d804a038b25cab093ff27b76de4b"
+      },
+      "after": {
+        "bytes": 616539,
+        "sha256": "ff8b459f553a80f350c14e83aef11712ac25cf15aab5c2bad56d2944289c851a"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/hlsl_constant_ops.c",
+      "before": {
+        "bytes": 61414,
+        "sha256": "c67f701653688cc71bcffa20f21918abae6fb78c05fef28f7801265fdaf86dc0"
+      },
+      "after": {
+        "bytes": 62355,
+        "sha256": "91bc7a0b404b0eaa75454851556864410a9e47d0c3ee5e208df6efac8ebc2868"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/ir.c",
+      "before": {
+        "bytes": 540666,
+        "sha256": "ba68439a6327010e788494ab89682ec6c9f68f2f1fa34a36d7412d798bafbd3f"
+      },
+      "after": {
+        "bytes": 673347,
+        "sha256": "1d26bc986b523609e62b456fcf2641f6a5b0a79cf153f8b2c5aa6c98f6fd2b1d"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/msl.c",
+      "before": {
+        "bytes": 94986,
+        "sha256": "43600e141da627c40cf9937db444911b68e44dacb46ce3af8626be639ecca6bc"
+      },
+      "after": {
+        "bytes": 97366,
+        "sha256": "30e9e52eaf5bf57d8a8bb2ce4ebf296a6dbce4ba75dd9e9aa2a0bbe54572f4f9"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/preproc.h",
+      "before": {
+        "bytes": 4324,
+        "sha256": "d9c935148265b4d4dc6766015b7b68d087f5ac1dffe1780efc3137c0896c746e"
+      },
+      "after": {
+        "bytes": 4476,
+        "sha256": "2f18b3cb35f3098d038355965ed6deb0696d420246cda9b6bf8bc1ee07ee8005"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/preproc.l",
+      "before": {
+        "bytes": 30269,
+        "sha256": "3a060600701d9c50f318bee03a90c73cb3f2f0e53e0a2d9c1af3557b60facb8b"
+      },
+      "after": {
+        "bytes": 31453,
+        "sha256": "d7b8c75751e2f8cec9f79aadf2a6ba61ffe3af7dfe8f271aa92d962caa477aee"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/preproc.y",
+      "before": {
+        "bytes": 18601,
+        "sha256": "541d9ac00fab5434e41dbee5f3c32456a9747314e5bf278c9642aa6a04d2712b"
+      },
+      "after": {
+        "bytes": 17674,
+        "sha256": "6d51044486832fa38ddf538ce199579bcf2ffaf361ca5c6ae722ba8ba484cd28"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/spirv.c",
+      "before": {
+        "bytes": 450365,
+        "sha256": "cd55ce322f17448beb7997bb899837efe8665c959a79425ab0ceb7c548f24e0e"
+      },
+      "after": {
+        "bytes": 440601,
+        "sha256": "48515a0465028f7aafb78ba4af1b6018d820d413e14b7aadf78f04655a3d815e"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/tpf.c",
+      "before": {
+        "bytes": 197696,
+        "sha256": "f0af19c719f58a6f9db30891ba3d09e19a4694669c95e77fcbd9fbff488f837a"
+      },
+      "after": {
+        "bytes": 199886,
+        "sha256": "bfcb1fbdca545b8e5febdf4064d1ccee6d09e105c2294c551fd71824e85d1b3c"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c",
+      "before": {
+        "bytes": 79255,
+        "sha256": "fcf115a5355b1de0377ff196ae82fa2c97a177bcca66db169347fe5ea818d55a"
+      },
+      "after": {
+        "bytes": 83726,
+        "sha256": "7cb33f12549f22f20717575aa0fe11bd363231df8351b5cf3942b90df9f1be24"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h",
+      "before": {
+        "bytes": 75506,
+        "sha256": "902cae57afb7dc9682c0a73bf4173c6818f7f9941e7d7bd92670cd18baf1985c"
+      },
+      "after": {
+        "bytes": 83024,
+        "sha256": "45adbc8f5599d890f46dafb7b56af8ffbfedc9e8e35b3ef9fe906adf55c949aa"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-utils/reflection.c",
+      "before": {
+        "bytes": 34144,
+        "sha256": "0cc7699eb6a51036a7228947de9b448c72ab76d67744ee75b9292b907cfbb222"
+      },
+      "after": {
+        "bytes": 60492,
+        "sha256": "eeefd73ad395d16e81ef59c21220a8946a3359652b85a3af66778d3f6e02b763"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d-utils/vkd3d_utils_main.c",
+      "before": {
+        "bytes": 34456,
+        "sha256": "b5b4dfc71cee631b75e4fea820aea5baa10d4630c3257a2a002ff82409cd991c"
+      },
+      "after": {
+        "bytes": 38871,
+        "sha256": "26426801621a666aacd0b57e005e4c2f8852be963b34a568d4e8608bffb20b8d"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d/command.c",
+      "before": {
+        "bytes": 295923,
+        "sha256": "c0c07a5296e9d5642ba59db4958367317f0bbff25ac4afe6a42fa97371b865f6"
+      },
+      "after": {
+        "bytes": 302180,
+        "sha256": "e3f022ff576a7d8187f79ea85572e168e52781a144db995f2e46a494842df6fb"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d/device.c",
+      "before": {
+        "bytes": 241668,
+        "sha256": "6266bb6bfaa81261e2ba7a43d1bbc3c7ecea299a8deef0c1b625c857924e04b8"
+      },
+      "after": {
+        "bytes": 245009,
+        "sha256": "c6cb281ba0050c1cd723519eb93d5efd3632e61964fc88fa2b62d68cc9fa7f4a"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d/resource.c",
+      "before": {
+        "bytes": 187646,
+        "sha256": "1c4ec8cec78d5958823cff3b828cbce7c9038b9f52c65cca7a22ac6260bfd769"
+      },
+      "after": {
+        "bytes": 188702,
+        "sha256": "5e1550f3aed0d988aa669025dfb9096e2eeaf7790c0e95fadd662c2be4efb275"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d/state.c",
+      "before": {
+        "bytes": 172892,
+        "sha256": "0c039dea603a99c9fa5c6a75d4e33baea5435fe03d82dcf76ae620d5d791467c"
+      },
+      "after": {
+        "bytes": 173520,
+        "sha256": "80e23abf0f6a0cbe93d9c0767bb24d5b1aa3b2e0dfbe5ff62bd1502cbf51d820"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d/utils.c",
+      "before": {
+        "bytes": 42971,
+        "sha256": "ef3b552540ccfddb46f4c064a6e0769595071b3cb80ce5149ee59557870895e1"
+      },
+      "after": {
+        "bytes": 43415,
+        "sha256": "4cbd0b6d4342bde560701675e35f906ffff21f5fbf439606e481d8472388f562"
+      }
+    },
+    {
+      "path": "libs/vkd3d/libs/vkd3d/vkd3d_private.h",
+      "before": {
+        "bytes": 56890,
+        "sha256": "63be0ef5feecd0811a0ceef62ed638c54f7c67beef0b5cff1d3d12b91cf3dc52"
+      },
+      "after": {
+        "bytes": 57468,
+        "sha256": "448b9cc3b03198b89e1cbf5cbacf79460442b2ca4a9840f7c08622b4aacefa91"
+      }
+    }
+  ],
+  "new_include_headers": []
+}
