@@ -1,22 +1,33 @@
 # Keep this registered workflow path; component sources are checked out independently by full SHA.
 name: MacRunner 1.1.1 component source build
+run-name: c33r ${{ inputs.component }} ${{ inputs.variant }} at ${{ inputs.source_revision }}
 on:
   workflow_dispatch:
     inputs:
       component:
         description: Component implemented by this workflow version
         type: choice
-        options: [hyperbridge]
+        options: [hyperbridge, graphics]
         default: hyperbridge
       source_revision:
-        description: Full immutable HyperBridge source commit
+        description: Full immutable HyperBridge or DXMT source commit
         type: string
         required: true
+      variant:
+        description: Graphics variant, ignored by the translator producer
+        type: choice
+        options: [all, x64, ec, native, i386, hbdx9-pe, hbdx9-native]
+        default: all
+      stage:
+        description: Graphics build stage
+        type: choice
+        options: [compile, configure]
+        default: compile
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: c33r-${{ inputs.component }}-${{ inputs.source_revision }}
+  group: c33r-${{ inputs.component }}-${{ inputs.variant }}-${{ inputs.source_revision }}
   cancel-in-progress: false
 jobs:
   hyperbridge:
@@ -99,5 +110,131 @@ jobs:
             ${{ runner.temp }}/release111-hyperbridge/fex32/*.log
             ${{ runner.temp }}/release111-hyperbridge/fex64/*.json
             ${{ runner.temp }}/release111-hyperbridge/fex64/*.log
+          if-no-files-found: warn
+          retention-days: 90
+  graphics:
+    if: inputs.component == 'graphics'
+    runs-on: xcode-27
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        variant: ${{ fromJSON(inputs.variant == 'x64' && '["x64"]' || inputs.variant == 'ec' && '["ec"]' || inputs.variant == 'native' && '["native"]' || inputs.variant == 'i386' && '["i386"]' || inputs.variant == 'hbdx9-pe' && '["hbdx9-pe"]' || inputs.variant == 'hbdx9-native' && '["hbdx9-native"]' || '["x64","ec","native","i386","hbdx9-pe","hbdx9-native"]') }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/macrunner-wine
+          ref: 12b358f5442a32fcb320fb0118fad47068d746cf
+          path: wine
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/dxmt
+          ref: ${{ inputs.source_revision }}
+          path: dxmt
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: misyltoad/mingw-directx-headers
+          ref: 9df86f2341616ef1888ae59919feaa6d4fad693d
+          path: directx-headers
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: madler/zlib
+          ref: 51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf
+          path: zlib
+          sparse-checkout: contrib/puff
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Test artifact restoration and sealed source controls
+        run: |
+          python3 -I -B -m unittest discover -s build/release110 -p test_graphics_inputs.py
+          REPRO109_TEST_TMP="$RUNNER_TEMP" python3 -I -B -m unittest discover -s dxmt/build/repro110gfx -p 'test_*.py'
+      - name: Verify the exact selected graphics revision
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          python3 -I -B - <<'PY'
+          import os, re, subprocess
+          pin = os.environ['SOURCE_REVISION']
+          if not re.fullmatch('[0-9a-f]{40}', pin):
+              raise SystemExit('A full immutable graphics revision is required')
+          actual = subprocess.check_output(['git', '-C', 'dxmt', 'rev-parse', 'HEAD'], text=True).strip()
+          if actual != pin:
+              raise SystemExit('Graphics source checkout differs')
+          PY
+      - name: Restore verified source-built Wine SDK, dependencies and LLVM
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          nice -n 20 python3 -I -B build/release110/graphics_inputs.py \
+            --wine "$GITHUB_WORKSPACE/wine" --dxmt "$GITHUB_WORKSPACE/dxmt" \
+            --work "$RUNNER_TEMP/release110-graphics-inputs"
+      - name: Select the Metal Toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release110-graphics-inputs/reports/metal.log"
+          if ! xcrun -sdk macosx metal --version > "$out" 2>&1; then
+            nice -n 20 xcodebuild -downloadComponent MetalToolchain >> "$out" 2>&1
+          fi
+          xcrun -sdk macosx metal --version >> "$out" 2>&1
+      - name: Compile the selected renderer component
+        env:
+          GRAPHICS_VARIANT: ${{ matrix.variant }}
+          GRAPHICS_STAGE: ${{ inputs.stage }}
+        run: |
+          nice -n 20 python3 -I -B - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          temp = pathlib.Path(os.environ['RUNNER_TEMP'])
+          paths = json.loads((temp / 'release110-graphics-inputs/reports/RESULT.json').read_text())['paths']
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          variant = os.environ['GRAPHICS_VARIANT']
+          hbdx9 = variant.startswith('hbdx9-')
+          script = 'build_hbdx9.py' if hbdx9 else 'build.py'
+          command = [sys.executable, '-I', '-B', str(root / 'dxmt/build/repro110gfx' / script),
+                     '--kind' if hbdx9 else '--variant', variant.removeprefix('hbdx9-'),
+                     '--stage', os.environ['GRAPHICS_STAGE'], '--headers', str(root / 'directx-headers'),
+                     '--zlib', str(root / 'zlib'), '--work', str(temp / 'release110-graphics-build')]
+          for name in ['wine', 'compiler', 'llvm', 'meson', 'ninja']:
+              command += ['--' + name, paths[name]]
+          if not hbdx9:
+              command += ['--ec-checker', str(root / 'wine/build/repro110wine/check-arm64ec-dist.py')]
+          env = dict(os.environ, PKG_CONFIG_PATH=paths['deps'] + '/lib/pkgconfig')
+          raise SystemExit(subprocess.run(command, env=env, stdin=subprocess.DEVNULL).returncode)
+          PY
+      - name: Archive compiled component files
+        if: inputs.stage == 'compile'
+        run: |
+          nice -n 20 tar -czf "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz" \
+            -C "$RUNNER_TEMP/release110-graphics-build/outputs" .
+          shasum -a 256 "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz" > "$RUNNER_TEMP/graphics-${{ matrix.variant }}.tar.gz.sha256"
+      - name: Retain native build inputs for the existing stand relink
+        if: inputs.stage == 'compile' && matrix.variant == 'native'
+        run: |
+          nice -n 20 tar -czf "$RUNNER_TEMP/graphics-native-build.tar.gz" \
+            -C "$RUNNER_TEMP/release110-graphics-build" build
+          shasum -a 256 "$RUNNER_TEMP/graphics-native-build.tar.gz" > "$RUNNER_TEMP/graphics-native-build.tar.gz.sha256"
+      - name: Preserve complete reports and component outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release111-graphics-${{ matrix.variant }}-${{ inputs.source_revision }}
+          path: |
+            ${{ runner.temp }}/release110-graphics-inputs/reports
+            ${{ runner.temp }}/release110-graphics-build/reports
+            ${{ runner.temp }}/graphics-*.tar.gz*
           if-no-files-found: warn
           retention-days: 90
