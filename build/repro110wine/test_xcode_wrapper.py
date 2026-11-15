@@ -23,6 +23,9 @@ sys.exit(int(os.environ.get('REPRO109_FIXTURE_RC', '0')))
 '''
 
 
+@unittest.skipUnless(
+    (REPO / 'jobs/repro109-wine-full.sh').is_file() and (REPO / 'ci_scripts/ci_post_clone.sh').is_file(),
+    'Private Xcode Cloud dispatcher fixtures are not distributed in the public Wine source package')
 class Wrapper(unittest.TestCase):
     def exercise(self, rc=0, existing=False, runner_temp=False, private_rejected=False):
         with tempfile.TemporaryDirectory(dir=os.environ['REPRO109_TEST_TMP']) as directory:

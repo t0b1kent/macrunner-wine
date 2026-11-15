@@ -37,6 +37,9 @@ late_spec.loader.exec_module(late_source)
 release_spec = importlib.util.spec_from_file_location('release110_source', RECIPE / 'release110_source.py')
 release_source = importlib.util.module_from_spec(release_spec)
 release_spec.loader.exec_module(release_source)
+candidate_spec = importlib.util.spec_from_file_location('release111_source', RECIPE / 'release111_source.py')
+candidate_source = importlib.util.module_from_spec(candidate_spec)
+candidate_spec.loader.exec_module(candidate_source)
 
 
 def _check_message(expected, actual, note=''):
@@ -92,6 +95,7 @@ def inputs():
         if not ((_repro_check_4_0 := len(data)) == (_repro_check_4_1 := row['bytes']) and (_repro_check_4_2 := sha(data)) == (_repro_check_4_3 := row['sha256'])):
             raise AssertionError(_check_message("len(data) == row['bytes'] and sha(data) == row['sha256']", {'len(data)': locals().get('_repro_check_4_0', 'NOT_EVALUATED'), "row['bytes']": locals().get('_repro_check_4_1', 'NOT_EVALUATED'), 'sha(data)': locals().get('_repro_check_4_2', 'NOT_EVALUATED'), "row['sha256']": locals().get('_repro_check_4_3', 'NOT_EVALUATED')}, row['path']))
     release_source.inputs()
+    candidate_source.inputs()
     late = late_source.inputs()
     if late['wine_revision'] != lock['revision']:
         raise ValueError('Wine base and required keyboard source revision differ')
@@ -432,6 +436,7 @@ def build(args, lock):
             raise AssertionError(_check_message("sha(path.read_bytes()) == row['sha256']", {'sha(path.read_bytes())': locals().get('_repro_check_35_0', 'NOT_EVALUATED'), "row['sha256']": locals().get('_repro_check_35_1', 'NOT_EVALUATED')}, 'validation failed'))
     keyboard_source = late_source.apply(src, out, command)
     release110_source = release_source.apply(src, out, command)
+    release111_source = candidate_source.apply(src, out, command)
     loader_game_mode = prepare_loader_game_mode(src, out)
     loader_bundle_runtime = prepare_loader_bundle_runtime(src, out)
     header_sources = check_header_sources(src, lock, out, baseline=base_headers)
@@ -482,7 +487,8 @@ def build(args, lock):
         configure_argv=argv, install_argv=install_command(install),
         configured_runtime_directories=dict(prefix='/', bindir='/bin', libdir='/lib', datadir='/share'),
         build_environment={k: env[k] for k in
-        ['CC', 'CXX', 'CFLAGS', 'CPPFLAGS', 'LDFLAGS', 'SDKROOT', 'PKG_CONFIG_LIBDIR']},
+        ['CC', 'CXX', 'CFLAGS', 'CPPFLAGS', 'LDFLAGS', 'SDKROOT', 'PKG_CONFIG_LIBDIR',
+         'MACOSX_DEPLOYMENT_TARGET']},
         status='NOT_GOLDEN_FULL_SOURCE_BUILD'), indent=2) + '\n')
     command(['make', '-j' + jobs], out / 'build.log', cwd=build_dir, env=env)
     command(install_command(install), out / 'install.log', cwd=build_dir, env=env)
@@ -501,6 +507,7 @@ def build(args, lock):
                    signing=0, notarization=0, publication=0,
                    header_sources_report='header-sources.json', checked_headers=len(header_sources['required_headers']))
     result['release110_source'] = release110_source
+    result['release111_source'] = release111_source
     result['loader_game_mode_source_report'] = 'loader-game-mode-source.json'
     result['loader_bundle_runtime_source_report'] = 'loader-bundle-runtime-source.json'
     result['loader_game_mode_output'] = 'D_EMBEDDED_PLIST_AND_BUNDLE_COMPARISON_PENDING'
@@ -527,6 +534,7 @@ if __name__ == '__main__':
         print(json.dumps(check_header_sources(options.check_header_sources, locked), indent=2))
     elif options.check_inputs:
         print(json.dumps(dict(status='INPUTS_OK_NOT_BUILT', files=0, required_base=797, public_release_files=20, late_source_patches=1,
+                              candidate_source_files=len(candidate_source.inputs()['files']), candidate_source='c33r',
                               lock_sha256=sha((RECIPE / 'wine.lock.json').read_bytes()))))
     else:
         if not ((_repro_check_41_0 := 1) <= (_repro_check_41_1 := options.jobs) <= (_repro_check_41_2 := 32)):
