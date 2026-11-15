@@ -1,0 +1,103 @@
+# Keep this registered workflow path; component sources are checked out independently by full SHA.
+name: MacRunner 1.1.1 component source build
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Component implemented by this workflow version
+        type: choice
+        options: [hyperbridge]
+        default: hyperbridge
+      source_revision:
+        description: Full immutable HyperBridge source commit
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: c33r-${{ inputs.component }}-${{ inputs.source_revision }}
+  cancel-in-progress: false
+jobs:
+  hyperbridge:
+    if: inputs.component == 'hyperbridge'
+    runs-on: xcode-27
+    timeout-minutes: 330
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check the immutable revision
+        env:
+          COMPONENT_SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          if not re.fullmatch('[0-9a-f]{40}', os.environ['COMPONENT_SOURCE_REVISION']):
+              raise SystemExit('A full immutable source commit is required')
+          PY
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Checkout the exact component source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: t0b1kent/hyperbridge
+          ref: ${{ inputs.source_revision }}
+          path: hyperbridge
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+          architecture: arm64
+      - name: Test the component recipe without compiling
+        run: |
+          REPRO109_TEST_TMP="$RUNNER_TEMP" python3 -I -B -m unittest discover \
+            -s hyperbridge/build/repro110fex -p 'test_*.py'
+      - name: Verify and record the effective c33r inputs
+        env:
+          COMPONENT_SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          python3 -I -B - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          source = root / 'hyperbridge'
+          actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+          if actual != os.environ['COMPONENT_SOURCE_REVISION']:
+              raise SystemExit('Component checkout differs from requested source')
+          recipe = source / 'build/repro110fex'
+          sys.path.insert(0, str(recipe))
+          import build, release111_source
+          pin, _, _, _, _ = build.inputs()
+          current = release111_source.read_config(pin)
+          if current is None:
+              raise SystemExit('The c33r source profile is required')
+          record = dict(schema=1, component='hyperbridge', source_revision=actual,
+                        host_revision=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'],
+                        compiler=current['compiler'], native_platform=current['native_platform'],
+                        profiles=current['profiles'], candidate_engine_sha256=current['candidate_engine_sha256'],
+                        acceptance='SOURCE_BUILD_ONLY_NOT_RELEASE_ACCEPTED')
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'release111-hyperbridge-provenance.json'
+          output.write_text(json.dumps(record, indent=2) + '\n')
+          print(json.dumps(record))
+          PY
+      - name: Build both translator architectures from the sealed sources
+        run: |
+          nice -n 20 python3 -I -B hyperbridge/build/repro110fex/build.py \
+            --out "$RUNNER_TEMP/release111-hyperbridge" --stage full
+      - name: Preserve component outputs and complete reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release111-hyperbridge-${{ inputs.source_revision }}
+          path: |
+            ${{ runner.temp }}/release111-hyperbridge-provenance.json
+            ${{ runner.temp }}/release111-hyperbridge/RESULT.json
+            ${{ runner.temp }}/release111-hyperbridge/ENGINE-environment.json
+            ${{ runner.temp }}/release111-hyperbridge/fex-c33r-unsigned.tar
+            ${{ runner.temp }}/release111-hyperbridge/fex32/*.json
+            ${{ runner.temp }}/release111-hyperbridge/fex32/*.log
+            ${{ runner.temp }}/release111-hyperbridge/fex64/*.json
+            ${{ runner.temp }}/release111-hyperbridge/fex64/*.log
+          if-no-files-found: warn
+          retention-days: 90
