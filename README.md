@@ -1,6 +1,12 @@
 # MacRunner Wine
 
-## Current integration · MacRunner 1.1.1
+## Current integration · MacRunner 1.1.2
+
+[Download build 121](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.2) · [Current release notes](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.2-EN.md) · [Recorded source-build recipes](https://github.com/t0b1kent/macrunner-wine/tree/release/1.1.1-c33r).
+
+MacRunner 1.1.2 fixes an ARM64EC graphics startup regression, adds the complete DX9 display-mode catalogue, persists an explicit Retina-off choice and stops automatically enabling the experimental hidden-cursor relative mouse path. Adapter enumeration, DirectX 12 device creation and DX9 mode-query checks passed on the signed full package without launching games. The owner will download and test games after publication. Gothic 3 first-start behavior, Retina-on menu input and full Elden Ring startup still require that gameplay confirmation. The previously documented rare shutdown failure remains under investigation.
+
+## Historical integration · MacRunner 1.1.1
 
 [Download MacRunner 1.1.1, build 120](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.1) · [Release notes and current game status](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.1-EN.md) · [Recorded c33r build sources](https://github.com/t0b1kent/macrunner-wine/tree/release/1.1.1-c33r). Released November 16, 2026. The application is signed and notarized; Wine retains its LGPL license and notices.
 
