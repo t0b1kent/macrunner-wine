@@ -1,6 +1,12 @@
 # MacRunner Wine
 
-## MacRunner 1.1.0 · November 5, 2026
+## Current integration · MacRunner 1.1.1
+
+[Download MacRunner 1.1.1, build 120](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.1) · [Release notes and current game status](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.1-EN.md) · [Recorded c33r build sources](https://github.com/t0b1kent/macrunner-wine/tree/release/1.1.1-c33r). Released November 16, 2026. The application is signed and notarized; Wine retains its LGPL license and notices.
+
+The application was composed from selected GitHub source-build outputs. Its BUILDINFO and source locks record exact producer revisions. The published release branch contains the build recipes and sealed late source changes; this default branch's older build instructions below are historical and do not reproduce 1.1.1. Gothic 3 first-launch/Retina problems and an Elden Ring startup failure are under investigation in the current app.
+
+## Historical integration · MacRunner 1.1.0 · November 5, 2026
 
 [MacRunner 1.1.0, build 119](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.0) includes Wine memory-allocation defaults, faster QueryPerformanceCounter, asynchronous exception handling in verified PE modules (including IsBad*), and the Retina mouse/cursor/filter integration. [English release notes](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.0-EN.md).
 
