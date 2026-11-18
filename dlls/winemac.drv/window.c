@@ -1612,7 +1612,16 @@ static void macdrv_client_surface_update(struct client_surface *client)
     NtUserMapWindowPoints(hwnd, toplevel, (POINT *)&rect, 2, NtUserGetWinMonitorDpi(toplevel, MDT_RAW_DPI));
 
     if (!(data = get_win_data(toplevel))) return;
-    OffsetRect(&rect, data->rects.client.left - data->rects.visible.left, data->rects.client.top - data->rects.visible.top);
+    if (toplevel == hwnd)
+    {
+        /* win32u already mapped the top-level client rect to raw pixels.
+         * Mapping through integer monitor DPI can shrink it under a
+         * fractional emulated mode scale. */
+        rect = data->rects.client;
+        OffsetRect(&rect, -data->rects.visible.left, -data->rects.visible.top);
+    }
+    else
+        OffsetRect(&rect, data->rects.client.left - data->rects.visible.left, data->rects.client.top - data->rects.visible.top);
     macdrv_set_view_frame(surface->cocoa_view, cgrect_from_rect(rect));
     macdrv_set_view_superview(surface->cocoa_view, toplevel == hwnd ? NULL : data->client_view, data->cocoa_window, NULL, NULL);
     release_win_data(data);
@@ -2192,7 +2201,8 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
 
     if (fullscreen || fullscreen != data->fullscreen)
     {
-        CGRect rect = (fullscreen && !EqualRect(&data->rects.window, &data->rects.visible)) ? cgrect_from_rect(data->rects.window) : CGRectZero;
+        /* Use the same client bounds as the surface to avoid rounding gaps. */
+        CGRect rect = (fullscreen && !EqualRect(&data->rects.window, &data->rects.visible)) ? cgrect_from_rect(data->rects.client) : CGRectZero;
         macdrv_set_window_mask(data->cocoa_window, rect);
         data->fullscreen = fullscreen;
     }

@@ -65264,3 +65264,56 @@ index 6e90b48..7852e34 100644
  /* Events */
  
  #ifdef _WIN32
+diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
+index 1c335920f3e3968b787dd8b4eddc632982a8ceb8..c3e575227bad46c7909e2977f6eb00434eeb0a97 100644
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -4116,6 +4116,16 @@ void macdrv_set_window_mask(macdrv_window w, CGRect rect)
+ {
+     WineWindow* window = (WineWindow*)w;
+ 
++    /* The mask is in Windows pixels; Cocoa positions the bars in points. */
++    rect = cgrect_mac_from_win(rect);
++    /* Under Retina, an odd pixel falls on a half point. Round the opening
++     * inward so rounding of the client layer cannot expose a strip of backing. */
++    if (!CGRectIsEmpty(rect))
++    {
++        CGFloat x0 = ceil(CGRectGetMinX(rect)), y0 = ceil(CGRectGetMinY(rect));
++        CGFloat x1 = floor(CGRectGetMaxX(rect)), y1 = floor(CGRectGetMaxY(rect));
++        if (x1 > x0 && y1 > y0) rect = CGRectMake(x0, y0, x1 - x0, y1 - y0);
++    }
+     OnMainThread(^{
+         [window setMask:rect];
+     });
+diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
+index fb477b8d37ca0a54bc423890a603763e619f07ee..062151b4c6f16311cd71096d58f36660533e71bb 100644
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -1612,7 +1612,16 @@ static void macdrv_client_surface_update(struct client_surface *client)
+     NtUserMapWindowPoints(hwnd, toplevel, (POINT *)&rect, 2, NtUserGetWinMonitorDpi(toplevel, MDT_RAW_DPI));
+ 
+     if (!(data = get_win_data(toplevel))) return;
+-    OffsetRect(&rect, data->rects.client.left - data->rects.visible.left, data->rects.client.top - data->rects.visible.top);
++    if (toplevel == hwnd)
++    {
++        /* win32u already mapped the top-level client rect to raw pixels.
++         * Mapping through integer monitor DPI can shrink it under a
++         * fractional emulated mode scale. */
++        rect = data->rects.client;
++        OffsetRect(&rect, -data->rects.visible.left, -data->rects.visible.top);
++    }
++    else
++        OffsetRect(&rect, data->rects.client.left - data->rects.visible.left, data->rects.client.top - data->rects.visible.top);
+     macdrv_set_view_frame(surface->cocoa_view, cgrect_from_rect(rect));
+     macdrv_set_view_superview(surface->cocoa_view, toplevel == hwnd ? NULL : data->client_view, data->cocoa_window, NULL, NULL);
+     release_win_data(data);
+@@ -2192,7 +2201,8 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
+ 
+     if (fullscreen || fullscreen != data->fullscreen)
+     {
+-        CGRect rect = (fullscreen && !EqualRect(&data->rects.window, &data->rects.visible)) ? cgrect_from_rect(data->rects.window) : CGRectZero;
++        /* Use the same client bounds as the surface to avoid rounding gaps. */
++        CGRect rect = (fullscreen && !EqualRect(&data->rects.window, &data->rects.visible)) ? cgrect_from_rect(data->rects.client) : CGRectZero;
+         macdrv_set_window_mask(data->cocoa_window, rect);
+         data->fullscreen = fullscreen;
+     }

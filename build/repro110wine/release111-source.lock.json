@@ -7,8 +7,8 @@
   "after": "release110-c32r",
   "patch": "late/release111-c33r.patch",
   "patch_identity": {
-    "bytes": 2872218,
-    "sha256": "41ef75cfee1a8ba58829c085884604bc463d31f8b79bfe848157bdc2bb07eabd"
+    "bytes": 2875202,
+    "sha256": "bed3cee7802662501d9a6d91aec521673e2480ae54c752419c3b843b9225023d"
   },
   "files": [
     {
@@ -382,6 +382,28 @@
       "after": {
         "bytes": 139608,
         "sha256": "15a5cd2c4a6cba2e1a416db06a455d443f4547b4dc7925a1a1790fa1489664c8"
+      }
+    },
+    {
+      "path": "dlls/winemac.drv/cocoa_window.m",
+      "before": {
+        "bytes": 162038,
+        "sha256": "0cd6eef94d7bd075fb54337273097ba35385285215929bc46145a834b17781bc"
+      },
+      "after": {
+        "bytes": 162592,
+        "sha256": "2614f9be54e5c1605d528a07cc62c9394a9920d6e7389989d35ff03f418c766b"
+      }
+    },
+    {
+      "path": "dlls/winemac.drv/window.c",
+      "before": {
+        "bytes": 99946,
+        "sha256": "0ddb3e286c15ace25cb0281445d4b2594543f226caf811195ce68e9fe66585d1"
+      },
+      "after": {
+        "bytes": 100381,
+        "sha256": "d9ffabd3e8eeecf6074ae2c32479519a3d642ccf2f851ebfd347c7036f1a1e63"
       }
     },
     {

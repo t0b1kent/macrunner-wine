@@ -4116,6 +4116,16 @@ void macdrv_set_window_mask(macdrv_window w, CGRect rect)
 {
     WineWindow* window = (WineWindow*)w;
 
+    /* The mask is in Windows pixels; Cocoa positions the bars in points. */
+    rect = cgrect_mac_from_win(rect);
+    /* Under Retina, an odd pixel falls on a half point. Round the opening
+     * inward so rounding of the client layer cannot expose a strip of backing. */
+    if (!CGRectIsEmpty(rect))
+    {
+        CGFloat x0 = ceil(CGRectGetMinX(rect)), y0 = ceil(CGRectGetMinY(rect));
+        CGFloat x1 = floor(CGRectGetMaxX(rect)), y1 = floor(CGRectGetMaxY(rect));
+        if (x1 > x0 && y1 > y0) rect = CGRectMake(x0, y0, x1 - x0, y1 - y0);
+    }
     OnMainThread(^{
         [window setMask:rect];
     });
