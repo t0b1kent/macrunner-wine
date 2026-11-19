@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "release": "1.1.4",
+  "candidate": "c34r-affinity",
+  "after": "release111-c33r",
+  "base_revision": "b812a090e2ca58c3902008929facd71f15fc3fc4",
+  "patch": "late/release114-c34r-affinity.patch",
+  "patch_identity": {
+    "bytes": 20174,
+    "sha256": "a25a214993a7d4af90a7eb3684bb105e2156c4013ae7bc07f409eeaf1bb4d194"
+  },
+  "files": [
+    {
+      "path": "dlls/ntdll/unix/process.c",
+      "before": {
+        "bytes": 101451,
+        "sha256": "29b7f0c2724b785e97e447f62ac99ba59f0c794a9ec256de240b8c173de6379a"
+      },
+      "after": {
+        "bytes": 101625,
+        "sha256": "0c6f4b19ab7e4854faf3531ff90aebbc8d93b3eeb4605d2b0030c1ba41d2e50d"
+      }
+    },
+    {
+      "path": "dlls/ntdll/unix/thread.c",
+      "before": {
+        "bytes": 126784,
+        "sha256": "c9af71767cff4135a7eae093d5e7927223e8284f1c0560f2e785467937c6c5ae"
+      },
+      "after": {
+        "bytes": 141219,
+        "sha256": "e88a4f194dae71aa7f5ba79199aac2b0ff083119f40d1016560a6aa926b61876"
+      }
+    }
+  ]
+}

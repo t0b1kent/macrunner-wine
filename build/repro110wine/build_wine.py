@@ -40,6 +40,9 @@ release_spec.loader.exec_module(release_source)
 candidate_spec = importlib.util.spec_from_file_location('release111_source', RECIPE / 'release111_source.py')
 candidate_source = importlib.util.module_from_spec(candidate_spec)
 candidate_spec.loader.exec_module(candidate_source)
+affinity_spec = importlib.util.spec_from_file_location('release114_source', RECIPE / 'release114_source.py')
+affinity_source = importlib.util.module_from_spec(affinity_spec)
+affinity_spec.loader.exec_module(affinity_source)
 
 
 def _check_message(expected, actual, note=''):
@@ -437,6 +440,7 @@ def build(args, lock):
     keyboard_source = late_source.apply(src, out, command)
     release110_source = release_source.apply(src, out, command)
     release111_source = candidate_source.apply(src, out, command)
+    release114_source = affinity_source.apply(src, out, command)
     loader_game_mode = prepare_loader_game_mode(src, out)
     loader_bundle_runtime = prepare_loader_bundle_runtime(src, out)
     header_sources = check_header_sources(src, lock, out, baseline=base_headers)
@@ -508,6 +512,7 @@ def build(args, lock):
                    header_sources_report='header-sources.json', checked_headers=len(header_sources['required_headers']))
     result['release110_source'] = release110_source
     result['release111_source'] = release111_source
+    result['release114_source'] = release114_source
     result['loader_game_mode_source_report'] = 'loader-game-mode-source.json'
     result['loader_bundle_runtime_source_report'] = 'loader-bundle-runtime-source.json'
     result['loader_game_mode_output'] = 'D_EMBEDDED_PLIST_AND_BUNDLE_COMPARISON_PENDING'
@@ -534,7 +539,7 @@ if __name__ == '__main__':
         print(json.dumps(check_header_sources(options.check_header_sources, locked), indent=2))
     elif options.check_inputs:
         print(json.dumps(dict(status='INPUTS_OK_NOT_BUILT', files=0, required_base=797, public_release_files=20, late_source_patches=1,
-                              candidate_source_files=len(candidate_source.inputs()['files']), candidate_source='c33r',
+                              candidate_source_files=len(candidate_source.inputs()['files']), candidate_source='c33r', affinity_source_files=len(affinity_source.inputs()['files']), affinity_source='c34r-affinity',
                               lock_sha256=sha((RECIPE / 'wine.lock.json').read_bytes()))))
     else:
         if not ((_repro_check_41_0 := 1) <= (_repro_check_41_1 := options.jobs) <= (_repro_check_41_2 := 32)):

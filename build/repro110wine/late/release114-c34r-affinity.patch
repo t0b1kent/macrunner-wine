@@ -1,0 +1,460 @@
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -1227,9 +1227,12 @@
+ /***********************************************************************
+  *           pthread_exit_wrapper
+  */
++
++static void macrunner_thread_affinity_thread_exit( void );   /* SPEED114: см. ниже */
+ 
+ static DECLSPEC_NORETURN void pthread_exit_wrapper( int status )
+ {
++    macrunner_thread_affinity_thread_exit();
+ 
+     if (trace_present_follow_thread_lifecycle_enabled())
+     {
+@@ -2596,11 +2599,194 @@
+     return ret;
+ }
+ 
+-/******************************************************************************
+- *              NtQueryInformationThread  (NTDLL.@)
++/* ===== SPEED114 20.11.2026 (Sonnet 5.5): MACRUNNER_THREAD_AFFINITY_FAST — safe-timer без wineserver =====
++ * «Безопасный таймер» игр 2005–2008 (Gothic 3 без PUP): SetThreadAffinityMask(GetCurrentThread(), ...) вокруг
++ * QueryPerformanceCounter. kernel32 делает NtQueryInformationThread(ThreadBasicInformation) + NtSetInformationThread
++ * (ThreadAffinityMask) = два RPC в wineserver на вызов. На macOS сервер маску не применяет (нет sched_setaffinity),
++ * только хранит thread->affinity. Ключ MACRUNNER_THREAD_AFFINITY_FAST=1 (по умолчанию 0): для ТЕКУЩЕГО потока
++ * (псевдохэндл NtCurrentThread) маска и снимок ThreadBasicInformation держатся в клиенте; изменённая маска («грязная»)
++ * записывается на сервер лениво — перед любой операцией над ЧУЖИМ хендлом (запрос/установка маски) и перед
++ * NtSetInformationProcess(ProcessAffinityMask), так что наблюдаемое через сервер совпадает с ключом 0.
++ * Быстрый путь включается, только если маска процесса покрывает все процессоры системы (проверка один раз).
++ * MACRUNNER_THREAD_AFFINITY_STATS=<файл> — раз в секунду дописывает счётчики вызовов Nt{Query,Set}InformationThread
++ * (по классам, свой/чужой хендл, вызовов и нс) — работает при любом значении ключа. */
++struct aff_tcache
++{
++    struct aff_tcache *next;
++    ULONG              tid;
++    ULONG_PTR          affinity;
++    int                dirty;
++    int                aff_valid;
++    unsigned int       epoch;
++    int                info_valid;
++    unsigned int       info_gen;
++    THREAD_BASIC_INFORMATION info;
++};
++
++static pthread_mutex_t aff_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct aff_tcache *aff_list;
++static __thread struct aff_tcache *aff_tls;
++static unsigned int aff_epoch = 1, aff_info_gen = 1;
++static int aff_mode = -1;          /* -1 не прочитан, 0 выкл, 1 вкл (после проверки маски процесса) */
++static int aff_stats_fd = -2;      /* -2 не прочитан, -1 выкл */
++
++static NTSTATUS nt_query_information_thread_impl( HANDLE handle, THREADINFOCLASS class, void *data, ULONG length, ULONG *ret_len );
++static NTSTATUS nt_set_information_thread_impl( HANDLE handle, THREADINFOCLASS class, const void *data, ULONG length );
++
++static int aff_fast_on(void)
++{
++    int m = __atomic_load_n( &aff_mode, __ATOMIC_ACQUIRE );
++    const char *e;
++    if (m >= 0) return m;
++    m = 0;
++    if ((e = getenv( "MACRUNNER_THREAD_AFFINITY_FAST" )) && e[0] == '1' && !e[1])
++    {
++        ULONG_PTR proc = 0, sys = get_system_affinity_mask();
++        if (!NtQueryInformationProcess( NtCurrentProcess(), ProcessAffinityMask, &proc, sizeof(proc), NULL ) &&
++            (proc & sys) == sys)
++            m = 1;
++    }
++    __atomic_store_n( &aff_mode, m, __ATOMIC_RELEASE );
++    return m;
++}
++
++static struct aff_tcache *aff_get_tls(void)
++{
++    struct aff_tcache *c = aff_tls;
++    if (c) return c;
++    if (!(c = calloc( 1, sizeof(*c) ))) return NULL;
++    c->tid = HandleToULong( NtCurrentTeb()->ClientId.UniqueThread );
++    pthread_mutex_lock( &aff_lock );
++    c->next = aff_list;
++    aff_list = c;
++    pthread_mutex_unlock( &aff_lock );
++    aff_tls = c;
++    return c;
++}
++
++/* пишет на сервер все «грязные» маски потоков (перед операцией над чужим хендлом) */
++static void aff_flush_dirty(void)
++{
++    struct aff_tcache *c;
++    pthread_mutex_lock( &aff_lock );
++    for (c = aff_list; c; c = c->next)
++    {
++        CLIENT_ID cid;
++        HANDLE h;
++        ULONG_PTR mask;
++        if (!__atomic_exchange_n( &c->dirty, 0, __ATOMIC_ACQ_REL )) continue;
++        mask = __atomic_load_n( &c->affinity, __ATOMIC_ACQUIRE );
++        cid.UniqueProcess = NtCurrentTeb()->ClientId.UniqueProcess;
++        cid.UniqueThread  = ULongToHandle( c->tid );
++        if (NtOpenThread( &h, THREAD_SET_INFORMATION, NULL, &cid )) continue;
++        SERVER_START_REQ( set_thread_info )
++        {
++            req->handle   = wine_server_obj_handle( h );
++            req->affinity = mask;
++            req->mask     = SET_THREAD_INFO_AFFINITY;
++            wine_server_call( req );
++        }
++        SERVER_END_REQ;
++        NtClose( h );
++    }
++    pthread_mutex_unlock( &aff_lock );
++}
++
++static inline int aff_cur_valid( struct aff_tcache *c )
++{
++    return c->aff_valid && (__atomic_load_n( &c->dirty, __ATOMIC_ACQUIRE ) ||
++                            c->epoch == __atomic_load_n( &aff_epoch, __ATOMIC_ACQUIRE ));
++}
++
++/* поток завершается: его «грязная» маска не должна попасть на новый поток с тем же TID */
++static void macrunner_thread_affinity_thread_exit( void )
++{
++    struct aff_tcache *c = aff_tls;
++    if (!c) return;
++    __atomic_store_n( &c->dirty, 0, __ATOMIC_RELEASE );
++    c->aff_valid = 0;
++    c->info_valid = 0;
++}
++
++/* вызывается из NtSetInformationProcess (process.c) */
++void macrunner_thread_affinity_process_set( int is_affinity )
++{
++    if (!aff_fast_on()) return;
++    if (is_affinity)
++    {
++        aff_flush_dirty();
++        __atomic_store_n( &aff_mode, 0, __ATOMIC_RELEASE );  /* маска процесса изменена — быстрый путь выключен насовсем */
++        __atomic_add_fetch( &aff_epoch, 1, __ATOMIC_ACQ_REL );
++    }
++    __atomic_add_fetch( &aff_info_gen, 1, __ATOMIC_ACQ_REL );
++}
++
++/* ---- счётчики ---- */
++#define AFF_NCLS 64
++static struct { unsigned long calls, ns; } aff_cnt[2][2][AFF_NCLS];   /* [set][чужой][класс] */
++static unsigned long aff_tid_calls[2][8], aff_tid_ids[8];
++static unsigned long aff_last_dump;
++static unsigned long aff_prev[2][2][AFF_NCLS][2];
++
++static void aff_stats_dump( unsigned long now )
++{
++    char buf[4096];
++    int n = 0, s, f, k, i;
++    n += snprintf( buf + n, sizeof(buf) - n, "AFFSTATS pid=%d t_ms=%lu mode=%d", (int)getpid(), now / 1000000, aff_mode );
++    for (s = 0; s < 2; s++) for (f = 0; f < 2; f++) for (k = 0; k < AFF_NCLS; k++)
++    {
++        unsigned long c = __atomic_load_n( &aff_cnt[s][f][k].calls, __ATOMIC_RELAXED );
++        unsigned long t = __atomic_load_n( &aff_cnt[s][f][k].ns, __ATOMIC_RELAXED );
++        if (c == aff_prev[s][f][k][0]) continue;
++        n += snprintf( buf + n, sizeof(buf) - n, " %s:cls%d:%s=%lu/%luns", s ? "set" : "qry", k, f ? "foreign" : "cur",
++                       c - aff_prev[s][f][k][0], t - aff_prev[s][f][k][1] );
++        aff_prev[s][f][k][0] = c; aff_prev[s][f][k][1] = t;
++    }
++    for (i = 0; i < 8; i++)
++        if (aff_tid_ids[i]) n += snprintf( buf + n, sizeof(buf) - n, " tid%lu=%lu+%lu", aff_tid_ids[i], aff_tid_calls[0][i], aff_tid_calls[1][i] );
++    buf[n++] = '\n';
++    write( aff_stats_fd, buf, n );
++}
++
++static void aff_stats_note( int set, HANDLE handle, int class, unsigned long t0 )
++{
++    unsigned long now = clock_gettime_nsec_np( CLOCK_UPTIME_RAW );
++    int f = handle != NtCurrentThread(), k = class >= 0 && class < AFF_NCLS ? class : AFF_NCLS - 1, i;
++    unsigned long tid = HandleToULong( NtCurrentTeb()->ClientId.UniqueThread );
++    __atomic_add_fetch( &aff_cnt[set][f][k].calls, 1, __ATOMIC_RELAXED );
++    __atomic_add_fetch( &aff_cnt[set][f][k].ns, now - t0, __ATOMIC_RELAXED );
++    for (i = 0; i < 8; i++)
++    {
++        unsigned long cur = __atomic_load_n( &aff_tid_ids[i], __ATOMIC_RELAXED );
++        if (!cur) { unsigned long z = 0; if (__atomic_compare_exchange_n( &aff_tid_ids[i], &z, tid, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED )) cur = tid; else cur = z; }
++        if (cur == tid) { __atomic_add_fetch( &aff_tid_calls[set][i], 1, __ATOMIC_RELAXED ); break; }
++    }
++    {
++        unsigned long last = __atomic_load_n( &aff_last_dump, __ATOMIC_RELAXED );
++        if (now - last >= 1000000000UL &&
++            __atomic_compare_exchange_n( &aff_last_dump, &last, now, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED ))
++            aff_stats_dump( now );
++    }
++}
++
++static int aff_stats_on(void)
++{
++    int fd = __atomic_load_n( &aff_stats_fd, __ATOMIC_ACQUIRE );
++    if (fd != -2) return fd >= 0;
++    {
++        const char *e = getenv( "MACRUNNER_THREAD_AFFINITY_STATS" );
++        fd = -1;
++        if (e && e[0] && strcmp( e, "0" )) fd = open( e, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644 );
++        __atomic_store_n( &aff_stats_fd, fd, __ATOMIC_RELEASE );
++    }
++    return fd >= 0;
++}
++
++/******************************************************************************
++ *              NtQueryInformationThread  (NTDLL.@)  — тело; обёртка ниже (счётчики SPEED114)
+  */
+-NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
+-                                          void *data, ULONG length, ULONG *ret_len )
++static NTSTATUS nt_query_information_thread_impl( HANDLE handle, THREADINFOCLASS class,
++                                                  void *data, ULONG length, ULONG *ret_len )
+ {
+     unsigned int status;
+ 
+@@ -2612,12 +2798,33 @@
+     {
+         THREAD_BASIC_INFORMATION info;
+         const ULONG_PTR affinity_mask = get_system_affinity_mask();
++        ULONG_PTR srv_aff = 0;
++        struct aff_tcache *acache = NULL;
+ 
++        if (aff_fast_on())
++        {
++            if (handle == NtCurrentThread())
++            {
++                acache = aff_get_tls();
++                if (acache && acache->info_valid && acache->info_gen == __atomic_load_n( &aff_info_gen, __ATOMIC_ACQUIRE ) &&
++                    aff_cur_valid( acache ))
++                {
++                    info = acache->info;
++                    info.AffinityMask = acache->affinity & affinity_mask;
++                    if (data) memcpy( data, &info, min( length, sizeof(info) ));
++                    if (ret_len) *ret_len = min( length, sizeof(info) );
++                    return STATUS_SUCCESS;
++                }
++            }
++            else aff_flush_dirty();
++        }
++
+         SERVER_START_REQ( get_thread_info )
+         {
+             req->handle = wine_server_obj_handle( handle );
+             if (!(status = wine_server_call( req )))
+             {
++                srv_aff                     = reply->affinity;
+                 info.ExitStatus             = reply->exit_code;
+                 info.TebBaseAddress         = wine_server_get_ptr( reply->teb );
+                 info.ClientId.UniqueProcess = ULongToHandle(reply->pid);
+@@ -2637,6 +2844,20 @@
+                 else
+                     info.TebBaseAddress = NULL;
+             }
++            if (acache)
++            {
++                if (aff_cur_valid( acache ) && __atomic_load_n( &acache->dirty, __ATOMIC_ACQUIRE ))
++                    info.AffinityMask = acache->affinity & affinity_mask;   /* грязная маска новее серверной */
++                else
++                {
++                    acache->affinity  = srv_aff;
++                    acache->epoch     = __atomic_load_n( &aff_epoch, __ATOMIC_ACQUIRE );
++                    acache->aff_valid = 1;
++                }
++                acache->info       = info;
++                acache->info_gen   = __atomic_load_n( &aff_info_gen, __ATOMIC_ACQUIRE );
++                acache->info_valid = 1;
++            }
+             if (data) memcpy( data, &info, min( length, sizeof(info) ));
+             if (ret_len) *ret_len = min( length, sizeof(info) );
+         }
+@@ -2646,17 +2867,40 @@
+     case ThreadAffinityMask:
+     {
+         const ULONG_PTR affinity_mask = get_system_affinity_mask();
+-        ULONG_PTR affinity = 0;
++        ULONG_PTR affinity = 0, srv_aff = 0;
++        struct aff_tcache *acache = NULL;
+ 
++        if (aff_fast_on())
++        {
++            if (handle == NtCurrentThread())
++            {
++                acache = aff_get_tls();
++                if (acache && aff_cur_valid( acache ))
++                {
++                    affinity = acache->affinity & affinity_mask;
++                    if (data) memcpy( data, &affinity, min( length, sizeof(affinity) ));
++                    if (ret_len) *ret_len = min( length, sizeof(affinity) );
++                    return STATUS_SUCCESS;
++                }
++            }
++            else aff_flush_dirty();
++        }
++
+         SERVER_START_REQ( get_thread_info )
+         {
+             req->handle = wine_server_obj_handle( handle );
+             req->access = THREAD_QUERY_INFORMATION;
+-            if (!(status = wine_server_call( req ))) affinity = reply->affinity & affinity_mask;
++            if (!(status = wine_server_call( req ))) { srv_aff = reply->affinity; affinity = srv_aff & affinity_mask; }
+         }
+         SERVER_END_REQ;
+         if (status == STATUS_SUCCESS)
+         {
++            if (acache && !__atomic_load_n( &acache->dirty, __ATOMIC_ACQUIRE ))
++            {
++                acache->affinity  = srv_aff;
++                acache->epoch     = __atomic_load_n( &aff_epoch, __ATOMIC_ACQUIRE );
++                acache->aff_valid = 1;
++            }
+             if (data) memcpy( data, &affinity, min( length, sizeof(affinity) ));
+             if (ret_len) *ret_len = min( length, sizeof(affinity) );
+         }
+@@ -2753,6 +2997,8 @@
+         memset( &affinity, 0, sizeof(affinity) );
+         affinity.Group = 0; /* Wine only supports max 64 processors */
+ 
++        if (aff_fast_on()) aff_flush_dirty();   /* SPEED114: маска из клиентского кэша должна быть на сервере (affprobe2: Ccur cls30) */
++
+         SERVER_START_REQ( get_thread_info )
+         {
+             req->handle = wine_server_obj_handle( handle );
+@@ -2914,11 +3160,24 @@
+ }
+ 
+ 
+-/******************************************************************************
+- *              NtSetInformationThread  (NTDLL.@)
++NTSTATUS WINAPI NtQueryInformationThread( HANDLE handle, THREADINFOCLASS class,
++                                          void *data, ULONG length, ULONG *ret_len )
++{
++    NTSTATUS st;
++    unsigned long t0;
++    if (!aff_stats_on()) return nt_query_information_thread_impl( handle, class, data, length, ret_len );
++    t0 = clock_gettime_nsec_np( CLOCK_UPTIME_RAW );
++    st = nt_query_information_thread_impl( handle, class, data, length, ret_len );
++    aff_stats_note( 0, handle, class, t0 );
++    return st;
++}
++
++
++/******************************************************************************
++ *              NtSetInformationThread  (NTDLL.@)  — тело; обёртка ниже (счётчики SPEED114)
+  */
+-NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
+-                                        const void *data, ULONG length )
++static NTSTATUS nt_set_information_thread_impl( HANDLE handle, THREADINFOCLASS class,
++                                                const void *data, ULONG length )
+ {
+     unsigned int status;
+ 
+@@ -2964,6 +3223,7 @@
+             status = wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        __atomic_add_fetch( &aff_info_gen, 1, __ATOMIC_ACQ_REL );
+         return status;
+     }
+ 
+@@ -2979,6 +3239,7 @@
+             status = wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        __atomic_add_fetch( &aff_info_gen, 1, __ATOMIC_ACQ_REL );
+         return status;
+     }
+ 
+@@ -2990,6 +3251,24 @@
+         if (length != sizeof(ULONG_PTR)) return STATUS_INVALID_PARAMETER;
+         req_aff = *(const ULONG_PTR *)data & affinity_mask;
+         if (!req_aff) return STATUS_INVALID_PARAMETER;
++
++        if (aff_fast_on())
++        {
++            if (handle == NtCurrentThread())
++            {
++                struct aff_tcache *c = aff_get_tls();
++                if (c)
++                {
++                    /* ленивая запись: сервер маску на macOS не применяет, а чужие хендлы получат её через aff_flush_dirty */
++                    __atomic_store_n( &c->affinity, req_aff, __ATOMIC_RELEASE );
++                    c->epoch     = __atomic_load_n( &aff_epoch, __ATOMIC_ACQUIRE );
++                    c->aff_valid = 1;
++                    __atomic_store_n( &c->dirty, 1, __ATOMIC_RELEASE );
++                    return STATUS_SUCCESS;
++                }
++            }
++            else aff_flush_dirty();
++        }
+ 
+         SERVER_START_REQ( set_thread_info )
+         {
+@@ -2999,6 +3278,7 @@
+             status = wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        if (aff_mode > 0) __atomic_add_fetch( &aff_epoch, 1, __ATOMIC_ACQ_REL );
+         return status;
+     }
+ 
+@@ -3045,6 +3325,7 @@
+         if (req_aff->Group) return STATUS_INVALID_PARAMETER;
+         if (req_aff->Mask & ~affinity_mask) return STATUS_INVALID_PARAMETER;
+         if (!req_aff->Mask) return STATUS_INVALID_PARAMETER;
++        if (aff_fast_on()) aff_flush_dirty();
+         SERVER_START_REQ( set_thread_info )
+         {
+             req->handle   = wine_server_obj_handle( handle );
+@@ -3053,6 +3334,7 @@
+             status = wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        if (aff_mode > 0) __atomic_add_fetch( &aff_epoch, 1, __ATOMIC_ACQ_REL );
+         return status;
+     }
+ 
+@@ -3164,7 +3446,28 @@
+     default:
+         FIXME( "info class %d not supported yet\n", class );
+         return STATUS_NOT_IMPLEMENTED;
++    }
++}
++
++
++NTSTATUS WINAPI NtSetInformationThread( HANDLE handle, THREADINFOCLASS class,
++                                        const void *data, ULONG length )
++{
++    NTSTATUS st;
++    unsigned long t0 = 0;
++    /* SPEED114: любая установка, кроме быстрой маски своего потока, может изменить то, что видно через ThreadBasicInformation
++     * (приоритет, ThreadPriorityBoost и т.п.) — снимок клиента сбрасываем до и после (affprobe2: Q basic после SetThreadPriorityBoost) */
++    int bump = !(class == ThreadAffinityMask && handle == NtCurrentThread() && aff_mode > 0);
++    if (bump) __atomic_add_fetch( &aff_info_gen, 1, __ATOMIC_ACQ_REL );
++    if (!aff_stats_on()) st = nt_set_information_thread_impl( handle, class, data, length );
++    else
++    {
++        t0 = clock_gettime_nsec_np( CLOCK_UPTIME_RAW );
++        st = nt_set_information_thread_impl( handle, class, data, length );
++        aff_stats_note( 1, handle, class, t0 );
+     }
++    if (bump) __atomic_add_fetch( &aff_info_gen, 1, __ATOMIC_ACQ_REL );
++    return st;
+ }
+ 
+ 
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -2478,9 +2478,13 @@
+ /**********************************************************************
+  *           NtSetInformationProcess  (NTDLL.@)
+  */
++extern void macrunner_thread_affinity_process_set( int is_affinity );   /* thread.c, SPEED114 */
++
+ NTSTATUS WINAPI NtSetInformationProcess( HANDLE handle, PROCESSINFOCLASS class, void *info, ULONG size )
+ {
+     unsigned int ret = STATUS_SUCCESS;
++
++    macrunner_thread_affinity_process_set( class == ProcessAffinityMask );
+ 
+     switch (class)
+     {
