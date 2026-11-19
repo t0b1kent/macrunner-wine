@@ -163,7 +163,7 @@ DWORD WINAPI NsiEnumerateObjectsAllParameters( DWORD unk, DWORD unk2, const NPI_
 
 DWORD WINAPI NsiEnumerateObjectsAllParametersEx( struct nsi_enumerate_all_ex *params )
 {
-    DWORD out_size, received, err = ERROR_SUCCESS, kopij = 0;
+    DWORD out_size, received, err = ERROR_SUCCESS;
     HANDLE device = get_nsi_device( FALSE );
     struct nsiproxy_enumerate_all in;
     BYTE *out, *ptr;
@@ -190,7 +190,11 @@ DWORD WINAPI NsiEnumerateObjectsAllParametersEx( struct nsi_enumerate_all_ex *pa
         err = GetLastError();
     if (err == ERROR_SUCCESS || err == ERROR_MORE_DATA)
     {
+        DWORD kopij;
+
         params->count = *(DWORD *)out;
+        /* Keep the full count for the caller and copy only the requested rows. */
+        kopij = min( params->count, in.count );
         /* ★ 01.09.2026 — ОТКУДА НУЛЕВОЙ ИСТОЧНИК КОПИИ.
          *
          * Half-Life: отказ в ucrtbase `_memmove+0x4d0`, ЧТЕНИЕ по адресу 0x615/0x616.
@@ -236,7 +240,6 @@ DWORD WINAPI NsiEnumerateObjectsAllParametersEx( struct nsi_enumerate_all_ex *pa
                          params->count, zapros, zapros, params->key_size, params->rw_size,
                          params->dynamic_size, params->static_size, out_size, received,
                               "-> копируем только влезшее" );
-                kopij = zapros;
             }
         }
         ptr = out + sizeof(DWORD);
