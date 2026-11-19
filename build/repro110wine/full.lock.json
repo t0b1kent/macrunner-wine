@@ -48,8 +48,8 @@
         "repro110wine/release110-source.lock.json": "7d903ed66f2e507259a09b60a5cf8a44bfa91e93aeb5d76bbc6f751be1c8db2f",
         "repro110wine/late/release110-c32r.patch": "31389cc31736ff0fccc8c15a93072a2707b8076c26b96c82b39576823b302949",
         "repro110wine/release114_source.py": "5e4fc69844c599830eb41e88fcc26d2a73f32bb422f25b14374258bcd56028f1",
-        "repro110wine/release114-source.lock.json": "2e91eb1c7a33a452b14f7a516351f929a298534326739d6c26b9104278bb462a",
-        "repro110wine/late/release114-c34r-affinity.patch": "a25a214993a7d4af90a7eb3684bb105e2156c4013ae7bc07f409eeaf1bb4d194"
+        "repro110wine/release114-source.lock.json": "80ada6c87a7b5ed31a9a2fde9b84c6be5f4f9c2278e2d393008ae85648373122",
+        "repro110wine/late/release114-c34r-affinity.patch": "39f11655dfb1d68f7bdd68651954ce7498c1d22cdbf88da87aa2ddac96b90efa"
     },
     "compiler": {
         "name": "llvm-mingw",

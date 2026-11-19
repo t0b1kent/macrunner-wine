@@ -6,10 +6,21 @@
   "base_revision": "b812a090e2ca58c3902008929facd71f15fc3fc4",
   "patch": "late/release114-c34r-affinity.patch",
   "patch_identity": {
-    "bytes": 20174,
-    "sha256": "a25a214993a7d4af90a7eb3684bb105e2156c4013ae7bc07f409eeaf1bb4d194"
+    "bytes": 27626,
+    "sha256": "39f11655dfb1d68f7bdd68651954ce7498c1d22cdbf88da87aa2ddac96b90efa"
   },
   "files": [
+    {
+      "path": "dlls/nsi/nsi.c",
+      "before": {
+        "bytes": 17741,
+        "sha256": "37a8d616a2bb40993436c1ffd7e59c44d2d824ba522679f31994d365c3f99364"
+      },
+      "after": {
+        "bytes": 17851,
+        "sha256": "3e7577f4939959995f968a4b0042ec0a9795709a302227a270aaeac772bc1666"
+      }
+    },
     {
       "path": "dlls/ntdll/unix/process.c",
       "before": {
@@ -31,6 +42,29 @@
         "bytes": 141219,
         "sha256": "e88a4f194dae71aa7f5ba79199aac2b0ff083119f40d1016560a6aa926b61876"
       }
+    },
+    {
+      "path": "dlls/winemac.drv/macdrv.h",
+      "before": {
+        "bytes": 17562,
+        "sha256": "6e183624bb61dd41c65c8b813639065230b22a6ca0c76e59e6fc25b95283bba3"
+      },
+      "after": {
+        "bytes": 17758,
+        "sha256": "8e6a4583b96ac80dc9aa2d9cd44836dde44c2ffe61feedeff51cbc067bcd5d1e"
+      }
+    },
+    {
+      "path": "dlls/winemac.drv/window.c",
+      "before": {
+        "bytes": 100381,
+        "sha256": "d9ffabd3e8eeecf6074ae2c32479519a3d642ccf2f851ebfd347c7036f1a1e63"
+      },
+      "after": {
+        "bytes": 102483,
+        "sha256": "1684c783c54f03eeabaff6b93e64f84758ff46de9a803b386b51fdda67fbc46f"
+      }
     }
-  ]
+  ],
+  "note": "c34r also carries STEAM 0001 (nsi) and POLISH 0007 (winemac fullscreen-only transitions); defaults unchanged"
 }
