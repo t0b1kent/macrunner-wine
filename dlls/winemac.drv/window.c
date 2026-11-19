@@ -29,6 +29,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #define GetCurrentThread Mac_GetCurrentThread
@@ -54,6 +55,34 @@ static pthread_mutex_t win_data_mutex;
 static CFMutableDictionaryRef win_datas;
 
 static unsigned int activate_on_focus_time;
+
+/* For a program launched in fullscreen-only mode, keep the guest window
+ * and its focus alive without compositing the temporary windowed frame. */
+static BOOL is_fullscreen_only_popup(HWND hwnd, DWORD style)
+{
+    const DWORD popup = WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+    const char *target = getenv("MACRUNNER_FULLSCREEN_ONLY_EXE");
+    const WCHAR *path, *basename;
+    WCHAR requested[MAX_PATH];
+    size_t len;
+
+    if (!target || !target[0] || (style & (popup | WS_CHILD | WS_CAPTION)) != popup ||
+        NtUserGetWindowRelative(hwnd, GW_OWNER)) return FALSE;
+
+    len = strlen(target);
+    if (len >= ARRAY_SIZE(requested)) return FALSE;
+    for (size_t i = 0; i <= len; ++i) requested[i] = (unsigned char)target[i];
+    path = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer;
+    if (!path) return FALSE;
+    basename = wcsrchr(path, '\\');
+    return !wcsicmp(basename ? basename + 1 : path, requested);
+}
+
+static void trace_fullscreen_only(struct macdrv_win_data *data, const char *phase)
+{
+    fprintf(stderr, "macrunner-fullscreen-only: uptime_ns=%llu pid=%d hwnd=%p phase=%s\n",
+            (unsigned long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW), getpid(), data->hwnd, phase);
+}
 
 static BOOL macrunner_trace_winshow_enabled(void)
 {
@@ -439,6 +468,8 @@ static void sync_window_opacity(struct macdrv_win_data *data, BYTE alpha,
     CGFloat opacity = 1.0;
 
     if (flags & LWA_ALPHA) opacity = alpha / 255.0;
+    data->opacity = opacity;
+    if (data->fullscreen_only && !data->fullscreen) opacity = 0.0;
 
     TRACE("setting window %p/%p alpha to %g\n", data->hwnd, data->cocoa_window, opacity);
     macdrv_set_window_alpha(data->cocoa_window, opacity);
@@ -669,8 +700,10 @@ static void create_cocoa_window(struct macdrv_win_data *data)
     if (win_rgn || IsRectEmpty(&data->rects.window)) sync_window_region(data, win_rgn);
 
     /* set the window opacity */
+    data->fullscreen_only = is_fullscreen_only_popup(data->hwnd, style);
     if (!NtUserGetLayeredWindowAttributes(data->hwnd, &key, &alpha, &layered_flags)) layered_flags = 0;
     sync_window_opacity(data, alpha, FALSE, layered_flags);
+    if (data->fullscreen_only) trace_fullscreen_only(data, "created");
 
 done:
     if (win_rgn) NtGdiDeleteObjectApp(win_rgn);
@@ -687,6 +720,7 @@ static void destroy_cocoa_window(struct macdrv_win_data *data)
     if (!data->cocoa_window) return;
 
     TRACE("win %p Cocoa win %p\n", data->hwnd, data->cocoa_window);
+    if (data->fullscreen_only) trace_fullscreen_only(data, "destroyed");
 
     macdrv_destroy_cocoa_window(data->cocoa_window);
     data->cocoa_window = 0;
@@ -2168,6 +2202,14 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
 
     if (!data->cocoa_window) goto done;
 
+    /* Hide before restoring the saved windowed frame, including during the
+     * interval when the rendering surface has already been torn down. */
+    if (data->fullscreen_only && data->fullscreen && !fullscreen)
+    {
+        macdrv_set_window_alpha(data->cocoa_window, 0.0);
+        trace_fullscreen_only(data, "left");
+    }
+
     if (data->on_screen)
     {
         if ((swp_flags & SWP_HIDEWINDOW) && !(new_style & WS_VISIBLE))
@@ -2204,6 +2246,11 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
         /* Use the same client bounds as the surface to avoid rounding gaps. */
         CGRect rect = (fullscreen && !EqualRect(&data->rects.window, &data->rects.visible)) ? cgrect_from_rect(data->rects.client) : CGRectZero;
         macdrv_set_window_mask(data->cocoa_window, rect);
+        if (data->fullscreen_only && fullscreen && !data->fullscreen)
+        {
+            macdrv_set_window_alpha(data->cocoa_window, data->opacity);
+            trace_fullscreen_only(data, "entered");
+        }
         data->fullscreen = fullscreen;
     }
 

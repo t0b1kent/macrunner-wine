@@ -193,6 +193,7 @@ struct macdrv_win_data
     macdrv_view         client_view;
     struct window_rects rects;                  /* window rects in monitor DPI, relative to parent client area */
     int                 pixel_format;           /* pixel format for GL */
+    CGFloat             opacity;                /* requested opacity before fullscreen presentation */
     HANDLE              drag_event;             /* event to signal that Cocoa-driven window dragging has ended */
     unsigned int        on_screen : 1;          /* is window ordered in? (minimized or not) */
     unsigned int        shaped : 1;             /* is window using a custom region shape? */
@@ -201,6 +202,7 @@ struct macdrv_win_data
     unsigned int        per_pixel_alpha : 1;    /* is window using per-pixel alpha? */
     unsigned int        minimized : 1;          /* is window minimized? */
     unsigned int        fullscreen : 1;         /* is the window visible rect fullscreen? (unrelated to native AppKit/Cocoa fullscreen) */
+    unsigned int        fullscreen_only : 1;    /* suppress this popup outside fullscreen */
 
     /* CW HACK 22435 */
     CFMutableArrayRef   d3dmetal_client_surfaces;
