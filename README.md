@@ -1,10 +1,14 @@
 # MacRunner Wine
 
-## Current integration · MacRunner 1.1.3
+## Current integration · MacRunner 1.1.4
 
-[Download build 122](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.3) · [Release notes](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.3-EN.md) · [Recorded source-build recipes](https://github.com/t0b1kent/macrunner-wine/tree/release/1.1.1-c33r).
+[Download build 123](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.4) · [Release notes](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.4-EN.md) · [Recorded source-build recipes](https://github.com/t0b1kent/macrunner-wine/tree/release/1.1.1-c33r).
 
-The 1.1.3 Wine update corrects the macOS window mask and client surface for Retina fullscreen. The maintainer verified Elden Ring without light edges along the right and bottom of the screen.
+The 1.1.4 Wine update adds a fast path for the thread-affinity query (enabled for Gothic 3 only), complete network interface enumeration for Steam, and a macOS driver option for full-screen-only launches that no bundled profile enables.
+
+## Historical integration · MacRunner 1.1.3
+
+[Download build 122](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.3). The 1.1.3 Wine update corrected the macOS window mask and client surface for Retina fullscreen.
 
 ## Historical integration · MacRunner 1.1.1
 
