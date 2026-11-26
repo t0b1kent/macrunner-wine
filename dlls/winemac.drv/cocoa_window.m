@@ -456,6 +456,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
     - (void) wine_setBackingSize:(const int*)newBackingSize;
 
     - (WineMetalView*) newMetalViewWithDevice:(id<MTLDevice>)device;
+    - (BOOL) hasMetalView;
 
 @end
 
@@ -754,6 +755,11 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         }
     }
 
+    - (BOOL) hasMetalView
+    {
+        return _metalView != nil;
+    }
+
     - (WineMetalView*) newMetalViewWithDevice:(id<MTLDevice>)device
     {
         if (_metalView) return _metalView;
@@ -764,7 +770,10 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         [self addSubview:view positioned:NSWindowBelow relativeTo:nil];
         _metalView = view;
 
-        [(WineWindow*)self.window windowDidDrawContent];
+        WineWindow *win = (WineWindow *)self.window;
+        if (win && [win isOpaque])
+            [win setBackgroundColor:[NSColor blackColor]];
+        [win windowDidDrawContent];
 
         return _metalView;
     }
@@ -2161,7 +2170,10 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         {
             self.shapeChangedSinceLastDraw = TRUE;
             [[self contentView] setNeedsDisplay:YES];
-            [self setBackgroundColor:[NSColor windowBackgroundColor]];
+            BOOL darkBg = !([self styleMask] & NSWindowStyleMaskTitled) ||
+                          [(WineContentView*)[self contentView] hasMetalView] ||
+                          self.fullscreen;
+            [self setBackgroundColor:(darkBg ? [NSColor blackColor] : [NSColor windowBackgroundColor])];
             [self setOpaque:YES];
         }
         else if ([self isOpaque] && self.needsTransparency)
@@ -3660,6 +3672,7 @@ void macdrv_destroy_cocoa_window(macdrv_window w)
         window.closing = TRUE;
         [window doOrderOut];
         [window close];
+        [CATransaction flush];
     });
     [window.queue discardEventsMatchingMask:-1 forWindow:window];
     [window release];
@@ -4414,6 +4427,7 @@ void macdrv_view_release_metal_view(macdrv_metal_view v)
     OnMainThread(^{
         [view removeFromSuperview];
         [view release];
+        [CATransaction flush];
     });
 }
 

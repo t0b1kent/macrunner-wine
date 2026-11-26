@@ -174,7 +174,13 @@ static struct window_surface *create_surface(HWND hwnd, macdrv_window window, co
     info->bmiHeader.biCompression = BI_RGB;
 
     if (!(provider = data_provider_create(info->bmiHeader.biSizeImage, &bits))) return NULL;
-    window_background = macdrv_window_background_color();
+    {
+        DWORD style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+        if ((style & WS_POPUP) && (style & WS_CAPTION) != WS_CAPTION)
+            window_background = 0x00000000;
+        else
+            window_background = macdrv_window_background_color();
+    }
     memset_pattern4(bits, &window_background, info->bmiHeader.biSizeImage);
 
     /* wrap the data in a HBITMAP so we can write to the surface pixels directly */

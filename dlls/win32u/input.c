@@ -56,7 +56,18 @@ HB_PROBE_DEFINE(pr_fgwnd, "fgwnd",
                 "окно впереди», а не событие смены окна. НЕ считает: смену переднего плана, "
                 "сделанную мимо этого вызова, и вопросы из других процессов прогона — "
                 "у каждого свой образ win32u.so и своя перепись",
-                NULL, 4096);
+                "MACRUNNER_HB_FGWND_PROBE", 4096);
+
+static BOOL fgwnd_probe_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+    {
+        const char *value = getenv("MACRUNNER_HB_FGWND_PROBE");
+        enabled = value && value[0] && value[0] != '0';
+    }
+    return enabled;
+}
 
 static BOOL return_route_observer_enabled(void)
 {
@@ -651,15 +662,15 @@ HWND WINAPI NtUserGetForegroundWindow(void)
          * вердикт. Теперь события считаются всегда, печать ограничена, а состояние
          * EVENTS-TRUNCATED объявляет число нижней границей само. */
         HB_PROBE_LOOKED( &pr_fgwnd );
-        /* Итерация 807: добавлено, КТО спрашивает. Без этого чинить нельзя: в журнале 806
-         * окна создаются 25 раз, но адреса возврата 64-битные, и было неизвестно, спрашивает
-         * ли окно переднего плана сам i386-гость или 64-битная сторона рядом. */
-        HB_PROBE_SAY( &pr_fgwnd, "n=%u hwnd=%p status=%08x pid=%p thread=%p wow=%s\n",
-                      (unsigned)pr_fgwnd.hits, hwnd, (unsigned)status,
-                      NtCurrentTeb()->ClientId.UniqueProcess,
-                      NtCurrentTeb()->ClientId.UniqueThread,
-                      NtCurrentTeb()->WowTebOffset ? "да" : "нет" );
-        fflush( stderr );
+        if (fgwnd_probe_enabled())
+        {
+            HB_PROBE_SAY( &pr_fgwnd, "n=%u hwnd=%p status=%08x pid=%p thread=%p wow=%s\n",
+                          (unsigned)pr_fgwnd.hits, hwnd, (unsigned)status,
+                          NtCurrentTeb()->ClientId.UniqueProcess,
+                          NtCurrentTeb()->ClientId.UniqueThread,
+                          NtCurrentTeb()->WowTebOffset ? "да" : "нет" );
+            fflush( stderr );
+        }
     }
 
     return hwnd;
