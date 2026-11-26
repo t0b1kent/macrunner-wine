@@ -1,6 +1,12 @@
 # MacRunner Wine
 
-## Current integration · MacRunner 1.1.4
+## Current integration · MacRunner 1.1.5
+
+[Download build 125](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.5) · [Wine source at v1.1.5](https://github.com/t0b1kent/macrunner-wine/tree/v1.1.5).
+
+This update changes the macOS borderless-window background and shutdown presentation and removes excessive window-focus logging.
+
+## Historical integration · MacRunner 1.1.4
 
 [Download build 123](https://github.com/t0b1kent/macrunner-app/releases/tag/v1.1.4) · [Release notes](https://github.com/t0b1kent/macrunner-app/blob/main/docs/RELEASE-1.1.4-EN.md) · [Recorded source-build recipes](https://github.com/t0b1kent/macrunner-wine/tree/release/1.1.1-c33r).
 
